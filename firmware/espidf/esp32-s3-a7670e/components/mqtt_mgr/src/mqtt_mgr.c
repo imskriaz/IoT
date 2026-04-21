@@ -37,6 +37,7 @@ static const char *TAG = "mqtt_mgr";
 #define MQTT_MGR_WIFI_PRIMARY_MIN_RSSI_DBM   (-85)
 #define MQTT_MGR_ESP_CONNECT_GRACE_MS      20000U
 #define MQTT_MGR_ACTION_RESULT_BATCH_LIMIT     6U
+#define MQTT_MGR_TASK_STACK_LEN            3072U
 
 typedef enum {
     MQTT_MGR_TRANSPORT_NONE = 0,
@@ -1002,7 +1003,7 @@ static esp_err_t mqtt_mgr_refresh_config_locked(void) {
     scratch->mqtt_config.credentials.authentication.password = s_password[0] ? s_password : NULL;
     scratch->mqtt_config.credentials.client_id = s_esp_client_id;
     scratch->mqtt_config.session.keepalive = 60;
-    scratch->mqtt_config.task.stack_size = CONFIG_UNIFIED_TASK_STACK_SMALL;
+    scratch->mqtt_config.task.stack_size = MQTT_MGR_TASK_STACK_LEN;
     scratch->mqtt_config.task.priority = 5;
 
     ESP_LOGI(
@@ -1502,17 +1503,31 @@ esp_err_t mqtt_mgr_init(void) {
         ESP_LOGW(TAG, "initial mqtt config invalid or incomplete");
     }
 
-    task_ok = xTaskCreatePinnedToCore(
+    #if CONFIG_SPIRAM && CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+    task_ok = xTaskCreatePinnedToCoreWithCaps(
         mqtt_mgr_task,
         "mqtt_task",
-        CONFIG_UNIFIED_TASK_STACK_MEDIUM,
+        MQTT_MGR_TASK_STACK_LEN,
         NULL,
         4,
         NULL,
-        1
+        1,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
     );
+    #endif
     if (task_ok != pdPASS) {
-        ESP_LOGE(TAG, "failed to create mqtt_task stack=%d", CONFIG_UNIFIED_TASK_STACK_MEDIUM);
+        task_ok = xTaskCreatePinnedToCore(
+            mqtt_mgr_task,
+            "mqtt_task",
+            MQTT_MGR_TASK_STACK_LEN,
+            NULL,
+            4,
+            NULL,
+            1
+        );
+    }
+    if (task_ok != pdPASS) {
+        ESP_LOGE(TAG, "failed to create mqtt_task stack=%d", MQTT_MGR_TASK_STACK_LEN);
         return ESP_ERR_NO_MEM;
     }
 
@@ -1602,6 +1617,7 @@ esp_err_t mqtt_mgr_publish_call_event(const unified_call_payload_t *payload) {
 
 esp_err_t mqtt_mgr_publish_ussd_result(const unified_ussd_payload_t *payload) {
     char code[64] = {0};
+    char status[64] = {0};
     char response[256] = {0};
     char json[512] = {0};
 
@@ -1610,12 +1626,14 @@ esp_err_t mqtt_mgr_publish_ussd_result(const unified_ussd_payload_t *payload) {
     }
 
     mqtt_mgr_copy_json_string(code, sizeof(code), payload->code);
+    mqtt_mgr_copy_json_string(status, sizeof(status), payload->status);
     mqtt_mgr_copy_json_string(response, sizeof(response), payload->response);
     snprintf(
         json,
         sizeof(json),
-        "{\"type\":\"ussd_result\",\"code\":\"%s\",\"response\":\"%s\",\"session_active\":%s,\"sim_slot\":%u,\"timestamp\":%" PRIu32 "}",
+        "{\"type\":\"ussd_result\",\"code\":\"%s\",\"status\":\"%s\",\"response\":\"%s\",\"session_active\":%s,\"sim_slot\":%u,\"timestamp\":%" PRIu32 "}",
         code,
+        status,
         response,
         payload->session_active ? "true" : "false",
         (unsigned)payload->sim_slot,

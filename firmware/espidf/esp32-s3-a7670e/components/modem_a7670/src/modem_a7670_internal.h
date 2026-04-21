@@ -40,3 +40,5 @@ esp_err_t modem_a7670_prepare_command(char *buffer, size_t buffer_len, const cha
 void modem_a7670_publish_status_locked(void);
 bool modem_a7670_uart_control_blocked_locked(void);
 void modem_a7670_mark_mqtt_desynced(void);
+void modem_a7670_clear_ussd_request_locked(void);
+void modem_a7670_arm_ussd_request_locked(uint32_t timeout_ms);

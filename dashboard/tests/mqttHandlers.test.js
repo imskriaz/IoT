@@ -240,6 +240,40 @@ describe('MQTTHandlers USSD classification', () => {
         );
     });
 
+    test('marks USSD result failed when firmware reports a failed status without payload', async () => {
+        const { mqttService, db, room } = buildSubject();
+        db.get
+            .mockResolvedValueOnce({ id: 14, session_id: null, menu_level: 0, response: '', status: 'pending' })
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(null);
+
+        mqttService.emit('ussd:response', 'test-device-1', {
+            code: '*123#',
+            status: 'failed',
+            response: 'ussd_response_timeout',
+            session_active: false
+        });
+
+        await flushAsync();
+
+        expect(db.run).toHaveBeenNthCalledWith(
+            1,
+            expect.stringContaining('UPDATE ussd'),
+            ['ussd_response_timeout', 'failed', '14', 14]
+        );
+        expect(mqttService.clearDeviceBusy).toHaveBeenCalledWith('test-device-1');
+        expect(room.emit).toHaveBeenLastCalledWith(
+            'ussd:response',
+            expect.objectContaining({
+                deviceId: 'test-device-1',
+                response: 'ussd_response_timeout',
+                status: 'failed',
+                session_active: false,
+                menuOptions: []
+            })
+        );
+    });
+
     test('persists SIM number from configured own-number USSD response', async () => {
         const { mqttService, db } = buildSubject();
         db.get

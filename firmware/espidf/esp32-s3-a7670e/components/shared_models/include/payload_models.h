@@ -26,6 +26,7 @@ typedef struct {
 typedef struct {
     char code[UNIFIED_TEXT_SHORT_LEN];
     char response[UNIFIED_TEXT_LONG_LEN];
+    char status[UNIFIED_TEXT_SHORT_LEN];
     uint8_t sim_slot;
     bool session_active;
     uint32_t timestamp_ms;

@@ -63,6 +63,8 @@ typedef struct {
     char ussd_response_buffer[CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN];
     bool ussd_response_pending;
     bool ussd_response_session_active;
+    bool ussd_request_active;
+    uint32_t ussd_request_deadline_ms;
 } modem_a7670_runtime_scratch_t;
 
 const char *TAG = "modem_a7670";
@@ -141,6 +143,9 @@ static size_t modem_a7670_skip_crlf_bytes(const char *buffer, size_t buffer_len,
 static void modem_a7670_reset_mqtt_rx_locked(void);
 static void modem_a7670_reset_uart_parse_fragment_locked(void);
 static void modem_a7670_reset_pending_ussd_response_locked(void);
+void modem_a7670_clear_ussd_request_locked(void);
+void modem_a7670_arm_ussd_request_locked(uint32_t timeout_ms);
+static void modem_a7670_handle_ussd_request_timeout_locked(void);
 static bool modem_a7670_mqtt_rx_capture_active_locked(void);
 static size_t modem_a7670_parse_cmqttrx_length(const char *line);
 static void modem_a7670_append_fragment(char *dest, size_t dest_len, const char *fragment);
@@ -383,6 +388,22 @@ static void modem_a7670_reset_pending_ussd_response_locked(void) {
     s_runtime_scratch.ussd_response_session_active = false;
 }
 
+void modem_a7670_clear_ussd_request_locked(void) {
+    s_runtime_scratch.ussd_request_active = false;
+    s_runtime_scratch.ussd_request_deadline_ms = 0U;
+}
+
+void modem_a7670_arm_ussd_request_locked(uint32_t timeout_ms) {
+    uint32_t effective_timeout_ms = timeout_ms;
+
+    if (effective_timeout_ms < 1000U) {
+        effective_timeout_ms = 1000U;
+    }
+
+    s_runtime_scratch.ussd_request_active = true;
+    s_runtime_scratch.ussd_request_deadline_ms = unified_tick_now_ms() + effective_timeout_ms;
+}
+
 static bool modem_a7670_mqtt_rx_capture_active_locked(void) {
     return s_mqtt_rx_expect_topic ||
            s_mqtt_rx_expect_payload ||
@@ -559,10 +580,18 @@ static void modem_a7670_queue_ussd_result_locked(const unified_ussd_payload_t *p
     s_ussd_queue[write_index] = *payload;
 }
 
-static void modem_a7670_queue_ussd_payload_locked(bool session_active, const char *response) {
+static void modem_a7670_queue_ussd_payload_locked(bool session_active, const char *status, const char *response) {
     unified_ussd_payload_t payload = {0};
 
     snprintf(payload.code, sizeof(payload.code), "%s", s_last_ussd_code);
+    snprintf(
+        payload.status,
+        sizeof(payload.status),
+        "%s",
+        status && status[0] != '\0'
+            ? status
+            : (session_active ? "active" : (response && response[0] != '\0' ? "success" : "cancelled"))
+    );
     payload.session_active = session_active;
     payload.sim_slot = 0U;
     payload.timestamp_ms = unified_time_now_ms();
@@ -606,10 +635,11 @@ static void modem_a7670_parse_ussd_result_locked(const char *line) {
     }
 
     modem_a7670_reset_pending_ussd_response_locked();
+    modem_a7670_clear_ussd_request_locked();
 
     payload_field = cursor ? strchr(cursor, ',') : NULL;
     if (!payload_field) {
-        modem_a7670_queue_ussd_payload_locked(session_state == 1, "");
+        modem_a7670_queue_ussd_payload_locked(session_state == 1, NULL, "");
         return;
     }
 
@@ -619,7 +649,7 @@ static void modem_a7670_parse_ussd_result_locked(const char *line) {
     }
 
     if (*payload_field != '"') {
-        modem_a7670_queue_ussd_payload_locked(session_state == 1, "");
+        modem_a7670_queue_ussd_payload_locked(session_state == 1, NULL, "");
         return;
     }
 
@@ -628,7 +658,7 @@ static void modem_a7670_parse_ussd_result_locked(const char *line) {
     if (payload_end && payload_end > payload_start) {
         char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
         snprintf(response, sizeof(response), "%.*s", (int)(payload_end - payload_start), payload_start);
-        modem_a7670_queue_ussd_payload_locked(session_state == 1, response);
+        modem_a7670_queue_ussd_payload_locked(session_state == 1, NULL, response);
         return;
     }
 
@@ -889,9 +919,11 @@ static void modem_a7670_parse_line_locked(const char *line) {
 
             modem_a7670_queue_ussd_payload_locked(
                 s_runtime_scratch.ussd_response_session_active,
+                NULL,
                 s_runtime_scratch.ussd_response_buffer
             );
             modem_a7670_reset_pending_ussd_response_locked();
+            modem_a7670_clear_ussd_request_locked();
             return;
         }
 
@@ -1982,6 +2014,7 @@ static void modem_a7670_task(void *arg) {
              * registration and CMQTT URCs without doubling idle UART reads. */
             memset(urc_buffer, 0, sizeof(scratch->task_urc_buffer));
             modem_a7670_read_until_quiet_locked(urc_buffer, sizeof(scratch->task_urc_buffer), 50);
+            modem_a7670_handle_ussd_request_timeout_locked();
             xSemaphoreGive(s_lock);
         }
 
@@ -2037,6 +2070,7 @@ esp_err_t modem_a7670_init(void) {
     modem_a7670_reset_mqtt_rx_locked();
     modem_a7670_reset_uart_parse_fragment_locked();
     modem_a7670_reset_pending_ussd_response_locked();
+    modem_a7670_clear_ussd_request_locked();
 
     s_status.runtime.initialized = true;
     s_status.runtime.state = UNIFIED_MODULE_STATE_INITIALIZED;
@@ -2613,6 +2647,27 @@ bool modem_a7670_pop_ussd_result(unified_ussd_payload_t *out_payload) {
 
     xSemaphoreGive(s_lock);
     return has_value;
+}
+
+static void modem_a7670_handle_ussd_request_timeout_locked(void) {
+    uint32_t now_ms = 0U;
+
+    if (!s_runtime_scratch.ussd_request_active) {
+        return;
+    }
+
+    now_ms = unified_tick_now_ms();
+    if ((int32_t)(now_ms - s_runtime_scratch.ussd_request_deadline_ms) < 0) {
+        return;
+    }
+
+    ESP_LOGW(TAG, "ussd response timed out code=%s", s_last_ussd_code[0] != '\0' ? s_last_ussd_code : "<unknown>");
+    s_status.timeout_count++;
+    snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "ussd_response_timeout");
+    snprintf(s_status.last_response, sizeof(s_status.last_response), "%s", "ussd_response_timeout");
+    modem_a7670_queue_ussd_payload_locked(false, "failed", "ussd_response_timeout");
+    modem_a7670_reset_pending_ussd_response_locked();
+    modem_a7670_clear_ussd_request_locked();
 }
 
 esp_err_t modem_a7670_open_data_session(char *response, size_t response_len, uint32_t timeout_ms) {

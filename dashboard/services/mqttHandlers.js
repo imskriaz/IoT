@@ -1462,9 +1462,11 @@ class MQTTHandlers {
                     const status = String(data.status || '').trim().toLowerCase();
                     const incomingCode = String(data.code || '').trim();
                     const sessionActive = data.session_active === true;
+                    const failedStatus = ['failed', 'timeout', 'rejected', 'error'].includes(status);
                     const terminatedMarker = /^USSD session terminated$/i.test(decodedResponse);
                     const legacyTerminationOnly = !sessionActive && /^[0-5]$/.test(decodedResponse);
-                    const hasRealPayload = Boolean(decodedResponse) && !terminatedMarker && !legacyTerminationOnly;
+                    const hasRealPayload = !failedStatus && Boolean(decodedResponse) && !terminatedMarker && !legacyTerminationOnly;
+                    const failedOnly = failedStatus;
                     const responseMenuOptions = hasRealPayload
                         ? parseUssdMenuOptions(decodedResponse)
                         : [];
@@ -1476,12 +1478,12 @@ class MQTTHandlers {
                         || legacyTerminationOnly
                         || terminatedMarker
                     );
-                    const transientOnly = !hasRealPayload && !terminatedOnly;
+                    const transientOnly = !hasRealPayload && !failedOnly && !terminatedOnly;
                     const simScope = extractSimScope(data);
                     const resolvedResponse = decodedResponse || (terminatedOnly ? 'USSD session terminated' : '');
                     const resolvedStatus = hasRealPayload
                         ? ((sessionActive || hasResponseMenuOptions) ? 'active' : 'success')
-                        : (terminatedOnly ? 'cancelled' : 'pending');
+                        : (failedOnly ? 'failed' : (terminatedOnly ? 'cancelled' : 'pending'));
                     let targetRow = null;
 
                     if (incomingCode) {

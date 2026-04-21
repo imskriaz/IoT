@@ -950,10 +950,13 @@ esp_err_t modem_a7670_send_ussd(
     }
 
     snprintf(s_last_ussd_code, sizeof(s_last_ussd_code), "%s", code);
+    modem_a7670_clear_ussd_request_locked();
     err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
     if (err == ESP_OK) {
+        modem_a7670_arm_ussd_request_locked(timeout_ms);
         ESP_LOGI(TAG, "ussd accepted by modem code=%s", code);
     } else {
+        modem_a7670_clear_ussd_request_locked();
         ESP_LOGW(TAG, "ussd request failed code=%s err=%s response=%s", code, esp_err_to_name(err), response);
     }
 
@@ -995,6 +998,7 @@ esp_err_t modem_a7670_cancel_ussd(char *response, size_t response_len, uint32_t 
         const int64_t deadline_us = esp_timer_get_time() + ((int64_t)wait_ms * 1000LL);
 
         s_last_ussd_code[0] = '\0';
+        modem_a7670_clear_ussd_request_locked();
         while (esp_timer_get_time() < deadline_us) {
             urc_buffer[0] = '\0';
             if (modem_a7670_read_until_quiet_locked(

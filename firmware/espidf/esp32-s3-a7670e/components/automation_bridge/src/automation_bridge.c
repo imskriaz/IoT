@@ -932,7 +932,7 @@ esp_err_t automation_bridge_init(void) {
     task_ok = xTaskCreatePinnedToCore(
         automation_bridge_task,
         "automation_bridge_task",
-        CONFIG_UNIFIED_TASK_STACK_XLARGE,
+        CONFIG_UNIFIED_TASK_STACK_MEDIUM,
         NULL,
         4,
         NULL,

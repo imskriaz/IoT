@@ -18,6 +18,13 @@ For the Waveshare `ESP32-S3-A7670E-4G` board, use the vendor PDFs first:
   - `manuals/`: modem and hardware PDFs
   - `hardware/`: board schematic PDFs
   - `demo/`: vendor demo bundles and prebuilt images
+  - [manuals/A76XX_AT_CUSD.md](/d:/Projects/IoT/firmware/docs/vendor/esp32-s3-a7670e/manuals/A76XX_AT_CUSD.md): extracted `AT+CUSD` quick reference with session notes
+
+Generated reference copies:
+
+- vendor PDFs under `vendor/esp32-s3-a7670e/` now have sibling `.md` files generated from the PDF text layer
+- generator: [pdf_to_md.py](/d:/Projects/IoT/.toolchain/pdf_to_md.py)
+- regenerate: `.\.toolchain\Python311\python.exe .\.toolchain\pdf_to_md.py firmware/docs/vendor/esp32-s3-a7670e --recursive --force`
 
 ## Network Notes
 
