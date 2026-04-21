@@ -53,6 +53,7 @@ Primary permissions:
 
 - `SEND_SMS`
 - `RECEIVE_SMS`
+- `READ_SMS`
 - `POST_NOTIFICATIONS`
 - `READ_PHONE_STATE`
 - `READ_PHONE_NUMBERS`

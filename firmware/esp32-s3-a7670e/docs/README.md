@@ -1,30 +1,30 @@
 # Docs Index
 
-This `firmware/docs/` folder is for source references, not implementation history.
+This `firmware/esp32-s3-a7670e/docs/` folder is for source references, not implementation history.
 
 ## Source Of Truth
 
 For the Waveshare `ESP32-S3-A7670E-4G` board, use the vendor PDFs first:
 
-- [A76XX AT Command Manual](/d:/Projects/IoT/firmware/docs/vendor/esp32-s3-a7670e/manuals/A76XX_Series_AT_Command_Manual_V1.09.pdf)
-- [A76XX TCPIP Application Note](/d:/Projects/IoT/firmware/docs/vendor/esp32-s3-a7670e/manuals/A76XX_Series_TCPIP_Application_Note_V1.00.pdf)
-- [A76XX MQTT(S) Application Note](/d:/Projects/IoT/firmware/docs/vendor/esp32-s3-a7670e/manuals/A76XX_Series_MQTT(S)_Application_Note_V1.00.pdf)
-- [A7670X Hardware Design](/d:/Projects/IoT/firmware/docs/vendor/esp32-s3-a7670e/manuals/A7672X_A7670X_Series_Hardware_Design_V1.03.pdf)
-- [Board Schematics](/d:/Projects/IoT/firmware/docs/vendor/esp32-s3-a7670e/hardware)
+- [A76XX AT Command Manual](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/vendor/esp32-s3-a7670e/manuals/A76XX_Series_AT_Command_Manual_V1.09.pdf)
+- [A76XX TCPIP Application Note](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/vendor/esp32-s3-a7670e/manuals/A76XX_Series_TCPIP_Application_Note_V1.00.pdf)
+- [A76XX MQTT(S) Application Note](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/vendor/esp32-s3-a7670e/manuals/A76XX_Series_MQTT(S)_Application_Note_V1.00.pdf)
+- [A7670X Hardware Design](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/vendor/esp32-s3-a7670e/manuals/A7672X_A7670X_Series_Hardware_Design_V1.03.pdf)
+- [Board Schematics](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/vendor/esp32-s3-a7670e/hardware)
 
 ## Vendor Bundle
 
-- [vendor/esp32-s3-a7670e](/d:/Projects/IoT/firmware/docs/vendor/esp32-s3-a7670e)
+- [vendor/esp32-s3-a7670e](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/vendor/esp32-s3-a7670e)
   - `manuals/`: modem and hardware PDFs
   - `hardware/`: board schematic PDFs
   - `demo/`: vendor demo bundles and prebuilt images
-  - [manuals/A76XX_AT_CUSD.md](/d:/Projects/IoT/firmware/docs/vendor/esp32-s3-a7670e/manuals/A76XX_AT_CUSD.md): extracted `AT+CUSD` quick reference with session notes
+  - [manuals/A76XX_AT_CUSD.md](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/vendor/esp32-s3-a7670e/manuals/A76XX_AT_CUSD.md): extracted `AT+CUSD` quick reference with session notes
 
 Generated reference copies:
 
 - vendor PDFs under `vendor/esp32-s3-a7670e/` now have sibling `.md` files generated from the PDF text layer
 - generator: [pdf_to_md.py](/d:/Projects/IoT/.toolchain/pdf_to_md.py)
-- regenerate: `.\.toolchain\Python311\python.exe .\.toolchain\pdf_to_md.py firmware/docs/vendor/esp32-s3-a7670e --recursive --force`
+- regenerate: `.\.toolchain\Python311\python.exe .\.toolchain\pdf_to_md.py firmware/esp32-s3-a7670e/docs/vendor/esp32-s3-a7670e --recursive --force`
 
 ## Network Notes
 
@@ -36,23 +36,23 @@ The vendor docs show that the module family supports:
 
 ## Important Boundary
 
-- Use `firmware/docs/` for vendor source material and board references.
+- Use `firmware/esp32-s3-a7670e/docs/` for vendor source material and board references.
 - Keep implementation in the main firmware lane and use vendor docs here as the reference set.
 
 ## Repo Rulebook
 
-- [Runtime Rulebook](/d:/Projects/IoT/firmware/docs/RULEBOOK.md)
+- [Runtime Rulebook](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/RULEBOOK.md)
   - defines dashboard-vs-device ownership
   - defines queue and race-control rules
   - defines the selective firmware redesign plan
-- [Runtime Implementation Plan](/d:/Projects/IoT/firmware/docs/RUNTIME_IMPLEMENTATION_PLAN.md)
+- [Runtime Implementation Plan](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/RUNTIME_IMPLEMENTATION_PLAN.md)
   - defines queue domains and execution lanes
   - defines file-level implementation phases
   - defines live validation gates and stop conditions
 - [Device Types](/d:/Projects/IoT/firmware/docs/DEVICE_TYPES.md)
   - defines the supported device families
   - clarifies that Android `HTTP API` is a transport, not a separate device type
-- [Android Device Bridge](/d:/Projects/IoT/firmware/docs/ANDROID_SMS_BRIDGE.md)
+- [Android Device Bridge](/d:/Projects/IoT/firmware/android/docs/ANDROID_SMS_BRIDGE.md)
   - defines the current Android app contract
   - documents provisioning, permissions, and dual-SIM expectations
 

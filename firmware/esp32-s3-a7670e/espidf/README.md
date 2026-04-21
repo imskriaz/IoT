@@ -46,7 +46,7 @@ This is the single active ESP-IDF firmware lane for the Waveshare ESP32-S3-A7670
 - modem MQTT is used as the fallback path when Wi-Fi is not carrying the session
 - USB is reserved for debug, provisioning, config, or PC-side sharing support, not the normal device runtime transport
 - credentials are not meant to be hardcoded into firmware
-- vendor references for modem and board behavior live under the repo `firmware/docs/` folder
+- vendor references for modem and board behavior live under `firmware/esp32-s3-a7670e/docs/`
 - heavy orchestration, retries, scheduling, and derived state belong on the dashboard
 - firmware should process only hardware-local work and should stay selective
 - device-side execution must be queue-driven and race-aware
@@ -63,9 +63,9 @@ This is the single active ESP-IDF firmware lane for the Waveshare ESP32-S3-A7670
 ## References
 
 - use the repo [Docs Index](/d:/Projects/IoT/firmware/docs/README.md)
-- use the repo [Runtime Rulebook](/d:/Projects/IoT/firmware/docs/RULEBOOK.md)
-- use the repo [Runtime Implementation Plan](/d:/Projects/IoT/firmware/docs/RUNTIME_IMPLEMENTATION_PLAN.md)
-- use the vendor bundle [README](/d:/Projects/IoT/firmware/docs/vendor/esp32-s3-a7670e/README.md)
+- use the repo [Runtime Rulebook](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/RULEBOOK.md)
+- use the repo [Runtime Implementation Plan](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/RUNTIME_IMPLEMENTATION_PLAN.md)
+- use the vendor bundle [README](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/vendor/esp32-s3-a7670e/README.md)
 
 ## Practical Note
 

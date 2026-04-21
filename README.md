@@ -15,9 +15,9 @@ Current transport rule:
 
 ## Repo Paths
 
-- ESP32 active firmware: [firmware/espidf/esp32-s3-a7670e](D:/Projects/IoT/firmware/espidf/esp32-s3-a7670e)
+- ESP32 active firmware: [firmware/esp32-s3-a7670e/espidf](D:/Projects/IoT/firmware/esp32-s3-a7670e/espidf)
 - Android bridge app: [firmware/android](D:/Projects/IoT/firmware/android)
-- Flutter UI: [firmware/flutter_ui](D:/Projects/IoT/firmware/flutter_ui)
+- Flutter UI: [firmware/android/flutter_ui](D:/Projects/IoT/firmware/android/flutter_ui)
 - Dashboard server: [dashboard](D:/Projects/IoT/dashboard)
 - Source docs index: [firmware/docs/README.md](D:/Projects/IoT/firmware/docs/README.md)
 
@@ -89,5 +89,5 @@ The table below uses the preferred runtime lane for each feature.
 ## More Detail
 
 - Device families and transport rules: [firmware/docs/DEVICE_TYPES.md](D:/Projects/IoT/firmware/docs/DEVICE_TYPES.md)
-- Android bridge contract: [firmware/docs/ANDROID_SMS_BRIDGE.md](D:/Projects/IoT/firmware/docs/ANDROID_SMS_BRIDGE.md)
+- Android bridge contract: [firmware/android/docs/ANDROID_SMS_BRIDGE.md](D:/Projects/IoT/firmware/android/docs/ANDROID_SMS_BRIDGE.md)
 - Docs index and vendor references: [firmware/docs/README.md](D:/Projects/IoT/firmware/docs/README.md)

@@ -9,7 +9,7 @@ First-version scope:
 - receive inbound SMS through `SMS_RECEIVED`
 - publish `device/{deviceId}/sms/incoming`
 - publish firmware-compatible `device/{deviceId}/action/result`
-- avoid `READ_SMS` and default-SMS role
+- keep `READ_SMS` scoped to the in-app threaded SMS view and avoid default-SMS role
 
 Build:
 
@@ -30,3 +30,7 @@ adb install -r .\app\build\outputs\apk\debug\app-debug.apk
 ```
 
 Run those commands from `firmware/android`. Then open the app, verify the env-backed MQTT settings, request SMS permissions, and start the bridge.
+
+Related docs:
+
+- [Android Device Bridge contract](/d:/Projects/IoT/firmware/android/docs/ANDROID_SMS_BRIDGE.md)

@@ -265,11 +265,11 @@ Use this document before adding or redesigning any runtime feature.
 
 Files:
 
-- [RULEBOOK.md](/d:/Projects/IoT/firmware/docs/RULEBOOK.md)
-- [RUNTIME_IMPLEMENTATION_PLAN.md](/d:/Projects/IoT/firmware/docs/RUNTIME_IMPLEMENTATION_PLAN.md)
+- [RULEBOOK.md](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/RULEBOOK.md)
+- [RUNTIME_IMPLEMENTATION_PLAN.md](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/RUNTIME_IMPLEMENTATION_PLAN.md)
 - [dashboard/services/mqttService.js](/d:/Projects/IoT/dashboard/services/mqttService.js)
-- [firmware/espidf/esp32-s3-a7670e/components/shared_models/include/action_models.h](/d:/Projects/IoT/firmware/espidf/esp32-s3-a7670e/components/shared_models/include/action_models.h)
-- [firmware/espidf/esp32-s3-a7670e/components/api_bridge/include/api_bridge.h](/d:/Projects/IoT/firmware/espidf/esp32-s3-a7670e/components/api_bridge/include/api_bridge.h)
+- [firmware/esp32-s3-a7670e/espidf/components/shared_models/include/action_models.h](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/shared_models/include/action_models.h)
+- [firmware/esp32-s3-a7670e/espidf/components/api_bridge/include/api_bridge.h](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/api_bridge/include/api_bridge.h)
 
 Deliverables:
 
@@ -296,8 +296,8 @@ Deliverables:
 
 Files:
 
-- [firmware/espidf/esp32-s3-a7670e/components/automation_bridge/src/automation_bridge.c](/d:/Projects/IoT/firmware/espidf/esp32-s3-a7670e/components/automation_bridge/src/automation_bridge.c)
-- [firmware/espidf/esp32-s3-a7670e/components/api_bridge/src/api_bridge.c](/d:/Projects/IoT/firmware/espidf/esp32-s3-a7670e/components/api_bridge/src/api_bridge.c)
+- [firmware/esp32-s3-a7670e/espidf/components/automation_bridge/src/automation_bridge.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/automation_bridge/src/automation_bridge.c)
+- [firmware/esp32-s3-a7670e/espidf/components/api_bridge/src/api_bridge.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/api_bridge/src/api_bridge.c)
 
 Deliverables:
 
@@ -309,9 +309,9 @@ Deliverables:
 
 Files:
 
-- [firmware/espidf/esp32-s3-a7670e/components/mqtt_mgr/src/mqtt_mgr.c](/d:/Projects/IoT/firmware/espidf/esp32-s3-a7670e/components/mqtt_mgr/src/mqtt_mgr.c)
-- [firmware/espidf/esp32-s3-a7670e/components/wifi_mgr/src/wifi_mgr.c](/d:/Projects/IoT/firmware/espidf/esp32-s3-a7670e/components/wifi_mgr/src/wifi_mgr.c)
-- [firmware/espidf/esp32-s3-a7670e/components/modem_a7670/src/modem_a7670.c](/d:/Projects/IoT/firmware/espidf/esp32-s3-a7670e/components/modem_a7670/src/modem_a7670.c)
+- [firmware/esp32-s3-a7670e/espidf/components/mqtt_mgr/src/mqtt_mgr.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/mqtt_mgr/src/mqtt_mgr.c)
+- [firmware/esp32-s3-a7670e/espidf/components/wifi_mgr/src/wifi_mgr.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/wifi_mgr/src/wifi_mgr.c)
+- [firmware/esp32-s3-a7670e/espidf/components/modem_a7670/src/modem_a7670.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/modem_a7670/src/modem_a7670.c)
 
 Deliverables:
 
@@ -324,8 +324,8 @@ Deliverables:
 
 Files:
 
-- [firmware/espidf/esp32-s3-a7670e/components/telemetry_service/src/telemetry_service.c](/d:/Projects/IoT/firmware/espidf/esp32-s3-a7670e/components/telemetry_service/src/telemetry_service.c)
-- [firmware/espidf/esp32-s3-a7670e/components/device_status/src/device_status.c](/d:/Projects/IoT/firmware/espidf/esp32-s3-a7670e/components/device_status/src/device_status.c)
+- [firmware/esp32-s3-a7670e/espidf/components/telemetry_service/src/telemetry_service.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/telemetry_service/src/telemetry_service.c)
+- [firmware/esp32-s3-a7670e/espidf/components/device_status/src/device_status.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/device_status/src/device_status.c)
 
 Deliverables:
 
@@ -338,7 +338,7 @@ Deliverables:
 
 Files:
 
-- [firmware/espidf/esp32-s3-a7670e/components/sms_service/src/sms_service.c](/d:/Projects/IoT/firmware/espidf/esp32-s3-a7670e/components/sms_service/src/sms_service.c)
+- [firmware/esp32-s3-a7670e/espidf/components/sms_service/src/sms_service.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/sms_service/src/sms_service.c)
 - [dashboard/routes/sms.js](/d:/Projects/IoT/dashboard/routes/sms.js)
 - [dashboard/public/js/sms.js](/d:/Projects/IoT/dashboard/public/js/sms.js)
 
