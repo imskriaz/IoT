@@ -541,7 +541,12 @@ describe('mqttService firmware compatibility', () => {
                 ])
         };
 
-        svc.deviceCommandQueues.set('device-1', Promise.resolve());
+        svc.deviceCommandQueues.set('device-1', {
+            active: true,
+            draining: false,
+            sequence: 0,
+            pending: []
+        });
         svc.markDeviceBusy('device-1', 'send-sms', 5000);
 
         const state = await svc.getDeviceQueueState('device-1');
@@ -584,18 +589,24 @@ describe('mqttService firmware compatibility', () => {
         expect(svc._commandDomain('get-status')).toBe('status');
         expect(svc._commandDomain('wifi-scan')).toBe('network');
 
-        expect(svc._defaultPriority('send-sms')).toBe(50);
-        expect(svc._defaultPriority('make-call')).toBe(50);
-        expect(svc._defaultPriority('end-call')).toBe(50);
+        expect(svc._defaultPriority('send-sms')).toBe(40);
+        expect(svc._defaultPriority('make-call')).toBe(40);
+        expect(svc._defaultPriority('end-call')).toBe(40);
+        expect(svc._defaultPriority('get-status')).toBe(60);
+        expect(svc._defaultPriority('gpio-read')).toBe(60);
         expect(svc._defaultPriority('wifi-reconnect')).toBe(80);
         expect(svc._defaultPriority('config-set', { domain: 'network' })).toBe(80);
-        expect(svc._defaultPriority('storage-delete')).toBe(110);
-        expect(svc._defaultPriority('get-status')).toBe(250);
+        expect(svc._defaultPriority('storage-delete')).toBe(140);
         expect(svc._defaultPriority('wifi-scan')).toBe(80);
     });
 
     test('requestStatus skips automatic refresh when the device already has queued work', async () => {
-        svc.deviceCommandQueues.set('device-1', Promise.resolve());
+        svc.deviceCommandQueues.set('device-1', {
+            active: true,
+            draining: false,
+            sequence: 0,
+            pending: []
+        });
 
         const result = await svc.requestStatus('device-1', { force: false });
 
@@ -617,6 +628,76 @@ describe('mqttService firmware compatibility', () => {
         expect(svc._isReplaySafeCommand('send-sms')).toBe(false);
         expect(svc._isReplaySafeCommand('send-ussd', { persistent: true })).toBe(false);
         expect(svc._isReplaySafeCommand('storage-delete')).toBe(true);
+    });
+
+    test('device queue prioritizes foreground actions ahead of pending background work', async () => {
+        const order = [];
+        let releaseActive;
+        let signalActiveStarted;
+        const activeStarted = new Promise((resolve) => { signalActiveStarted = resolve; });
+
+        const active = svc.enqueueDeviceCommand(
+            'device-1',
+            () => new Promise((resolve) => {
+                releaseActive = resolve;
+                signalActiveStarted();
+            }),
+            { command: 'wifi-reconnect', priority: 80, background: false }
+        );
+        const background = svc.enqueueDeviceCommand(
+            'device-1',
+            async () => { order.push('background'); return 'background'; },
+            { command: 'get-status', background: true }
+        );
+        background.catch(() => {});
+        const foreground = svc.enqueueDeviceCommand(
+            'device-1',
+            async () => { order.push('foreground'); return 'foreground'; },
+            { command: 'send-sms', priority: 50, background: false }
+        );
+
+        await activeStarted;
+        releaseActive('active');
+        await expect(background).rejects.toMatchObject({ code: 'COMMAND_SUPERSEDED' });
+        await expect(foreground).resolves.toBe('foreground');
+        await expect(active).resolves.toBe('active');
+        expect(order).toEqual(['foreground']);
+    });
+
+    test('device queue coalesces duplicate background status commands', async () => {
+        let releaseActive;
+        let signalStarted;
+        let executions = 0;
+        const started = new Promise((resolve) => { signalStarted = resolve; });
+
+        const first = svc.enqueueDeviceCommand(
+            'device-1',
+            () => {
+                executions += 1;
+                signalStarted();
+                return new Promise((resolve) => {
+                    releaseActive = () => resolve({ ok: true, from: 'first' });
+                });
+            },
+            { command: 'get-status', background: true, source: 'status-watch' }
+        );
+
+        await started;
+
+        const second = svc.enqueueDeviceCommand(
+            'device-1',
+            () => {
+                executions += 1;
+                return Promise.resolve({ ok: true, from: 'second' });
+            },
+            { command: 'get-status', background: true, source: 'status-watch' }
+        );
+
+        releaseActive();
+
+        await expect(first).resolves.toEqual({ ok: true, from: 'first' });
+        await expect(second).resolves.toEqual({ ok: true, from: 'first' });
+        expect(executions).toBe(1);
     });
 
     test('interactive telephony helpers bypass the persistent queue', async () => {

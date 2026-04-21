@@ -165,6 +165,8 @@ const SYSTEM_COMMANDS = new Set([
     'ota-update'
 ]);
 
+const BACKGROUND_COMMAND_COALESCE_WINDOW_MS = 1500;
+
 class MQTTService extends EventEmitter {
     constructor() {
         super();
@@ -189,7 +191,7 @@ class MQTTService extends EventEmitter {
         this.pendingMessages = new Map();
         this.deviceStatus = new Map(); // Track device last seen
         this.seenMessages = new Set(); // Dedup cache keyed by topic+messageId
-        this.deviceCommandQueues = new Map(); // Serialize commands per device
+        this.deviceCommandQueues = new Map(); // Priority scheduler per device
         this.deviceOperationContext = new AsyncLocalStorage();
         this.deviceBusyUntil = new Map(); // Suppress automatic polling during long-running foreground commands
         this.activePersistentCommands = new Set();
@@ -982,11 +984,16 @@ class MQTTService extends EventEmitter {
     hasDeviceQueueActivity(deviceId) {
         const normalized = this._normalizeDeviceId(deviceId);
         if (!normalized) return false;
-        return this.deviceCommandQueues.has(normalized);
+        const state = this.deviceCommandQueues.get(normalized);
+        return Boolean(state && (state.active || state.draining || (state.pending?.length || 0) > 0));
     }
 
     _db() {
         return global.app?.locals?.db || null;
+    }
+
+    _hasDbMethods(db, methods = []) {
+        return Boolean(db) && methods.every((method) => typeof db?.[method] === 'function');
     }
 
     _generateCommandMessageId(command) {
@@ -1080,25 +1087,281 @@ class MQTTService extends EventEmitter {
     }
 
     _defaultPriority(command, options = {}) {
+        const normalized = String(command || '').trim().toLowerCase();
+
         if (Number.isFinite(options?.priority)) {
             return options.priority;
         }
 
+        switch (normalized) {
+            case 'send-sms':
+            case 'send-ussd':
+            case 'cancel-ussd':
+            case 'make-call':
+            case 'call-dial':
+            case 'answer-call':
+            case 'reject-call':
+            case 'end-call':
+            case 'hold-call':
+            case 'mute-call':
+                return 40;
+            case 'get-status':
+            case 'gpio-status':
+            case 'gpio-read':
+            case 'gps-status':
+            case 'gps-location':
+            case 'sensor-read':
+                return 60;
+            default:
+                break;
+        }
+
         switch (this._commandDomain(command, options)) {
             case 'telephony':
-                return 50;
+                return 40;
             case 'network':
                 return 80;
             case 'system':
-                return 90;
+                return 120;
             case 'storage':
-                return 110;
+                return 140;
             case 'status':
-                return 250;
+                return 220;
             case 'control':
             default:
                 return 100;
         }
+    }
+
+    _isBackgroundCommand(command, options = {}) {
+        if (options?.background === true) {
+            return true;
+        }
+
+        const source = String(options?.source || '').trim().toLowerCase();
+        if (source === 'startup-prime' || source === 'status-watch' || source === 'system:auto') {
+            return true;
+        }
+
+        return false;
+    }
+
+    _queuePriority(command, options = {}) {
+        let priority = this._defaultPriority(command, options);
+
+        if (this._isBackgroundCommand(command, options)) {
+            priority += 500;
+        }
+        if (options?.userPriority === true) {
+            priority = Math.max(0, priority - 20);
+        }
+
+        return priority;
+    }
+
+    _coalescingCommandKey(command, options = {}) {
+        const normalized = String(command || '').trim().toLowerCase();
+        if (!normalized || !this._isBackgroundCommand(command, options)) {
+            return '';
+        }
+
+        const domain = this._commandDomain(normalized, options);
+        if (domain !== 'status') {
+            return '';
+        }
+
+        return `${domain}:${normalized}`;
+    }
+
+    _backgroundCommandCoalesceWindowMs(command, options = {}) {
+        if (Number.isFinite(options?.coalesceWindowMs) && options.coalesceWindowMs > 0) {
+            return Number(options.coalesceWindowMs);
+        }
+
+        return BACKGROUND_COMMAND_COALESCE_WINDOW_MS;
+    }
+
+    _getOrCreateDeviceQueueState(deviceId) {
+        const queueKey = this._normalizeDeviceId(deviceId);
+        if (!queueKey) {
+            return null;
+        }
+
+        let state = this.deviceCommandQueues.get(queueKey);
+        if (!state) {
+            state = {
+                active: false,
+                activeEntry: null,
+                draining: false,
+                sequence: 0,
+                pending: [],
+                recentBackground: new Map()
+            };
+            this.deviceCommandQueues.set(queueKey, state);
+        }
+
+        state.active = state.active === true;
+        state.activeEntry = state.activeEntry || null;
+        state.draining = state.draining === true;
+        state.sequence = Number.isFinite(state.sequence) ? Number(state.sequence) : 0;
+        state.pending = Array.isArray(state.pending) ? state.pending : [];
+        if (!(state.recentBackground instanceof Map)) {
+            state.recentBackground = new Map();
+        }
+
+        return state;
+    }
+
+    _pruneDeviceQueueCooldowns(state, now = Date.now()) {
+        if (!state?.recentBackground) {
+            return;
+        }
+
+        for (const [key, expiresAt] of state.recentBackground.entries()) {
+            if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+                state.recentBackground.delete(key);
+            }
+        }
+    }
+
+    _cleanupDeviceQueueState(deviceId) {
+        const queueKey = this._normalizeDeviceId(deviceId);
+        const state = this.deviceCommandQueues.get(queueKey);
+
+        if (!queueKey || !state) {
+            return;
+        }
+        this._pruneDeviceQueueCooldowns(state);
+        if (!state.active && !state.draining && state.pending.length === 0 && state.recentBackground.size === 0) {
+            this.deviceCommandQueues.delete(queueKey);
+        }
+    }
+
+    _insertPendingDeviceTask(state, entry) {
+        let index = state.pending.findIndex((candidate) => (
+            candidate.priority > entry.priority ||
+            (candidate.priority === entry.priority && candidate.sequence > entry.sequence)
+        ));
+
+        if (index < 0) {
+            index = state.pending.length;
+        }
+        state.pending.splice(index, 0, entry);
+    }
+
+    _dropSupersededBackgroundTasks(deviceId, state, incomingEntry) {
+        if (!state || !incomingEntry || incomingEntry.background === true) {
+            return;
+        }
+
+        const retained = [];
+        const dropped = [];
+        for (const entry of state.pending) {
+            if (entry.background === true) {
+                dropped.push(entry);
+            } else {
+                retained.push(entry);
+            }
+        }
+
+        if (!dropped.length) {
+            return;
+        }
+
+        state.pending = retained;
+        for (const entry of dropped) {
+            const error = new Error('Superseded by higher priority command');
+            error.code = 'COMMAND_SUPERSEDED';
+            entry.reject(error);
+        }
+
+        logger.debug(`Dropped ${dropped.length} background command(s) for ${deviceId} in favor of foreground work`);
+    }
+
+    _findCoalescedDeviceTask(state, coalesceKey) {
+        if (!state || !coalesceKey) {
+            return null;
+        }
+
+        if (state.activeEntry?.coalesceKey === coalesceKey) {
+            return state.activeEntry;
+        }
+
+        return state.pending.find((entry) => entry.coalesceKey === coalesceKey) || null;
+    }
+
+    _deviceQueueSettlingDelayMs(entry) {
+        const command = String(entry?.command || '').trim().toLowerCase();
+
+        if (entry?.background === true) {
+            return 200;
+        }
+
+        if (TELEPHONY_COMMANDS.has(command)) {
+            return 40;
+        }
+
+        switch (command) {
+            case 'get-status':
+            case 'gpio-status':
+            case 'gpio-read':
+            case 'gps-status':
+            case 'gps-location':
+            case 'sensor-read':
+                return 50;
+            default:
+                return 120;
+        }
+    }
+
+    _drainDeviceQueue(deviceId) {
+        const queueKey = this._normalizeDeviceId(deviceId);
+        const state = this.deviceCommandQueues.get(queueKey);
+
+        if (!queueKey || !state || state.active || state.draining) {
+            return;
+        }
+
+        state.draining = true;
+        setImmediate(async () => {
+            const currentState = this.deviceCommandQueues.get(queueKey);
+            if (!currentState) {
+                return;
+            }
+
+            currentState.draining = false;
+            if (currentState.active) {
+                return;
+            }
+
+            const next = currentState.pending.shift();
+            if (!next) {
+                this._cleanupDeviceQueueState(queueKey);
+                return;
+            }
+
+            currentState.active = true;
+            currentState.activeEntry = next;
+            try {
+                const result = await this.deviceOperationContext.run({ deviceId: queueKey }, next.task);
+                next.resolve(result);
+            } catch (error) {
+                next.reject(error);
+            } finally {
+                currentState.active = false;
+                currentState.activeEntry = null;
+                if (next.coalesceKey) {
+                    currentState.recentBackground.set(
+                        next.coalesceKey,
+                        Date.now() + Math.max(200, Number(next.coalesceWindowMs || 0))
+                    );
+                }
+                this._pruneDeviceQueueCooldowns(currentState);
+                await new Promise(resolve => setTimeout(resolve, this._deviceQueueSettlingDelayMs(next)));
+                this._cleanupDeviceQueueState(queueKey);
+                this._drainDeviceQueue(queueKey);
+            }
+        });
     }
 
     async _publishCommandNow(deviceId, command, payload = {}, waitForResponse = false, timeout = 30000, options = {}) {
@@ -1157,7 +1420,7 @@ class MQTTService extends EventEmitter {
     async _recoverPersistentQueue() {
         if (this._persistentQueueRecovered) return;
         const db = this._db();
-        if (!db) return;
+        if (!this._hasDbMethods(db, ['run'])) return;
 
         await db.run(
             `UPDATE device_command_queue
@@ -1648,7 +1911,12 @@ class MQTTService extends EventEmitter {
             }
         };
 
-        this.enqueueDeviceCommand(queueKey, run).catch((error) => {
+        this.enqueueDeviceCommand(queueKey, run, {
+            command: row.command,
+            source: row.source || 'dashboard-queue',
+            priority: Number(row.priority),
+            background: false
+        }).catch((error) => {
             logger.error('Persistent queue device task failed:', error);
         });
     }
@@ -1656,7 +1924,7 @@ class MQTTService extends EventEmitter {
     async processPersistentQueue() {
         if (this._persistentQueueTickRunning) return;
         const db = this._db();
-        if (!db) return;
+        if (!this._hasDbMethods(db, ['all'])) return;
 
         this._persistentQueueTickRunning = true;
         try {
@@ -1706,7 +1974,7 @@ class MQTTService extends EventEmitter {
 
     async enqueuePersistentDeviceCommand(deviceId, command, payload = {}, waitForResponse = false, timeout = 30000, options = {}) {
         const db = this._db();
-        if (!db) {
+        if (!this._hasDbMethods(db, ['run'])) {
             return this._publishCommandNow(deviceId, command, payload, waitForResponse, timeout, options);
         }
 
@@ -1732,7 +2000,7 @@ class MQTTService extends EventEmitter {
                 this._isReplaySafeCommand(command, options) ? 1 : 0,
                 Number.isFinite(options.maxAttempts) ? options.maxAttempts : 6,
                 timeout,
-                this._defaultPriority(command, options),
+                this._queuePriority(command, options),
                 null,
                 options.source || 'dashboard',
                 options.userId || null,
@@ -1770,7 +2038,7 @@ class MQTTService extends EventEmitter {
     async getDeviceQueueState(deviceId) {
         const normalized = this._normalizeDeviceId(deviceId);
         const db = this._db();
-        if (!db || !normalized) {
+        if (!normalized || !this._hasDbMethods(db, ['all'])) {
             return {
                 summary: { pending: 0, active: 0, failed: 0, ambiguous: 0, totalOpen: 0 },
                 domains: {},
@@ -1917,7 +2185,13 @@ class MQTTService extends EventEmitter {
             return executePublish();
         }
 
-        return this.enqueueDeviceCommand(normalizedDeviceId, executePublish);
+        return this.enqueueDeviceCommand(normalizedDeviceId, executePublish, {
+            command,
+            source: options?.source,
+            domain: options?.domain,
+            priority: this._queuePriority(command, options),
+            background: this._isBackgroundCommand(command, options)
+        });
     }
 
     runDeviceOperation(deviceId, task) {
@@ -1927,32 +2201,65 @@ class MQTTService extends EventEmitter {
         return this.enqueueDeviceCommand(deviceId, task);
     }
 
-    enqueueDeviceCommand(deviceId, task) {
-        const queueKey = String(deviceId || '');
-        const previous = this.deviceCommandQueues.get(queueKey) || Promise.resolve();
+    enqueueDeviceCommand(deviceId, task, metadata = {}) {
+        const queueKey = this._normalizeDeviceId(deviceId);
+        const state = this._getOrCreateDeviceQueueState(queueKey);
+        const activeDeviceOperation = this.deviceOperationContext.getStore();
+        const coalesceKey = this._coalescingCommandKey(metadata?.command, metadata || {});
 
-        const run = previous
-            .catch(() => {})
-            .then(async () => {
-                try {
-                    return await this.deviceOperationContext.run({ deviceId: queueKey }, task);
-                } finally {
-                    // A short pacing gap prevents the modem/firmware command loop
-                    // from dropping immediate follow-up commands under load.
-                    await new Promise(resolve => setTimeout(resolve, 200));
-                }
-            });
+        if (!queueKey || !state || typeof task !== 'function') {
+            return Promise.reject(new Error('Invalid device queue task'));
+        }
+        if (activeDeviceOperation?.deviceId === queueKey) {
+            return Promise.resolve().then(task);
+        }
 
-        const queued = run
-            .catch(() => {})
-            .finally(() => {
-                if (this.deviceCommandQueues.get(queueKey) === queued) {
-                    this.deviceCommandQueues.delete(queueKey);
-                }
-            });
+        this._pruneDeviceQueueCooldowns(state);
 
-        this.deviceCommandQueues.set(queueKey, queued);
-        return run;
+        if (coalesceKey) {
+            const sharedEntry = this._findCoalescedDeviceTask(state, coalesceKey);
+            if (sharedEntry?.promise) {
+                return sharedEntry.promise;
+            }
+
+            const cooldownUntil = state.recentBackground.get(coalesceKey) || 0;
+            if (cooldownUntil > Date.now()) {
+                logger.debug(`Coalesced recent background command ${metadata?.command || 'unknown'} for ${queueKey}`);
+                return Promise.resolve({
+                    success: true,
+                    queued: false,
+                    skipped: true,
+                    coalesced: true,
+                    reason: 'background command recently satisfied'
+                });
+            }
+        }
+
+        let resolveEntry;
+        let rejectEntry;
+        const promise = new Promise((resolve, reject) => {
+            resolveEntry = resolve;
+            rejectEntry = reject;
+        });
+        const entry = {
+            task,
+            resolve: resolveEntry,
+            reject: rejectEntry,
+            promise,
+            command: String(metadata?.command || '').trim(),
+            priority: Number.isFinite(metadata?.priority)
+                ? Number(metadata.priority)
+                : this._queuePriority(metadata?.command, metadata || {}),
+            background: metadata?.background === true,
+            sequence: ++state.sequence,
+            coalesceKey,
+            coalesceWindowMs: coalesceKey ? this._backgroundCommandCoalesceWindowMs(metadata?.command, metadata || {}) : 0
+        };
+
+        this._dropSupersededBackgroundTasks(queueKey, state, entry);
+        this._insertPendingDeviceTask(state, entry);
+        this._drainDeviceQueue(queueKey);
+        return promise;
     }
 
     publishRuntimeCommand(deviceId, command, payload = {}, waitForResponse = false, timeout = 30000, options = {}) {
@@ -2038,6 +2345,7 @@ class MQTTService extends EventEmitter {
             source: options?.source,
             userId: options?.userId,
             domain: 'status',
+            background: force === false,
             skipQueue: false,
             bypassCompatibility: options?.allowCompatibilitySnapshot === true ? false : true
         });

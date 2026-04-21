@@ -2460,6 +2460,12 @@ function scheduleDeviceEnvelopeRefresh(delayMs = 150) {
 }
 
 window.refreshDeviceEnvelope = refreshDeviceEnvelope;
+window.scheduleDeviceEnvelopeRefresh = scheduleDeviceEnvelopeRefresh;
+
+if (window.__pendingDeviceEnvelopeRefresh) {
+    window.__pendingDeviceEnvelopeRefresh = false;
+    scheduleDeviceEnvelopeRefresh(100);
+}
 
 /**
  * PAGE -> REQUIRED HARDWARE MAP
@@ -2820,6 +2826,7 @@ function loadCachedDeviceCapabilities(deviceId, options = {}) {
     loadCachedDeviceCapabilities(deviceId, { preserveVisibilityOnMiss: restoredSidebarVisibility });
 
     if (!deviceId) return;
+    scheduleDeviceEnvelopeRefresh(75);
 })();
 
 window.addEventListener('device:changed', function () {

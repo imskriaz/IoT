@@ -36,6 +36,7 @@ static const char *TAG = "mqtt_mgr";
 #define MQTT_MGR_MODEM_RESPONSE_LEN          512U
 #define MQTT_MGR_WIFI_PRIMARY_MIN_RSSI_DBM   (-85)
 #define MQTT_MGR_ESP_CONNECT_GRACE_MS      20000U
+#define MQTT_MGR_ACTION_RESULT_BATCH_LIMIT     6U
 
 typedef enum {
     MQTT_MGR_TRANSPORT_NONE = 0,
@@ -143,6 +144,13 @@ static bool mqtt_mgr_modem_fallback_ready(
 );
 static bool mqtt_mgr_is_bearer_recovery_failure(const char *detail);
 static void mqtt_mgr_get_loop_config(config_mgr_data_t *out_config);
+static bool mqtt_mgr_is_background_action_command(unified_action_command_t command);
+static bool mqtt_mgr_has_newer_background_record(
+    const api_bridge_action_record_t *records,
+    size_t count,
+    size_t current_index,
+    uint32_t last_published_sequence
+);
 
 static bool mqtt_mgr_is_bearer_recovery_failure(const char *detail) {
     if (!detail || detail[0] == '\0') {
@@ -171,6 +179,32 @@ static void mqtt_mgr_get_loop_config(config_mgr_data_t *out_config) {
     config_mgr_snapshot(&s_loop_config);
     s_loop_config_revision = config_revision;
     *out_config = s_loop_config;
+}
+
+static bool mqtt_mgr_is_background_action_command(unified_action_command_t command) {
+    return command == UNIFIED_ACTION_CMD_GET_STATUS || command == UNIFIED_ACTION_CMD_STATUS_WATCH;
+}
+
+static bool mqtt_mgr_has_newer_background_record(
+    const api_bridge_action_record_t *records,
+    size_t count,
+    size_t current_index,
+    uint32_t last_published_sequence
+) {
+    if (!records || current_index >= count) {
+        return false;
+    }
+
+    for (size_t index = current_index + 1U; index < count; ++index) {
+        if (records[index].sequence == 0U || records[index].sequence <= last_published_sequence) {
+            continue;
+        }
+        if (mqtt_mgr_is_background_action_command(records[index].response.action.command)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static void mqtt_mgr_log_internal_heap(const char *phase) {
@@ -1648,6 +1682,8 @@ static void mqtt_mgr_publish_recent_action_results(void) {
     uint32_t retry_ms = 0U;
     uint32_t last_published_sequence = 0U;
     uint32_t published_count_delta = 0U;
+    uint32_t skipped_background_count = 0U;
+    uint32_t processed_count = 0U;
     bool connected = false;
 
     if (!s_ready || !s_lock) {
@@ -1685,8 +1721,25 @@ static void mqtt_mgr_publish_recent_action_results(void) {
     count = api_bridge_snapshot_recent_records(s_action_records, CONFIG_UNIFIED_API_BRIDGE_HISTORY_DEPTH);
     for (index = 0; index < count; ++index) {
         esp_err_t err = ESP_OK;
+        bool background_record = false;
+        bool superseded_background = false;
 
         if (s_action_records[index].sequence == 0U || s_action_records[index].sequence <= last_published_sequence) {
+            continue;
+        }
+
+        background_record = mqtt_mgr_is_background_action_command(s_action_records[index].response.action.command);
+        superseded_background = background_record &&
+            mqtt_mgr_has_newer_background_record(
+                s_action_records,
+                count,
+                index,
+                last_published_sequence
+            );
+
+        if (superseded_background) {
+            last_published_sequence = s_action_records[index].sequence;
+            skipped_background_count++;
             continue;
         }
 
@@ -1698,6 +1751,10 @@ static void mqtt_mgr_publish_recent_action_results(void) {
         if (err == ESP_OK) {
             last_published_sequence = s_action_records[index].sequence;
             published_count_delta++;
+            processed_count++;
+            if (processed_count >= MQTT_MGR_ACTION_RESULT_BATCH_LIMIT) {
+                break;
+            }
         } else {
             if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
                 return;
@@ -1721,6 +1778,13 @@ static void mqtt_mgr_publish_recent_action_results(void) {
         s_last_action_result_sequence = last_published_sequence;
         s_status.action_results_published += published_count_delta;
         s_next_action_result_retry_ms = 0U;
+        xSemaphoreGive(s_lock);
+    }
+
+    if (skipped_background_count > 0U && xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (last_published_sequence > s_last_action_result_sequence) {
+            s_last_action_result_sequence = last_published_sequence;
+        }
         xSemaphoreGive(s_lock);
     }
 }

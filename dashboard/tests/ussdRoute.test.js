@@ -43,8 +43,7 @@ describe('ussd API runtime dispatch', () => {
         });
         global.mqttService = {
             connected: true,
-            publishCommand: jest.fn().mockResolvedValue({ messageId: 'ussd-1' }),
-            runDeviceOperation: jest.fn((_deviceId, task) => task())
+            publishCommand: jest.fn().mockResolvedValue({ messageId: 'ussd-1' })
         };
         const app = buildApp(db);
 
@@ -53,7 +52,6 @@ describe('ussd API runtime dispatch', () => {
             .send({ deviceId: 'device-b', code: '*123#', description: 'Balance' });
 
         expect(res.status).toBe(200);
-        expect(global.mqttService.runDeviceOperation).toHaveBeenCalledWith('device-b', expect.any(Function));
         expect(global.mqttService.publishCommand).toHaveBeenCalledWith(
             'device-b',
             'send-ussd',
@@ -92,8 +90,7 @@ describe('ussd API runtime dispatch', () => {
         });
         global.mqttService = {
             connected: true,
-            publishCommand: jest.fn().mockResolvedValue({ messageId: 'ussd-2' }),
-            runDeviceOperation: jest.fn((_deviceId, task) => task())
+            publishCommand: jest.fn().mockResolvedValue({ messageId: 'ussd-2' })
         };
         const app = buildApp(db);
 
@@ -146,8 +143,7 @@ describe('ussd API runtime dispatch', () => {
             connected: true,
             publishCommand: jest.fn()
                 .mockResolvedValueOnce({ messageId: 'cancel-1' })
-                .mockResolvedValueOnce({ messageId: 'ussd-3' }),
-            runDeviceOperation: jest.fn((_deviceId, task) => task())
+                .mockResolvedValueOnce({ messageId: 'ussd-3' })
         };
         const app = buildApp(db);
 
@@ -216,8 +212,7 @@ describe('ussd API runtime dispatch', () => {
         });
         global.mqttService = {
             connected: true,
-            publishCommand: jest.fn().mockResolvedValue({ messageId: 'ussd-4' }),
-            runDeviceOperation: jest.fn((_deviceId, task) => task())
+            publishCommand: jest.fn().mockResolvedValue({ messageId: 'ussd-4' })
         };
         const app = buildApp(db);
 
@@ -281,8 +276,7 @@ describe('ussd API runtime dispatch', () => {
         });
         global.mqttService = {
             connected: true,
-            publishCommand: jest.fn().mockRejectedValue(new Error('dispatch timeout')),
-            runDeviceOperation: jest.fn((_deviceId, task) => task())
+            publishCommand: jest.fn().mockRejectedValue(new Error('dispatch timeout'))
         };
         const app = buildApp(db);
 
@@ -379,8 +373,7 @@ describe('ussd API runtime dispatch', () => {
         });
         global.mqttService = {
             connected: true,
-            publishCommand: jest.fn().mockResolvedValue({ messageId: 'cancel-2' }),
-            runDeviceOperation: jest.fn((_deviceId, task) => task())
+            publishCommand: jest.fn().mockResolvedValue({ messageId: 'cancel-2' })
         };
         const app = buildApp(db);
 

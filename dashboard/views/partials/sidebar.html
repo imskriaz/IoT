@@ -636,6 +636,13 @@ function renderSidebarDeviceSelectorPlaceholder(sel, deviceId) {
             if (window.refreshSidebarDeviceNavigation) {
                 window.refreshSidebarDeviceNavigation();
             }
+            if (selectedId) {
+                if (typeof window.scheduleDeviceEnvelopeRefresh === 'function') {
+                    window.scheduleDeviceEnvelopeRefresh(100);
+                } else {
+                    window.__pendingDeviceEnvelopeRefresh = true;
+                }
+            }
         })
         .catch(() => {
             if (!cachedDevices.length) {

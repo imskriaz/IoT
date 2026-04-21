@@ -12,13 +12,6 @@ const {
 
 const USSD_CANCEL_POST_ACK_MS = 250;
 
-function runRuntimeDeviceOperation(deviceId, task) {
-    if (global.mqttService && typeof global.mqttService.runDeviceOperation === 'function') {
-        return global.mqttService.runDeviceOperation(deviceId, task);
-    }
-    return task();
-}
-
 function buildUssdSimPayload(scope = {}) {
     const payload = {};
     if (scope.simSlot !== null && scope.simSlot !== undefined) {
@@ -70,7 +63,7 @@ async function requestRuntimeUssdCancel(deviceId, simScope = {}) {
         return null;
     }
 
-    const response = await runRuntimeDeviceOperation(deviceId, () => global.mqttService.publishCommand(
+    const response = await global.mqttService.publishCommand(
         deviceId,
         'cancel-ussd',
         buildUssdSimPayload(simScope),
@@ -81,7 +74,7 @@ async function requestRuntimeUssdCancel(deviceId, simScope = {}) {
             domain: 'telephony',
             skipPersistentQueue: true
         }
-    ));
+    );
 
     if (response && response.success === false) {
         throw new Error(response.error || response.message || 'USSD cancel rejected');
@@ -278,7 +271,7 @@ router.post('/send', [
         // Send via MQTT if connected
         if (global.mqttService && global.mqttService.connected) {
             try {
-                const commandResult = await runRuntimeDeviceOperation(deviceId, () => global.mqttService.publishCommand(
+                const commandResult = await global.mqttService.publishCommand(
                     deviceId,
                     'send-ussd',
                     { code, ...buildUssdSimPayload(simScope) },
@@ -289,7 +282,7 @@ router.post('/send', [
                         domain: 'telephony',
                         skipPersistentQueue: true
                     }
-                ));
+                );
                 logger.info(`USSD request dispatched at runtime: ${code}`);
 
                 res.json({

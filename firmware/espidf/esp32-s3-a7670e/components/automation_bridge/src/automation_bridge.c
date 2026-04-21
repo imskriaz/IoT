@@ -2,11 +2,11 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
-#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
@@ -24,9 +24,19 @@
 
 static const char *TAG = "automation_bridge";
 
+#define AUTOMATION_BRIDGE_BACKGROUND_COALESCE_MS 1500U
+
+typedef struct {
+    char topic[CONFIG_UNIFIED_AUTOMATION_TOPIC_LEN];
+    TickType_t suppress_until;
+} automation_bridge_background_state_t;
+
 typedef struct {
     char topic[CONFIG_UNIFIED_AUTOMATION_TOPIC_LEN];
     char payload[CONFIG_UNIFIED_AUTOMATION_MESSAGE_LEN];
+    uint16_t priority;
+    uint32_t sequence;
+    bool background;
 } automation_bridge_queue_item_t;
 
 typedef struct {
@@ -51,10 +61,25 @@ typedef struct {
 } automation_bridge_status_t;
 
 static SemaphoreHandle_t s_lock;
-static QueueHandle_t s_queue;
 static automation_bridge_status_t s_status;
 static automation_bridge_task_context_t s_task_context;
+static TaskHandle_t s_task_handle;
+static automation_bridge_queue_item_t *s_pending_queue;
+static automation_bridge_background_state_t *s_background_state;
+static size_t s_pending_count;
+static uint32_t s_queue_sequence;
+static char s_active_background_topic[CONFIG_UNIFIED_AUTOMATION_TOPIC_LEN];
 static bool s_ready;
+
+static void *automation_bridge_alloc_zeroed(size_t size) {
+    void *buffer = heap_caps_calloc(1U, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    if (!buffer) {
+        buffer = heap_caps_calloc(1U, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+
+    return buffer;
+}
 
 static void automation_bridge_set_health_locked(const char *detail) {
     s_status.runtime.running = true;
@@ -72,6 +97,216 @@ static void automation_bridge_record_failure_locked(esp_err_t err, const char *d
         detail ? detail : esp_err_to_name(err)
     );
     automation_bridge_set_health_locked(detail);
+}
+
+static uint16_t automation_bridge_command_priority(unified_action_command_t command) {
+    switch (command) {
+        case UNIFIED_ACTION_CMD_SEND_SMS:
+        case UNIFIED_ACTION_CMD_SEND_USSD:
+        case UNIFIED_ACTION_CMD_CANCEL_USSD:
+        case UNIFIED_ACTION_CMD_DIAL_NUMBER:
+        case UNIFIED_ACTION_CMD_HANGUP_CALL:
+            return 10U;
+        case UNIFIED_ACTION_CMD_WIFI_RECONNECT:
+        case UNIFIED_ACTION_CMD_WIFI_TOGGLE:
+        case UNIFIED_ACTION_CMD_WIFI_DISCONNECT:
+        case UNIFIED_ACTION_CMD_WIFI_SCAN:
+        case UNIFIED_ACTION_CMD_MOBILE_TOGGLE:
+        case UNIFIED_ACTION_CMD_MOBILE_APN:
+        case UNIFIED_ACTION_CMD_GPIO_WRITE:
+        case UNIFIED_ACTION_CMD_GPIO_PULSE:
+        case UNIFIED_ACTION_CMD_SENSOR_READ:
+            return 40U;
+        case UNIFIED_ACTION_CMD_CONFIG_SET:
+        case UNIFIED_ACTION_CMD_ROUTING_CONFIGURE:
+        case UNIFIED_ACTION_CMD_FILE_LIST:
+        case UNIFIED_ACTION_CMD_FILE_READ_META:
+        case UNIFIED_ACTION_CMD_FILE_DELETE:
+        case UNIFIED_ACTION_CMD_FILE_EXPORT:
+        case UNIFIED_ACTION_CMD_START_CAMERA:
+        case UNIFIED_ACTION_CMD_STOP_CAMERA:
+        case UNIFIED_ACTION_CMD_TAKE_SNAPSHOT:
+        case UNIFIED_ACTION_CMD_START_STREAM:
+        case UNIFIED_ACTION_CMD_STOP_STREAM:
+        case UNIFIED_ACTION_CMD_CARD_SCAN_START:
+        case UNIFIED_ACTION_CMD_CARD_SCAN_STOP:
+        case UNIFIED_ACTION_CMD_CARD_READ:
+        case UNIFIED_ACTION_CMD_CARD_WRITE:
+            return 80U;
+        case UNIFIED_ACTION_CMD_REBOOT_DEVICE:
+            return 120U;
+        case UNIFIED_ACTION_CMD_GET_STATUS:
+        case UNIFIED_ACTION_CMD_STATUS_WATCH:
+            return 300U;
+        case UNIFIED_ACTION_CMD_NONE:
+        default:
+            return 160U;
+    }
+}
+
+static bool automation_bridge_source_is_background(const char *source) {
+    return source &&
+        (strcmp(source, "status-watch") == 0 ||
+         strcmp(source, "startup-prime") == 0 ||
+         strcmp(source, "system:auto") == 0);
+}
+
+static bool automation_bridge_command_is_background(unified_action_command_t command, const char *source) {
+    if (command == UNIFIED_ACTION_CMD_STATUS_WATCH) {
+        return true;
+    }
+
+    if (command == UNIFIED_ACTION_CMD_GET_STATUS) {
+        return automation_bridge_source_is_background(source);
+    }
+
+    return false;
+}
+
+static uint16_t automation_bridge_effective_priority(
+    unified_action_command_t command,
+    bool background
+) {
+    if (!background && command == UNIFIED_ACTION_CMD_GET_STATUS) {
+        return 30U;
+    }
+
+    if (background && command == UNIFIED_ACTION_CMD_GET_STATUS) {
+        return 300U;
+    }
+
+    return automation_bridge_command_priority(command);
+}
+
+static void automation_bridge_payload_source(char *dest, size_t dest_len, const char *payload) {
+    cJSON *root = NULL;
+    cJSON *source_node = NULL;
+
+    if (!dest || dest_len == 0U) {
+        return;
+    }
+
+    dest[0] = '\0';
+    if (!payload || payload[0] == '\0') {
+        return;
+    }
+
+    root = cJSON_Parse(payload);
+    if (!root) {
+        return;
+    }
+
+    source_node = cJSON_GetObjectItemCaseSensitive(root, "source");
+    if (cJSON_IsString(source_node) && source_node->valuestring) {
+        unified_copy_cstr(dest, dest_len, source_node->valuestring);
+    }
+
+    cJSON_Delete(root);
+}
+
+static TickType_t automation_bridge_background_window_ticks(void) {
+    return pdMS_TO_TICKS(AUTOMATION_BRIDGE_BACKGROUND_COALESCE_MS);
+}
+
+static int automation_bridge_find_pending_topic_locked(const char *topic) {
+    if (!topic || !s_pending_queue) {
+        return -1;
+    }
+
+    for (size_t index = 0; index < s_pending_count; ++index) {
+        if (strncmp(s_pending_queue[index].topic, topic, sizeof(s_pending_queue[index].topic)) == 0) {
+            return (int)index;
+        }
+    }
+
+    return -1;
+}
+
+static bool automation_bridge_background_is_suppressed_locked(const char *topic, TickType_t now) {
+    if (!topic || !s_background_state) {
+        return false;
+    }
+
+    for (size_t index = 0; index < CONFIG_UNIFIED_AUTOMATION_QUEUE_DEPTH; ++index) {
+        automation_bridge_background_state_t *entry = &s_background_state[index];
+        if (entry->topic[0] == '\0') {
+            continue;
+        }
+        if (entry->suppress_until <= now) {
+            memset(entry, 0, sizeof(*entry));
+            continue;
+        }
+        if (strncmp(entry->topic, topic, sizeof(entry->topic)) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void automation_bridge_note_background_locked(const char *topic, TickType_t now) {
+    size_t target = 0U;
+
+    if (!topic || !s_background_state) {
+        return;
+    }
+
+    for (size_t index = 0; index < CONFIG_UNIFIED_AUTOMATION_QUEUE_DEPTH; ++index) {
+        automation_bridge_background_state_t *entry = &s_background_state[index];
+        if (entry->topic[0] == '\0' || entry->suppress_until <= now) {
+            target = index;
+            break;
+        }
+        if (strncmp(entry->topic, topic, sizeof(entry->topic)) == 0) {
+            target = index;
+            break;
+        }
+    }
+
+    unified_copy_cstr(s_background_state[target].topic, sizeof(s_background_state[target].topic), topic);
+    s_background_state[target].suppress_until = now + automation_bridge_background_window_ticks();
+}
+
+static bool automation_bridge_item_precedes(
+    const automation_bridge_queue_item_t *left,
+    const automation_bridge_queue_item_t *right
+) {
+    if (!left || !right) {
+        return false;
+    }
+
+    if (left->priority != right->priority) {
+        return left->priority < right->priority;
+    }
+
+    return left->sequence < right->sequence;
+}
+
+static bool automation_bridge_try_pop_next_item(automation_bridge_queue_item_t *out_item) {
+    if (!out_item || !s_lock || !s_pending_queue) {
+        return false;
+    }
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return false;
+    }
+
+    if (s_pending_count == 0U) {
+        xSemaphoreGive(s_lock);
+        return false;
+    }
+
+    *out_item = s_pending_queue[0];
+    if (s_pending_count > 1U) {
+        memmove(
+            &s_pending_queue[0],
+            &s_pending_queue[1],
+            (s_pending_count - 1U) * sizeof(s_pending_queue[0])
+        );
+    }
+    s_pending_count--;
+    memset(&s_pending_queue[s_pending_count], 0, sizeof(s_pending_queue[s_pending_count]));
+    xSemaphoreGive(s_lock);
+    return true;
 }
 
 static const char *automation_bridge_command_name_from_topic(
@@ -124,7 +359,7 @@ static unified_action_command_t automation_bridge_parse_command_name(const char 
     if (!command_name || command_name[0] == '\0') {
         return UNIFIED_ACTION_CMD_NONE;
     }
-    snprintf(normalized, sizeof(normalized), "%s", command_name);
+    unified_copy_cstr(normalized, sizeof(normalized), command_name);
     for (index = 0U; normalized[index] != '\0'; ++index) {
         if (normalized[index] == '-') {
             normalized[index] = '_';
@@ -237,7 +472,7 @@ static void automation_bridge_copy_json_string(cJSON *node, char *dest, size_t d
 
     dest[0] = '\0';
     if (cJSON_IsString(node) && node->valuestring) {
-        snprintf(dest, dest_len, "%s", node->valuestring);
+        unified_copy_cstr(dest, dest_len, node->valuestring);
     }
 }
 
@@ -253,14 +488,14 @@ static void automation_bridge_copy_json_scalar(cJSON *node, char *dest, size_t d
         return;
     }
     if (cJSON_IsString(node) && node->valuestring) {
-        snprintf(dest, dest_len, "%s", node->valuestring);
+        unified_copy_cstr(dest, dest_len, node->valuestring);
         return;
     }
 
     if (cJSON_IsBool(node) || cJSON_IsNumber(node)) {
         rendered = cJSON_PrintUnformatted(node);
         if (rendered) {
-            snprintf(dest, dest_len, "%s", rendered);
+            unified_copy_cstr(dest, dest_len, rendered);
             cJSON_free(rendered);
         }
     }
@@ -355,7 +590,11 @@ static esp_err_t automation_bridge_parse_item(
 
     node = cJSON_GetObjectItemCaseSensitive(root, "action_id");
     if (cJSON_IsString(node) && node->valuestring) {
-        snprintf(out_action->correlation.correlation_id, sizeof(out_action->correlation.correlation_id), "%s", node->valuestring);
+        unified_copy_cstr(
+            out_action->correlation.correlation_id,
+            sizeof(out_action->correlation.correlation_id),
+            node->valuestring
+        );
     } else {
         now_ms = unified_tick_now_ms();
         snprintf(
@@ -527,10 +766,10 @@ static void automation_bridge_record_response_locked(
     const char *payload
 ) {
     if (item) {
-        snprintf(s_status.last_topic, sizeof(s_status.last_topic), "%s", item->topic);
+        unified_copy_cstr(s_status.last_topic, sizeof(s_status.last_topic), item->topic);
     }
     if (payload) {
-        snprintf(s_status.last_payload, sizeof(s_status.last_payload), "%s", payload);
+        unified_copy_cstr(s_status.last_payload, sizeof(s_status.last_payload), payload);
     } else {
         s_status.last_payload[0] = '\0';
     }
@@ -553,6 +792,7 @@ static void automation_bridge_task(void *arg) {
     (void)arg;
 
     memset(ctx, 0, sizeof(*ctx));
+    s_task_handle = xTaskGetCurrentTaskHandle();
 
     ESP_ERROR_CHECK(task_registry_register_expected("automation_bridge_task"));
     ESP_ERROR_CHECK(task_registry_mark_running("automation_bridge_task", true));
@@ -563,8 +803,23 @@ static void automation_bridge_task(void *arg) {
     }
 
     while (true) {
-        if (xQueueReceive(s_queue, &ctx->item, portMAX_DELAY) != pdTRUE) {
+        if (!automation_bridge_try_pop_next_item(&ctx->item)) {
+            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             continue;
+        }
+
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+            if (ctx->item.background) {
+                unified_copy_cstr(
+                    s_active_background_topic,
+                    sizeof(s_active_background_topic),
+                    ctx->item.topic
+                );
+                automation_bridge_note_background_locked(ctx->item.topic, xTaskGetTickCount());
+            } else {
+                s_active_background_topic[0] = '\0';
+            }
+            xSemaphoreGive(s_lock);
         }
 
         ctx->payload[0] = '\0';
@@ -627,6 +882,12 @@ static void automation_bridge_task(void *arg) {
             );
         }
 
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+            s_active_background_topic[0] = '\0';
+            automation_bridge_set_health_locked("idle");
+            xSemaphoreGive(s_lock);
+        }
+
     }
 }
 
@@ -642,14 +903,28 @@ esp_err_t automation_bridge_init(void) {
         return ESP_ERR_NO_MEM;
     }
 
-    s_queue = xQueueCreate(CONFIG_UNIFIED_AUTOMATION_QUEUE_DEPTH, sizeof(automation_bridge_queue_item_t));
-    if (!s_queue) {
-        return ESP_ERR_NO_MEM;
-    }
-
     memset(&s_status, 0, sizeof(s_status));
     s_status.runtime.initialized = true;
     s_status.runtime.state = UNIFIED_MODULE_STATE_INITIALIZED;
+    s_task_handle = NULL;
+    s_pending_count = 0U;
+    s_queue_sequence = 0U;
+    s_active_background_topic[0] = '\0';
+    s_pending_queue = automation_bridge_alloc_zeroed(
+        sizeof(automation_bridge_queue_item_t) * CONFIG_UNIFIED_AUTOMATION_QUEUE_DEPTH
+    );
+    s_background_state = automation_bridge_alloc_zeroed(
+        sizeof(automation_bridge_background_state_t) * CONFIG_UNIFIED_AUTOMATION_QUEUE_DEPTH
+    );
+    if (!s_pending_queue || !s_background_state) {
+        heap_caps_free(s_pending_queue);
+        heap_caps_free(s_background_state);
+        s_pending_queue = NULL;
+        s_background_state = NULL;
+        vSemaphoreDelete(s_lock);
+        s_lock = NULL;
+        return ESP_ERR_NO_MEM;
+    }
 
     task_ok = xTaskCreatePinnedToCore(
         automation_bridge_task,
@@ -661,9 +936,11 @@ esp_err_t automation_bridge_init(void) {
         1
     );
     if (task_ok != pdPASS) {
-        vQueueDelete(s_queue);
+        heap_caps_free(s_pending_queue);
+        heap_caps_free(s_background_state);
+        s_pending_queue = NULL;
+        s_background_state = NULL;
         vSemaphoreDelete(s_lock);
-        s_queue = NULL;
         s_lock = NULL;
         return ESP_ERR_NO_MEM;
     }
@@ -675,8 +952,16 @@ esp_err_t automation_bridge_init(void) {
 
 esp_err_t automation_bridge_submit_mqtt_command(const char *topic, size_t topic_len, const char *payload, size_t payload_len) {
     automation_bridge_queue_item_t item = {0};
+    char topic_suffix[UNIFIED_TEXT_MEDIUM_LEN] = {0};
+    char source[UNIFIED_TEXT_SHORT_LEN] = {0};
+    const char *command_name = NULL;
+    unified_action_command_t command = UNIFIED_ACTION_CMD_NONE;
+    bool incoming_background = false;
+    bool queued = false;
+    bool dropped_background = false;
+    size_t insert_index = 0U;
 
-    if (!s_ready || !s_queue || !s_lock) {
+    if (!s_ready || !s_lock || !s_pending_queue) {
         return ESP_ERR_INVALID_STATE;
     }
     if (!topic || topic_len == 0U || topic_len >= sizeof(item.topic)) {
@@ -692,21 +977,82 @@ esp_err_t automation_bridge_submit_mqtt_command(const char *topic, size_t topic_
         memcpy(item.payload, payload, payload_len);
         item.payload[payload_len] = '\0';
     }
-
-    if (xQueueSend(s_queue, &item, 0) != pdTRUE) {
-        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
-            s_status.queue_overflows++;
-            automation_bridge_record_failure_locked(ESP_ERR_NO_MEM, "automation_queue_full");
-            xSemaphoreGive(s_lock);
-        }
-        return ESP_ERR_NO_MEM;
-    }
+    command_name = automation_bridge_command_name_from_topic(item.topic, topic_suffix, sizeof(topic_suffix));
+    command = automation_bridge_parse_command_name(command_name);
+    automation_bridge_payload_source(source, sizeof(source), item.payload);
+    incoming_background = automation_bridge_command_is_background(command, source);
+    item.background = incoming_background;
+    item.priority = automation_bridge_effective_priority(command, incoming_background);
 
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+        const TickType_t now = xTaskGetTickCount();
+        if (incoming_background) {
+            if ((s_active_background_topic[0] != '\0' &&
+                strncmp(s_active_background_topic, item.topic, sizeof(s_active_background_topic)) == 0) ||
+                automation_bridge_find_pending_topic_locked(item.topic) >= 0 ||
+                automation_bridge_background_is_suppressed_locked(item.topic, now)) {
+                automation_bridge_note_background_locked(item.topic, now);
+                automation_bridge_set_health_locked("background_coalesced");
+                xSemaphoreGive(s_lock);
+                ESP_LOGD(TAG, "coalesced background command topic=%s", item.topic);
+                return ESP_OK;
+            }
+        }
+
+        item.sequence = ++s_queue_sequence;
+        if (s_pending_count >= CONFIG_UNIFIED_AUTOMATION_QUEUE_DEPTH) {
+            automation_bridge_queue_item_t *worst = &s_pending_queue[s_pending_count - 1U];
+            bool can_replace = !incoming_background &&
+                worst->background &&
+                automation_bridge_item_precedes(&item, worst);
+
+            if (can_replace) {
+                insert_index = s_pending_count - 1U;
+                while (insert_index > 0U && automation_bridge_item_precedes(&item, &s_pending_queue[insert_index - 1U])) {
+                    s_pending_queue[insert_index] = s_pending_queue[insert_index - 1U];
+                    insert_index--;
+                }
+                s_pending_queue[insert_index] = item;
+                dropped_background = true;
+                queued = true;
+            } else {
+                s_status.queue_overflows++;
+                automation_bridge_record_failure_locked(ESP_ERR_NO_MEM, "automation_queue_full");
+            }
+        } else {
+            insert_index = s_pending_count;
+            while (insert_index > 0U && automation_bridge_item_precedes(&item, &s_pending_queue[insert_index - 1U])) {
+                s_pending_queue[insert_index] = s_pending_queue[insert_index - 1U];
+                insert_index--;
+            }
+            s_pending_queue[insert_index] = item;
+            s_pending_count++;
+            queued = true;
+        }
+
+        if (queued) {
+            if (incoming_background) {
+                automation_bridge_note_background_locked(item.topic, now);
+            }
+            if (dropped_background) {
+                ESP_LOGW(TAG, "priority command preempted queued background task topic=%s", item.topic);
+            }
+            if (s_task_handle) {
+                xTaskNotifyGive(s_task_handle);
+            }
+        }
+
+        if (!queued) {
+            xSemaphoreGive(s_lock);
+            return ESP_ERR_NO_MEM;
+        }
+
         s_status.queued_count++;
-        snprintf(s_status.last_topic, sizeof(s_status.last_topic), "%s", item.topic);
+        unified_copy_cstr(s_status.last_topic, sizeof(s_status.last_topic), item.topic);
         automation_bridge_set_health_locked("queued");
         xSemaphoreGive(s_lock);
+    } else {
+        return ESP_ERR_TIMEOUT;
     }
 
     return ESP_OK;
