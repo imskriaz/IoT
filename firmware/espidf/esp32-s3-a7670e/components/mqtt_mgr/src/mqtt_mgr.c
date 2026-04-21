@@ -1334,9 +1334,28 @@ static void mqtt_mgr_task(void *arg) {
 
         if (disconnect_modem_after_esp_connected) {
             char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
-            (void)modem_a7670_mqtt_disconnect(response, sizeof(response), 5000U);
+            esp_err_t disconnect_err = modem_a7670_mqtt_disconnect(response, sizeof(response), 5000U);
             disconnect_modem_after_esp_connected = false;
-            modem_mqtt_connected = false;
+            modem_mqtt_connected = modem_a7670_mqtt_is_connected();
+            if (disconnect_err != ESP_OK && modem_mqtt_connected) {
+                if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+                    s_disconnect_modem_after_esp_connected = true;
+                    s_status.runtime.last_error = disconnect_err;
+                    snprintf(
+                        s_status.runtime.last_error_text,
+                        sizeof(s_status.runtime.last_error_text),
+                        "%s",
+                        response[0] ? response : "mqtt_modem_disconnect_failed"
+                    );
+                    xSemaphoreGive(s_lock);
+                }
+                ESP_LOGW(
+                    TAG,
+                    "modem mqtt disconnect deferred err=%s detail=%s",
+                    esp_err_to_name(disconnect_err),
+                    response[0] ? response : "<none>"
+                );
+            }
         }
 
         if (modem_mqtt_connected) {
