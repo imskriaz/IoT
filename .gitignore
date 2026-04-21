@@ -68,9 +68,6 @@ Thumbs.db
 temp/
 .playwright-cli/
 .codex/environments/
-.toolchain/*
-!.toolchain/*.ps1
-!.toolchain/*.cmd
 .toolchain/downloads/
 .toolchain/esp-idf-v5.3.1/
 .toolchain/espressif/

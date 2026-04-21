@@ -13,6 +13,7 @@ final class BridgeEventLog {
     private static final String KEY_LOG = "event_log";
     private static final int MAX_LINES = 500;
     private static final long RETENTION_WINDOW_MS = 24L * 60L * 60L * 1000L;
+    private static final long DEDUPE_WINDOW_MS = 15_000L;
     private static final String TIMESTAMP_PATTERN = "yyyy-MM-dd HH:mm:ss";
 
     private BridgeEventLog() {
@@ -23,19 +24,22 @@ final class BridgeEventLog {
             return;
         }
 
+        String normalizedMessage = normalizeMessage(message);
+        if (normalizedMessage.isEmpty()) {
+            return;
+        }
+
         String line = timestamp() + "  " + message.trim();
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String current = prefs.getString(KEY_LOG, "");
-        StringBuilder builder = new StringBuilder();
-        if (current != null && !current.trim().isEmpty()) {
-            builder.append(current.trim()).append('\n');
-        }
-        builder.append(line);
-
-        String[] lines = builder.toString().split("\\n");
+        String[] lines = current == null || current.trim().isEmpty()
+                ? new String[0]
+                : current.trim().split("\\n");
         long cutoffMs = System.currentTimeMillis() - RETENTION_WINDOW_MS;
+        long dedupeCutoffMs = System.currentTimeMillis() - DEDUPE_WINDOW_MS;
         StringBuilder trimmed = new StringBuilder();
         int kept = 0;
+        boolean duplicateDetected = false;
         for (String existing : lines) {
             if (existing == null || existing.trim().isEmpty()) {
                 continue;
@@ -44,12 +48,28 @@ final class BridgeEventLog {
             if (lineTimestamp > 0L && lineTimestamp < cutoffMs) {
                 continue;
             }
+            if (!duplicateDetected
+                    && lineTimestamp >= dedupeCutoffMs
+                    && normalizedMessage.equals(normalizeMessage(extractMessage(existing)))) {
+                duplicateDetected = true;
+            }
             if (trimmed.length() > 0) {
                 trimmed.append('\n');
             }
             trimmed.append(existing.trim());
             kept += 1;
         }
+
+        if (duplicateDetected) {
+            prefs.edit().putString(KEY_LOG, trimmed.toString()).apply();
+            return;
+        }
+
+        if (trimmed.length() > 0) {
+            trimmed.append('\n');
+        }
+        trimmed.append(line);
+        kept += 1;
 
         if (kept > MAX_LINES) {
             String[] retainedLines = trimmed.toString().split("\\n");
@@ -96,6 +116,23 @@ final class BridgeEventLog {
         } catch (ParseException ignored) {
             return 0L;
         }
+    }
+
+    private static String extractMessage(String line) {
+        if (line == null) {
+            return "";
+        }
+        if (line.length() > 21 && Character.isDigit(line.charAt(0))) {
+            return line.substring(21).trim();
+        }
+        return line.trim();
+    }
+
+    private static String normalizeMessage(String message) {
+        if (message == null) {
+            return "";
+        }
+        return message.trim().replaceAll("\\s+", " ").toLowerCase(Locale.US);
     }
 }
 

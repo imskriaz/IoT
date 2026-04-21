@@ -58,6 +58,12 @@ final class BridgePermissionHelper {
         return items;
     }
 
+    static List<PermissionItem> collectSmsInboxFeature(Activity activity) {
+        List<PermissionItem> items = new ArrayList<>();
+        items.add(buildItem(activity, Manifest.permission.READ_SMS, "SMS inbox"));
+        return items;
+    }
+
     static List<PermissionItem> collectWebcamFeature(Activity activity) {
         List<PermissionItem> items = new ArrayList<>();
         items.add(buildItem(activity, Manifest.permission.CAMERA, "Webcam"));
@@ -83,6 +89,7 @@ final class BridgePermissionHelper {
     static List<PermissionItem> collect(Activity activity, boolean includeCamera) {
         List<PermissionItem> items = new ArrayList<>();
         items.addAll(collectCore(activity));
+        items.addAll(collectSmsInboxFeature(activity));
         items.addAll(collectCallFeature(activity));
         if (includeCamera) {
             items.addAll(collectQrFeature(activity));
@@ -172,6 +179,15 @@ final class BridgePermissionHelper {
         return true;
     }
 
+    static boolean hasSmsInboxFeature(Activity activity) {
+        for (PermissionItem item : collectSmsInboxFeature(activity)) {
+            if (!item.granted) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     static boolean hasWebcamFeature(Activity activity) {
         for (PermissionItem item : collectWebcamFeature(activity)) {
             if (!item.granted) {
@@ -196,6 +212,9 @@ final class BridgePermissionHelper {
         }
         if (Manifest.permission.RECEIVE_SMS.equals(permission)) {
             return "Sync inbound SMS back to the dashboard.";
+        }
+        if (Manifest.permission.READ_SMS.equals(permission)) {
+            return "Read local SMS threads so the app can show threaded conversations.";
         }
         if (Manifest.permission.CALL_PHONE.equals(permission)) {
             return "Run call and USSD actions from dashboard commands.";
@@ -235,6 +254,10 @@ final class BridgePermissionHelper {
 
     static void requestQrFeature(Activity activity, int requestCode) {
         requestMissingItems(activity, requestCode, collectQrFeature(activity));
+    }
+
+    static void requestSmsInboxFeature(Activity activity, int requestCode) {
+        requestMissingItems(activity, requestCode, collectSmsInboxFeature(activity));
     }
 
     static void requestWebcamFeature(Activity activity, int requestCode) {

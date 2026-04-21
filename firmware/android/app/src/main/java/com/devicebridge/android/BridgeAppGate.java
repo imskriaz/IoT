@@ -12,11 +12,6 @@ final class BridgeAppGate {
 
     static boolean routeFromStartup(Activity activity) {
         normalizeRuntimeState(activity);
-        if (!BridgePermissionHelper.hasCore(activity)) {
-            activity.startActivity(new Intent(activity, PermissionFlowActivity.class));
-            activity.finish();
-            return true;
-        }
         return false;
     }
 

@@ -310,7 +310,7 @@ async function updateLatestActiveCall(db, deviceId, data = {}) {
 
     const runUpdate = async (includePhoneMatch) => {
         const conditions = ['device_id = ?', `status IN ${activeStatuses}`];
-        const params = [...baseParams, deviceId];
+        const params = [...baseParams];
         const whereParams = [deviceId];
         appendSimScopeCondition(conditions, whereParams, simScope);
 

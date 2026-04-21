@@ -51,21 +51,31 @@ class DeviceBridgeHomePage extends StatefulWidget {
 class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
     with WidgetsBindingObserver {
   static const _channel = MethodChannel('devicebridge/native');
-  static const Duration _idleRefreshInterval = Duration(seconds: 6);
-  static const Duration _activeCallRefreshInterval = Duration(seconds: 2);
+  static const Duration _idleRefreshInterval = Duration(seconds: 10);
+  static const Duration _activeCallRefreshInterval = Duration(seconds: 3);
+  static const Duration _smsRefreshInterval = Duration(seconds: 28);
 
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _setupCodeController = TextEditingController();
+  final TextEditingController _smsComposerController = TextEditingController();
   Map<dynamic, dynamic>? _state;
+  List<Map<dynamic, dynamic>> _smsThreads = const [];
+  List<Map<dynamic, dynamic>> _smsMessages = const [];
+  Map<dynamic, dynamic>? _selectedSmsThread;
   String _consoleFilter = 'all';
   String _consoleCategoryFilter = 'all';
   bool _loading = true;
   bool _busy = false;
+  bool _smsLoading = false;
+  bool _smsSending = false;
   bool _checkedPendingSetupCode = false;
   bool _showSetupSurface = false;
   bool _connectingFromSetup = false;
+  bool _settingsSheetOpen = false;
+  bool _batteryPromptShown = false;
   String? _setupStatus;
   String _setupProgress = 'Preparing bridge...';
+  int _selectedTabIndex = 0;
   Timer? _refreshTimer;
   Timer? _setupPollTimer;
   Duration _refreshInterval = _idleRefreshInterval;
@@ -92,6 +102,7 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
     _setupPollTimer?.cancel();
     _searchController.dispose();
     _setupCodeController.dispose();
+    _smsComposerController.dispose();
     super.dispose();
   }
 
@@ -106,21 +117,23 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
         _state = Map<dynamic, dynamic>.from(result as Map);
         if (_connectingFromSetup && _bool(_state?['online'])) {
           _connectingFromSetup = false;
-          if (_bool(_state?['batteryOptimizationDisabled'])) {
-            _showSetupSurface = false;
-            _setupStatus = null;
-          } else {
-            _showSetupSurface = true;
-            _setupStatus =
-                'Disable battery optimization to finish onboarding.';
-          }
+          _showSetupSurface = false;
+          _setupStatus = null;
         }
       });
       _syncRefreshInterval(_state);
+      _maybePromptBatteryOptimization();
       if (_bool(_state?['hasPendingSetupCode'])) {
         unawaited(_consumePendingSetupCodeIfNeeded(force: true));
       } else if (!_checkedPendingSetupCode) {
         unawaited(_consumePendingSetupCodeIfNeeded());
+      }
+      if (_selectedTabIndex == 1 && _selectedSmsThread == null) {
+        unawaited(_loadSmsThreads(silent: true));
+      } else if (_selectedTabIndex == 1 && _selectedSmsThread != null) {
+        unawaited(
+          _loadSmsThreadMessages(_string(_selectedSmsThread?['threadKey'])),
+        );
       }
     } on PlatformException catch (error) {
       if (!silent && mounted) {
@@ -142,7 +155,9 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
   }
 
   void _syncRefreshInterval(Map<dynamic, dynamic>? state) {
-    final nextInterval = _isCallActive(state)
+    final nextInterval = _selectedTabIndex == 1
+        ? _smsRefreshInterval
+        : _isCallActive(state)
         ? _activeCallRefreshInterval
         : _idleRefreshInterval;
     if (nextInterval == _refreshInterval) {
@@ -154,9 +169,266 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
 
   bool _isCallActive(Map<dynamic, dynamic>? state) {
     final status = _string(state?['callStatus']).trim().toLowerCase();
-    return const {'ringing', 'dialing', 'connected', 'answered'}.contains(
-      status,
+    return const {
+      'ringing',
+      'dialing',
+      'connected',
+      'answered',
+    }.contains(status);
+  }
+
+  void _maybePromptBatteryOptimization() {
+    final state = _state ?? const <dynamic, dynamic>{};
+    if (_batteryPromptShown ||
+        _settingsSheetOpen ||
+        !_bool(state['online']) ||
+        _bool(state['needsOnboarding']) ||
+        _bool(state['batteryOptimizationDisabled'])) {
+      return;
+    }
+    _batteryPromptShown = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_showSettingsSheet());
+    });
+  }
+
+  Future<void> _loadSmsThreads({bool silent = false}) async {
+    if (!silent) {
+      setState(() => _smsLoading = true);
+    }
+    try {
+      final result = await _channel.invokeMethod<dynamic>('getSmsThreads');
+      if (!mounted) return;
+      final threads = _mapList(result);
+      setState(() {
+        _smsThreads = threads;
+        final selectedKey = _string(_selectedSmsThread?['threadKey']);
+        if (selectedKey.isNotEmpty) {
+          for (final thread in threads) {
+            if (_string(thread['threadKey']) == selectedKey) {
+              _selectedSmsThread = thread;
+              break;
+            }
+          }
+        }
+      });
+    } on PlatformException catch (error) {
+      if (!silent && mounted) {
+        _showSnack(error.message ?? error.code);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _smsLoading = false);
+      }
+    }
+  }
+
+  Future<void> _loadSmsThreadMessages(
+    String threadKey, {
+    bool silent = true,
+  }) async {
+    final normalized = threadKey.trim();
+    if (normalized.isEmpty) return;
+    if (!silent) {
+      setState(() => _smsLoading = true);
+    }
+    try {
+      final result = await _channel.invokeMethod<dynamic>(
+        'getSmsThreadMessages',
+        {'threadKey': normalized},
+      );
+      if (!mounted) return;
+      setState(() {
+        _smsMessages = _mapList(result);
+      });
+    } on PlatformException catch (error) {
+      if (!silent && mounted) {
+        _showSnack(error.message ?? error.code);
+      }
+    } finally {
+      if (mounted && !silent) {
+        setState(() => _smsLoading = false);
+      }
+    }
+  }
+
+  Future<void> _openSmsThread(Map<dynamic, dynamic> thread) async {
+    setState(() {
+      _selectedSmsThread = thread;
+      _smsMessages = const [];
+    });
+    await _loadSmsThreadMessages(_string(thread['threadKey']), silent: false);
+  }
+
+  Future<void> _requestSmsInboxAccess() async {
+    final granted = await _requestFeatureAccess(
+      method: 'requestSmsInboxFeaturePermissions',
+      stateKey: 'smsInboxReady',
+      successMessage: 'SMS inbox access activated',
+      deniedMessage: 'SMS inbox access is still disabled.',
     );
+    if (granted) {
+      await _loadSmsThreads();
+    }
+  }
+
+  Future<void> _sendSmsFromComposer({String? overrideNumber}) async {
+    final rawMessage = _smsComposerController.text.trim();
+    final threadAddress = _string(_selectedSmsThread?['address']);
+    final targetNumber = (overrideNumber ?? threadAddress).trim();
+    if (_smsSending || rawMessage.isEmpty || targetNumber.isEmpty) {
+      if (targetNumber.isEmpty) {
+        _showSnack('Choose a conversation first.');
+      }
+      return;
+    }
+
+    setState(() => _smsSending = true);
+    final optimisticTimestamp = DateTime.now().millisecondsSinceEpoch;
+    final optimisticMessage = <String, dynamic>{
+      'id': 'local-$optimisticTimestamp',
+      'threadKey': _string(_selectedSmsThread?['threadKey']),
+      'address': targetNumber,
+      'body': rawMessage,
+      'timestamp': optimisticTimestamp,
+      'outgoing': true,
+      'read': true,
+      'status': 'queued',
+      'localOnly': true,
+    };
+
+    setState(() {
+      _smsMessages = [..._smsMessages, optimisticMessage];
+    });
+
+    try {
+      await _channel.invokeMethod<dynamic>('sendSmsConversation', {
+        'number': targetNumber,
+        'text': rawMessage,
+        'timeoutMs': 90000,
+      });
+      _smsComposerController.clear();
+      await _loadSmsThreads(silent: true);
+      if (overrideNumber != null && overrideNumber.trim().isNotEmpty) {
+        final selected = _smsThreads
+            .where((thread) {
+              return _string(thread['address']).trim() == overrideNumber.trim();
+            })
+            .toList(growable: false);
+        if (selected.isNotEmpty) {
+          await _openSmsThread(selected.first);
+        }
+      } else if (_string(_selectedSmsThread?['threadKey']).isNotEmpty) {
+        await _loadSmsThreadMessages(_string(_selectedSmsThread?['threadKey']));
+      }
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _smsMessages = _smsMessages
+            .where(
+              (entry) =>
+                  _string(entry['id']) != _string(optimisticMessage['id']),
+            )
+            .toList(growable: false);
+      });
+      _showSnack(error.message ?? error.code);
+    } finally {
+      if (mounted) {
+        setState(() => _smsSending = false);
+      }
+    }
+  }
+
+  Future<void> _showNewConversationSheet() async {
+    final numberController = TextEditingController();
+    final messageController = TextEditingController();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            12,
+            12,
+            12,
+            MediaQuery.of(context).viewInsets.bottom + 12,
+          ),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(26),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'New message',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: numberController,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(labelText: 'Phone number'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: messageController,
+                  minLines: 3,
+                  maxLines: 5,
+                  decoration: const InputDecoration(labelText: 'Message'),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () async {
+                          final number = numberController.text.trim();
+                          final text = messageController.text.trim();
+                          if (number.isEmpty || text.isEmpty) {
+                            return;
+                          }
+                          Navigator.of(context).pop();
+                          _smsComposerController.text = text;
+                          await _sendSmsFromComposer(overrideNumber: number);
+                          await _loadSmsThreads();
+                        },
+                        child: const Text('Send'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    numberController.dispose();
+    messageController.dispose();
+  }
+
+  void _selectBottomTab(int index) {
+    if (_selectedTabIndex == index) {
+      return;
+    }
+    setState(() => _selectedTabIndex = index);
+    _syncRefreshInterval(_state);
+    if (index == 1) {
+      unawaited(_loadSmsThreads());
+    }
   }
 
   Future<void> _consumePendingSetupCodeIfNeeded({bool force = false}) async {
@@ -320,7 +592,8 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
   }
 
   Future<void> _openQrScannerFlow() async {
-    final ready = _bool((_state ?? const <dynamic, dynamic>{})['qrFeatureReady'])
+    final ready =
+        _bool((_state ?? const <dynamic, dynamic>{})['qrFeatureReady'])
         ? true
         : await _ensureQrFeatureReady();
     if (!ready) {
@@ -369,15 +642,10 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
         timer.cancel();
         setState(() {
           _connectingFromSetup = false;
-          if (_bool(state['batteryOptimizationDisabled'])) {
-            _showSetupSurface = false;
-            _setupStatus = null;
-          } else {
-            _showSetupSurface = true;
-            _setupStatus =
-                'Disable battery optimization to finish onboarding.';
-          }
+          _showSetupSurface = false;
+          _setupStatus = null;
         });
+        _maybePromptBatteryOptimization();
         return;
       }
       if (attempts >= 18) {
@@ -495,86 +763,6 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
     );
   }
 
-  Future<void> _showSetupToolsSheet() async {
-    final state = _state ?? const <dynamic, dynamic>{};
-    final qrFeatureReady = _bool(state['qrFeatureReady']);
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return Container(
-          margin: EdgeInsets.only(
-            left: 12,
-            right: 12,
-            top: 12,
-            bottom: MediaQuery.of(context).viewInsets.bottom + 12,
-          ),
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(28),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x1F0F172A),
-                blurRadius: 28,
-                offset: Offset(0, 18),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Setup tools',
-                style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
-              ),
-              const SizedBox(height: 6),
-              const Text(
-                'Open QR onboarding or import a secure setup code when you need to provision the device.',
-                style: TextStyle(fontSize: 12.8, color: Color(0xFF64748B)),
-              ),
-              const SizedBox(height: 14),
-              _SettingsFeatureCard(
-                icon: Icons.qr_code_scanner_rounded,
-                accent: const Color(0xFF0B5ED7),
-                title: 'QR scanner',
-                detail: qrFeatureReady
-                    ? 'Camera access is active. Scan a dashboard QR code.'
-                    : 'Camera access stays off until you explicitly open QR setup.',
-                statusLabel: qrFeatureReady ? 'Ready' : 'Camera off',
-                statusColor: qrFeatureReady
-                    ? const Color(0xFF16A34A)
-                    : const Color(0xFFB45309),
-                actionLabel: qrFeatureReady ? 'Open scanner' : 'Enable & scan',
-                onTap: () async {
-                  Navigator.of(context).pop();
-                  await _openQrScannerFlow();
-                },
-              ),
-              const SizedBox(height: 10),
-              _SettingsFeatureCard(
-                icon: Icons.password_rounded,
-                accent: const Color(0xFF0F766E),
-                title: 'Paste secure code',
-                detail:
-                    'Import the encoded setup token copied from the dashboard without using camera access.',
-                statusLabel: 'Manual import',
-                statusColor: const Color(0xFF0F766E),
-                actionLabel: 'Paste code',
-                onTap: () async {
-                  Navigator.of(context).pop();
-                  await _showPasteCodeSheet();
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
   Future<void> _runAction(String method) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -612,11 +800,7 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
     final screenHeight = MediaQuery.of(context).size.height;
     final consoleBodyHeight = (screenHeight - 372).clamp(156.0, 420.0);
     final needsOnboarding = _bool(state['needsOnboarding']);
-    final batteryOptimizationDisabled = _bool(
-      state['batteryOptimizationDisabled'],
-    );
-    final showSetup =
-        needsOnboarding || _showSetupSurface || !batteryOptimizationDisabled;
+    final showSetup = needsOnboarding || _showSetupSurface;
     final consoleEntries = _mapList(state['consoleEntries']);
     final bridgeRunning = _bridgeRunning(state);
     final online = _bool(state['online']);
@@ -649,16 +833,8 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
       icon: Icons.tune_rounded,
       onTap: _showSettingsSheet,
     );
-    final consoleTypeOptions = _consoleTypeOptions(
-      consoleEntries
-          .where((entry) => _consoleMatches(entry, category: 'all'))
-          .toList(growable: false),
-    );
-    final consoleLevelOptions = _consoleLevelOptions(
-      consoleEntries
-          .where((entry) => _consoleMatches(entry, level: 'all'))
-          .toList(growable: false),
-    );
+    final consoleTypeOptions = _consoleTypeOptions(consoleEntries);
+    final consoleLevelOptions = _consoleLevelOptions(consoleEntries);
     final filteredConsole = consoleEntries
         .where(_consoleMatches)
         .toList(growable: false);
@@ -702,39 +878,36 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
                             )
                           else ...[
                             _SetupMethodCard(
-                              icon: Icons.tune_rounded,
-                              eyebrow: 'Primary',
-                              title: 'Open setup tools',
+                              icon: Icons.qr_code_scanner_rounded,
+                              eyebrow: qrFeatureReady ? 'Ready' : 'Scan first',
+                              title: 'Scan dashboard QR',
                               detail: qrFeatureReady
-                                  ? 'QR scan and secure code import are available in one popup.'
-                                  : 'Open one popup for QR scan or secure code import. Camera stays off until you choose QR.',
+                                  ? 'Open camera onboarding and import the secure QR code from dashboard.'
+                                  : 'Enable camera only when you choose QR onboarding.',
                               accent: const Color(0xFF0B5ED7),
-                              onTap: _showSetupToolsSheet,
+                              onTap: _openQrScannerFlow,
                             ),
                             const SizedBox(height: 12),
                             _SetupMethodCard(
-                              icon: Icons.battery_charging_full_rounded,
-                              eyebrow: batteryOptimizationDisabled
-                                  ? 'Ready'
-                                  : 'Required',
-                              title: 'Disable battery optimization',
-                              detail: batteryOptimizationDisabled
-                                  ? 'Background protection is active for the bridge.'
-                                  : 'Required during onboarding so Android does not pause the bridge in background.',
-                              accent: const Color(0xFFCA8A04),
-                              onTap: _requestDisableBatteryOptimization,
+                              icon: Icons.password_rounded,
+                              eyebrow: 'Token entry',
+                              title: 'Enter secure token',
+                              detail:
+                                  'Paste the encoded setup token if QR scanning is not available on this device.',
+                              accent: const Color(0xFF0F766E),
+                              onTap: _showPasteCodeSheet,
                             ),
                             const SizedBox(height: 12),
                             _SetupMethodCard(
                               icon: Icons.shield_outlined,
                               eyebrow: permissionsReady ? 'Ready' : 'Review',
-                              title: 'Bridge setting',
+                              title: 'Bridge access',
                               detail:
                                   callFeatureReady ||
-                                          webcamFeatureReady ||
-                                          intercomFeatureReady
-                                      ? 'Core bridge access is ready and optional call, webcam, or intercom modules are available when needed.'
-                                      : 'Review bridge access and activate optional call, webcam, or intercom controls only when needed.',
+                                      webcamFeatureReady ||
+                                      intercomFeatureReady
+                                  ? 'Core bridge access is ready and optional call, webcam, or intercom modules are available when needed.'
+                                  : 'Review bridge access and activate optional call, webcam, or intercom controls only when needed.',
                               accent: const Color(0xFF0F766E),
                               onTap: _showSettingsSheet,
                             ),
@@ -754,86 +927,129 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
     return Scaffold(
       body: Stack(
         children: [
-          SafeArea(
-            child: _loading && _state == null
-                ? const Center(child: CircularProgressIndicator())
-                : RefreshIndicator(
-                    onRefresh: _loadState,
-                    child: ListView(
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                      children: [
-                        const SizedBox(height: 58),
-                        _OverviewPanel(
-                          online: online,
-                          bridgeState: bridgeState,
-                          transport: transport,
-                          callStatus: _string(state['callStatus']),
-                          callDirection: _string(state['callDirection']),
-                          callNumber: _string(state['callNumber']),
-                          readinessScore: _int(state['readinessScore']),
-                          readinessLabel: _string(
-                            state['readinessLabel'],
-                            fallback: 'Needs setup',
+          if (_selectedTabIndex == 0)
+            Stack(
+              children: [
+                SafeArea(
+                  child: _loading && _state == null
+                      ? const Center(child: CircularProgressIndicator())
+                      : RefreshIndicator(
+                          onRefresh: _loadState,
+                          child: ListView(
+                            padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                            children: [
+                              const SizedBox(height: 58),
+                              _OverviewPanel(
+                                online: online,
+                                bridgeState: bridgeState,
+                                transport: transport,
+                                callStatus: _string(state['callStatus']),
+                                callDirection: _string(state['callDirection']),
+                                callNumber: _string(state['callNumber']),
+                                readinessScore: _int(state['readinessScore']),
+                                readinessLabel: _string(
+                                  state['readinessLabel'],
+                                  fallback: 'Needs setup',
+                                ),
+                                retryLabel: retryLabel,
+                                batteryLevel: state['batteryLevel'] == null
+                                    ? null
+                                    : _int(state['batteryLevel']),
+                                batteryStatus: _string(
+                                  state['batteryStatus'],
+                                  fallback: 'Unknown',
+                                ),
+                                queueDepth: actionMetrics.pending,
+                                publishSuccess: actionMetrics.success,
+                                publishFailure: actionMetrics.failed,
+                                onDeviceTap: () =>
+                                    _showConnectivityDialog(state),
+                                onQueueTap: () => _showQueueDialog(state),
+                                footerActions: overviewActions,
+                              ),
+                              const SizedBox(height: 12),
+                              _ConsoleCard(
+                                bodyHeight: consoleBodyHeight.toDouble(),
+                                queryController: _searchController,
+                                selectedCategory: _consoleCategoryFilter,
+                                onCategoryChanged: (value) => setState(
+                                  () => _consoleCategoryFilter = value,
+                                ),
+                                categoryOptions: consoleTypeOptions,
+                                selectedFilter: _consoleFilter,
+                                onFilterChanged: (value) =>
+                                    setState(() => _consoleFilter = value),
+                                levelOptions: consoleLevelOptions,
+                                onChanged: (_) => setState(() {}),
+                                onCopy: () => _copyText(
+                                  filteredConsole
+                                      .map((entry) => _string(entry['raw']))
+                                      .join('\n'),
+                                ),
+                                onClear: _confirmClearConsole,
+                                entries: filteredConsole,
+                                onTapEntry: (entry) =>
+                                    _showConsoleDetail(entry),
+                              ),
+                            ],
                           ),
-                          retryLabel: retryLabel,
-                          batteryLevel: state['batteryLevel'] == null
-                              ? null
-                              : _int(state['batteryLevel']),
-                          batteryStatus: _string(
-                            state['batteryStatus'],
-                            fallback: 'Unknown',
-                          ),
-                          queueDepth: actionMetrics.pending,
-                          publishSuccess: actionMetrics.success,
-                          publishFailure: actionMetrics.failed,
-                          onDeviceTap: () => _showConnectivityDialog(state),
-                          onQueueTap: () => _showQueueDialog(state),
-                          footerActions: overviewActions,
                         ),
-                        const SizedBox(height: 12),
-                        _ConsoleCard(
-                          bodyHeight: consoleBodyHeight.toDouble(),
-                          queryController: _searchController,
-                          selectedCategory: _consoleCategoryFilter,
-                          onCategoryChanged: (value) =>
-                              setState(() => _consoleCategoryFilter = value),
-                          categoryOptions: consoleTypeOptions,
-                          selectedFilter: _consoleFilter,
-                          onFilterChanged: (value) =>
-                              setState(() => _consoleFilter = value),
-                          levelOptions: consoleLevelOptions,
-                          onChanged: (_) => setState(() {}),
-                          onCopy: () => _copyText(
-                            filteredConsole
-                                .map((entry) => _string(entry['raw']))
-                                .join('\n'),
-                          ),
-                          onClear: _confirmClearConsole,
-                          entries: filteredConsole,
-                          onTapEntry: (entry) => _showConsoleDetail(entry),
+                ),
+                SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: _PinnedTopBar(
+                        title: 'Device Bridge',
+                        deviceId: _string(
+                          state['deviceId'],
+                          fallback: 'Unconfigured device',
                         ),
-                      ],
+                        onMenuPressed: _showSettingsSheet,
+                        onRefreshPressed: () => _loadState(),
+                      ),
                     ),
                   ),
-          ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: _PinnedTopBar(
-                  title: 'Device Bridge',
-                  deviceId: _string(
-                    state['deviceId'],
-                    fallback: 'Unconfigured device',
-                  ),
-                  onMenuPressed: _showSettingsSheet,
-                  onRefreshPressed: () => _loadState(),
                 ),
-              ),
+              ],
+            )
+          else
+            _SmsWorkspace(
+              loading: _smsLoading,
+              smsInboxReady: _bool(state['smsInboxReady']),
+              threads: _smsThreads,
+              selectedThread: _selectedSmsThread,
+              messages: _smsMessages,
+              composerController: _smsComposerController,
+              sending: _smsSending,
+              onBackToThreads: () => setState(() {
+                _selectedSmsThread = null;
+                _smsMessages = const [];
+              }),
+              onThreadTap: _openSmsThread,
+              onEnableInbox: _requestSmsInboxAccess,
+              onComposeNew: _showNewConversationSheet,
+              onRefresh: _loadSmsThreads,
+              onSend: _sendSmsFromComposer,
             ),
-          ),
           if (_busy) const _BusyBar(label: 'Working...'),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _selectedTabIndex,
+        onDestinationSelected: _selectBottomTab,
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home_rounded),
+            label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.sms_outlined),
+            selectedIcon: Icon(Icons.sms_rounded),
+            label: 'SMS',
+          ),
         ],
       ),
     );
@@ -890,7 +1106,7 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
   }
 
   String _latestConsoleSummary(Map<dynamic, dynamic> state) {
-    final entries = _userDrivenConsoleEntries(_mapList(state['consoleEntries']));
+    final entries = _mapList(state['consoleEntries']);
     if (entries.isEmpty) {
       return 'No recent device event';
     }
@@ -931,8 +1147,12 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
     await _runAction('reopenOnboarding');
     if (!mounted) return;
     setState(() {
+      _selectedTabIndex = 0;
       _showSetupSurface = true;
       _connectingFromSetup = false;
+      _batteryPromptShown = false;
+      _selectedSmsThread = null;
+      _smsMessages = const [];
       _setupStatus = 'Connection reset. Scan QR or paste setup code.';
     });
   }
@@ -977,9 +1197,6 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
     final entrySource = _consoleSource(entry);
     final activeCategory = category ?? _consoleCategoryFilter;
     final activeLevel = level ?? _consoleFilter;
-    if (activeCategory == 'all' && !_isUserDrivenConsoleEntry(entry)) {
-      return false;
-    }
     if (activeCategory != 'all' && entryCategory != activeCategory) {
       return false;
     }
@@ -1084,8 +1301,7 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
     final sorted = counts.keys.toList()..sort();
     return {
       'all': 'All types',
-      for (final key in sorted)
-        key: _consoleTypeLabel(key),
+      for (final key in sorted) key: _consoleTypeLabel(key),
     };
   }
 
@@ -1112,8 +1328,7 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
       });
     return {
       'all': 'All levels',
-      for (final key in sorted)
-        key: _consoleLevelLabel(key),
+      for (final key in sorted) key: _consoleLevelLabel(key),
     };
   }
 
@@ -1214,15 +1429,34 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
     final text =
         '$source ${_string(entry['summary'])} ${_string(entry['detail'])} ${_string(entry['raw'])}'
             .toLowerCase();
-    return !(text.contains('/status') ||
+    if (text.contains('/status') ||
         text.contains('telemetry') ||
         text.contains('heartbeat') ||
         text.contains('status push') ||
-        text.contains('health pulse'));
+        text.contains('health pulse')) {
+      return false;
+    }
+    return text.contains('incoming') ||
+        text.contains('outgoing') ||
+        text.contains('receive') ||
+        text.contains('received') ||
+        text.contains('accepted') ||
+        text.contains('queued') ||
+        text.contains('requested') ||
+        text.contains('sent') ||
+        text.contains('send ') ||
+        text.contains('send_') ||
+        text.contains('delivered') ||
+        text.contains('completed') ||
+        text.contains('started') ||
+        text.contains('answered') ||
+        text.contains('connected');
   }
 
   _ActionDeliveryMetrics _actionDeliveryMetrics(Map<dynamic, dynamic> state) {
-    final actionEntries = _userDrivenConsoleEntries(_mapList(state['consoleEntries']));
+    final actionEntries = _userDrivenConsoleEntries(
+      _mapList(state['consoleEntries']),
+    );
     final byActionId = <String, _ActionDeliveryStatus>{};
     var anonymousSuccess = 0;
     var anonymousPending = 0;
@@ -1335,7 +1569,9 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
     final queueDepth = metrics.pending;
     final total = success + failure + queueDepth;
     final failureRate = total == 0 ? 0 : ((failure / total) * 100).round();
-    final actionEntries = metrics.recentEntries.take(18).toList(growable: false);
+    final actionEntries = metrics.recentEntries
+        .take(18)
+        .toList(growable: false);
     final logText = actionEntries
         .map((entry) {
           final type = _consoleTypeLabel(_consoleType(entry)).toUpperCase();
@@ -1369,235 +1605,264 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
     final callFeatureReady = _bool(state['callFeatureReady']);
     final webcamFeatureReady = _bool(state['webcamFeatureReady']);
     final intercomFeatureReady = _bool(state['intercomFeatureReady']);
+    final smsInboxReady = _bool(state['smsInboxReady']);
     final batteryOptimizationDisabled = _bool(
       state['batteryOptimizationDisabled'],
     );
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return Container(
-          margin: const EdgeInsets.all(12),
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 14),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x190F172A),
-                blurRadius: 24,
-                offset: Offset(0, 14),
-              ),
-            ],
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xFFF8FBFF), Color(0xFFF7FAFC)],
-                  ),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFFE2E8F0)),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 38,
-                      height: 38,
-                      decoration: BoxDecoration(
-                        color: online
-                            ? const Color(0xFFDCFCE7)
-                            : const Color(0xFFE2E8F0),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(
-                        Icons.tune_rounded,
-                        color: online
-                            ? const Color(0xFF15803D)
-                            : const Color(0xFF475569),
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Setting',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w900,
-                              fontSize: 15,
-                            ),
-                          ),
-                          Text(
-                            online
-                                ? 'Live bridge with optional controls.'
-                                : 'Bridge access and protection controls.',
-                            style: const TextStyle(
-                              color: Color(0xFF64748B),
-                              fontSize: 11.4,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 7,
-                      ),
-                      decoration: BoxDecoration(
-                        color: online
-                            ? const Color(0xFFDCFCE7)
-                            : const Color(0xFFFFF7ED),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: online
-                              ? const Color(0xFFBBF7D0)
-                              : const Color(0xFFFED7AA),
-                        ),
-                      ),
-                      child: Text(
-                        online ? 'Online' : 'Review',
-                        style: const TextStyle(
-                          fontSize: 10.2,
-                          fontWeight: FontWeight.w900,
-                          color: Color(0xFF334155),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              const _SettingsSectionHeader(
-                title: 'Feature activation',
-                detail:
-                    'Optional controls stay off until you activate them here.',
-              ),
-              const SizedBox(height: 8),
-              _SettingsCompactRow(
-                icon: Icons.call_rounded,
-                accent: const Color(0xFF0F766E),
-                title: 'Call controls',
-                detail: callFeatureReady
-                    ? 'Dashboard call actions are active.'
-                    : 'Enable when dashboard needs call access.',
-                actionLabel: callFeatureReady ? 'Active' : 'Activate',
-                onTap: callFeatureReady
-                    ? null
-                    : () async {
-                        Navigator.of(context).pop();
-                        await _activateCallFeature();
-                      },
-              ),
-              const SizedBox(height: 8),
-              _SettingsCompactRow(
-                icon: Icons.videocam_rounded,
-                accent: const Color(0xFF0B5ED7),
-                title: 'Webcam',
-                detail: webcamFeatureReady
-                    ? 'Camera access is active for dashboard webcam features.'
-                    : 'Enable when dashboard needs camera access beyond QR setup.',
-                actionLabel: webcamFeatureReady ? 'Active' : 'Activate',
-                onTap: webcamFeatureReady
-                    ? null
-                    : () async {
-                        Navigator.of(context).pop();
-                        await _activateWebcamFeature();
-                      },
-              ),
-              const SizedBox(height: 8),
-              _SettingsCompactRow(
-                icon: Icons.mic_rounded,
-                accent: const Color(0xFF7C3AED),
-                title: 'Intercom',
-                detail: intercomFeatureReady
-                    ? 'Microphone access is active for intercom features.'
-                    : 'Enable when dashboard needs intercom microphone access.',
-                actionLabel: intercomFeatureReady ? 'Active' : 'Activate',
-                onTap: intercomFeatureReady
-                    ? null
-                    : () async {
-                        Navigator.of(context).pop();
-                        await _activateIntercomFeature();
-                      },
-              ),
-              const SizedBox(height: 12),
-              const _SettingsSectionHeader(
-                title: 'Background protection',
-                detail:
-                    'Required for onboarding so the bridge keeps running in the background.',
-              ),
-              const SizedBox(height: 8),
-              _SettingsCompactRow(
-                icon: Icons.battery_charging_full_rounded,
-                accent: const Color(0xFFCA8A04),
-                title: 'Battery optimization',
-                detail: batteryOptimizationDisabled
-                    ? 'Background protection is disabled.'
-                    : 'Allow the app to ignore battery optimization.',
-                actionLabel: batteryOptimizationDisabled
-                    ? 'Protected'
-                    : 'Disable',
-                onTap: batteryOptimizationDisabled
-                    ? null
-                    : () async {
-                        Navigator.of(context).pop();
-                        await _requestDisableBatteryOptimization();
-                      },
-              ),
-              const SizedBox(height: 12),
-              const _SettingsSectionHeader(
-                title: 'Bridge controls',
-                detail: 'Runtime actions and recovery.',
-              ),
-              const SizedBox(height: 2),
-              _sheetAction(
-                bridgeRunning ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                bridgeRunning ? 'Stop bridge' : 'Start bridge',
-                () => _runAction(bridgeRunning ? 'stopBridge' : 'startBridge'),
-              ),
-              _sheetAction(
-                Icons.restart_alt_rounded,
-                'Reset bridge',
-                _confirmResetOnboarding,
-              ),
-              if (!permissionsReady) ...[
-                const SizedBox(height: 12),
-                const _SettingsSectionHeader(
-                  title: 'Core bridge access',
-                  detail: 'Required permissions for bridge messaging.',
-                ),
-                const SizedBox(height: 2),
-                _sheetAction(
-                  Icons.verified_user_rounded,
-                  'Review bridge access',
-                  () => _channel.invokeMethod<dynamic>('openPermissionFlow'),
+    setState(() => _settingsSheetOpen = true);
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) {
+          return Container(
+            margin: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x190F172A),
+                  blurRadius: 24,
+                  offset: Offset(0, 14),
                 ),
               ],
-              _sheetAction(
-                Icons.settings_outlined,
-                'Open app settings',
-                () => _channel.invokeMethod<dynamic>('openSystemSettings'),
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFFF8FBFF), Color(0xFFF7FAFC)],
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: online
+                                ? const Color(0xFFDCFCE7)
+                                : const Color(0xFFE2E8F0),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            Icons.tune_rounded,
+                            color: online
+                                ? const Color(0xFF15803D)
+                                : const Color(0xFF475569),
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Setting',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 15,
+                                ),
+                              ),
+                              Text(
+                                online
+                                    ? 'Live bridge with optional controls.'
+                                    : 'Bridge access and protection controls.',
+                                style: const TextStyle(
+                                  color: Color(0xFF64748B),
+                                  fontSize: 11.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 7,
+                          ),
+                          decoration: BoxDecoration(
+                            color: online
+                                ? const Color(0xFFDCFCE7)
+                                : const Color(0xFFFFF7ED),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(
+                              color: online
+                                  ? const Color(0xFFBBF7D0)
+                                  : const Color(0xFFFED7AA),
+                            ),
+                          ),
+                          child: Text(
+                            online ? 'Online' : 'Review',
+                            style: const TextStyle(
+                              fontSize: 10.2,
+                              fontWeight: FontWeight.w900,
+                              color: Color(0xFF334155),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const _SettingsSectionHeader(
+                    title: 'Feature activation',
+                    detail:
+                        'Optional controls stay off until you activate them here.',
+                  ),
+                  const SizedBox(height: 8),
+                  _SettingsCompactRow(
+                    icon: Icons.call_rounded,
+                    accent: const Color(0xFF0F766E),
+                    title: 'Call controls',
+                    detail: callFeatureReady
+                        ? 'Dashboard call actions are active.'
+                        : 'Enable when dashboard needs call access.',
+                    actionLabel: callFeatureReady ? 'Active' : 'Activate',
+                    onTap: callFeatureReady
+                        ? null
+                        : () async {
+                            Navigator.of(context).pop();
+                            await _activateCallFeature();
+                          },
+                  ),
+                  const SizedBox(height: 8),
+                  _SettingsCompactRow(
+                    icon: Icons.videocam_rounded,
+                    accent: const Color(0xFF0B5ED7),
+                    title: 'Webcam',
+                    detail: webcamFeatureReady
+                        ? 'Camera access is active for dashboard webcam features.'
+                        : 'Enable when dashboard needs camera access beyond QR setup.',
+                    actionLabel: webcamFeatureReady ? 'Active' : 'Activate',
+                    onTap: webcamFeatureReady
+                        ? null
+                        : () async {
+                            Navigator.of(context).pop();
+                            await _activateWebcamFeature();
+                          },
+                  ),
+                  const SizedBox(height: 8),
+                  _SettingsCompactRow(
+                    icon: Icons.mic_rounded,
+                    accent: const Color(0xFF7C3AED),
+                    title: 'Intercom',
+                    detail: intercomFeatureReady
+                        ? 'Microphone access is active for intercom features.'
+                        : 'Enable when dashboard needs intercom microphone access.',
+                    actionLabel: intercomFeatureReady ? 'Active' : 'Activate',
+                    onTap: intercomFeatureReady
+                        ? null
+                        : () async {
+                            Navigator.of(context).pop();
+                            await _activateIntercomFeature();
+                          },
+                  ),
+                  const SizedBox(height: 8),
+                  _SettingsCompactRow(
+                    icon: Icons.mark_chat_read_rounded,
+                    accent: const Color(0xFF2563EB),
+                    title: 'SMS inbox',
+                    detail: smsInboxReady
+                        ? 'Threaded SMS inbox is active in the SMS tab.'
+                        : 'Enable local SMS read access for threaded conversations.',
+                    actionLabel: smsInboxReady ? 'Active' : 'Activate',
+                    onTap: smsInboxReady
+                        ? null
+                        : () async {
+                            Navigator.of(context).pop();
+                            await _requestSmsInboxAccess();
+                          },
+                  ),
+                  const SizedBox(height: 12),
+                  const _SettingsSectionHeader(
+                    title: 'Background protection',
+                    detail:
+                        'Required for onboarding so the bridge keeps running in the background.',
+                  ),
+                  const SizedBox(height: 8),
+                  _SettingsCompactRow(
+                    icon: Icons.battery_charging_full_rounded,
+                    accent: const Color(0xFFCA8A04),
+                    title: 'Battery optimization',
+                    detail: batteryOptimizationDisabled
+                        ? 'Background protection is disabled.'
+                        : 'Allow the app to ignore battery optimization.',
+                    actionLabel: batteryOptimizationDisabled
+                        ? 'Protected'
+                        : 'Disable',
+                    onTap: batteryOptimizationDisabled
+                        ? null
+                        : () async {
+                            Navigator.of(context).pop();
+                            await _requestDisableBatteryOptimization();
+                          },
+                  ),
+                  const SizedBox(height: 12),
+                  const _SettingsSectionHeader(
+                    title: 'Bridge controls',
+                    detail: 'Runtime actions and recovery.',
+                  ),
+                  const SizedBox(height: 2),
+                  _sheetAction(
+                    bridgeRunning
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                    bridgeRunning ? 'Stop bridge' : 'Start bridge',
+                    () => _runAction(
+                      bridgeRunning ? 'stopBridge' : 'startBridge',
+                    ),
+                  ),
+                  _sheetAction(
+                    Icons.restart_alt_rounded,
+                    'Reset bridge',
+                    _confirmResetOnboarding,
+                  ),
+                  if (!permissionsReady) ...[
+                    const SizedBox(height: 12),
+                    const _SettingsSectionHeader(
+                      title: 'Core bridge access',
+                      detail: 'Required permissions for bridge messaging.',
+                    ),
+                    const SizedBox(height: 2),
+                    _sheetAction(
+                      Icons.verified_user_rounded,
+                      'Review bridge access',
+                      () =>
+                          _channel.invokeMethod<dynamic>('openPermissionFlow'),
+                    ),
+                  ],
+                  _sheetAction(
+                    Icons.settings_outlined,
+                    'Open app settings',
+                    () => _channel.invokeMethod<dynamic>('openSystemSettings'),
+                  ),
+                ],
               ),
-            ],
-          ),
-          ),
-        );
-      },
-    );
+            ),
+          );
+        },
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _settingsSheetOpen = false);
+      }
+    }
   }
 
   Widget _sheetAction(
@@ -1940,7 +2205,8 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
     final lines = <String>[
       'level   = $level',
       'type    = ${_consoleType(entry)}',
-      if (_consoleSource(entry).isNotEmpty) 'source  = ${_consoleSource(entry)}',
+      if (_consoleSource(entry).isNotEmpty)
+        'source  = ${_consoleSource(entry)}',
       'time    = $timestamp',
       'summary = $summary',
       if (detail.isNotEmpty) 'detail  = $detail',
@@ -1956,6 +2222,594 @@ class _DeviceBridgeHomePageState extends State<DeviceBridgeHomePage>
       if (value.isNotEmpty) return value;
     }
     return '';
+  }
+}
+
+class _SmsWorkspace extends StatelessWidget {
+  const _SmsWorkspace({
+    required this.loading,
+    required this.smsInboxReady,
+    required this.threads,
+    required this.selectedThread,
+    required this.messages,
+    required this.composerController,
+    required this.sending,
+    required this.onBackToThreads,
+    required this.onThreadTap,
+    required this.onEnableInbox,
+    required this.onComposeNew,
+    required this.onRefresh,
+    required this.onSend,
+  });
+
+  final bool loading;
+  final bool smsInboxReady;
+  final List<Map<dynamic, dynamic>> threads;
+  final Map<dynamic, dynamic>? selectedThread;
+  final List<Map<dynamic, dynamic>> messages;
+  final TextEditingController composerController;
+  final bool sending;
+  final VoidCallback onBackToThreads;
+  final ValueChanged<Map<dynamic, dynamic>> onThreadTap;
+  final Future<void> Function() onEnableInbox;
+  final Future<void> Function() onComposeNew;
+  final Future<void> Function() onRefresh;
+  final Future<void> Function() onSend;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!smsInboxReady) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+          child: Column(
+            children: [
+              _SmsHeader(
+                title: 'SMS',
+                subtitle: 'Threaded inbox and compose',
+                actionLabel: 'Grant inbox',
+                onActionTap: onEnableInbox,
+              ),
+              const SizedBox(height: 14),
+              Expanded(
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE0F2FE),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Icon(
+                          Icons.mark_chat_unread_rounded,
+                          size: 30,
+                          color: Color(0xFF0B5ED7),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Enable SMS inbox access',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                          color: Color(0xFF0F172A),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'This lets the app load device conversations as real threads and keeps the SMS screen close to the native messages workflow.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 13,
+                          height: 1.45,
+                          color: Color(0xFF64748B),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: onEnableInbox,
+                        icon: const Icon(Icons.lock_open_rounded),
+                        label: const Text('Grant inbox access'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (selectedThread == null) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+          child: Column(
+            children: [
+              _SmsHeader(
+                title: 'SMS',
+                subtitle: 'Threaded conversations',
+                actionLabel: 'New chat',
+                onActionTap: onComposeNew,
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: onRefresh,
+                  child: loading && threads.isEmpty
+                      ? const Center(child: CircularProgressIndicator())
+                      : threads.isEmpty
+                      ? ListView(
+                          children: const [
+                            SizedBox(height: 120),
+                            _SmsEmptyState(
+                              title: 'No conversations yet',
+                              detail:
+                                  'Incoming and outgoing SMS threads will appear here.',
+                            ),
+                          ],
+                        )
+                      : ListView.separated(
+                          padding: EdgeInsets.zero,
+                          itemCount: threads.length,
+                          separatorBuilder: (_, index) =>
+                              const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final thread = threads[index];
+                            final unread = _int(thread['unreadCount']);
+                            return Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(22),
+                                onTap: () => onThreadTap(thread),
+                                child: Ink(
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(22),
+                                    border: Border.all(
+                                      color: unread > 0
+                                          ? const Color(0xFFBFDBFE)
+                                          : const Color(0xFFE2E8F0),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      CircleAvatar(
+                                        radius: 24,
+                                        backgroundColor: unread > 0
+                                            ? const Color(0xFFDBEAFE)
+                                            : const Color(0xFFF1F5F9),
+                                        child: Text(
+                                          _threadInitial(thread),
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w900,
+                                            color: Color(0xFF0F172A),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: Text(
+                                                    _string(
+                                                      thread['title'],
+                                                      fallback: 'Unknown',
+                                                    ),
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontSize: 15,
+                                                      fontWeight:
+                                                          FontWeight.w900,
+                                                      color: Color(0xFF0F172A),
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Text(
+                                                  _formatSmsTimestamp(
+                                                    thread['timestamp'],
+                                                  ),
+                                                  style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: Color(0xFF64748B),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              _string(
+                                                thread['preview'],
+                                                fallback: 'No message body',
+                                              ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 12.5,
+                                                height: 1.35,
+                                                color: Color(0xFF475569),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (unread > 0) ...[
+                                        const SizedBox(width: 10),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 5,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFF0B5ED7),
+                                            borderRadius: BorderRadius.circular(
+                                              999,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            '$unread',
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+        child: Column(
+          children: [
+            _SmsConversationHeader(
+              title: _string(
+                selectedThread?['title'],
+                fallback: 'Conversation',
+              ),
+              subtitle: _string(
+                selectedThread?['address'],
+                fallback: 'SMS thread',
+              ),
+              onBackTap: onBackToThreads,
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                ),
+                child: messages.isEmpty && loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : messages.isEmpty
+                    ? const _SmsEmptyState(
+                        title: 'No messages in this thread',
+                        detail: 'Send a message to start the conversation.',
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(14, 16, 14, 16),
+                        itemCount: messages.length,
+                        itemBuilder: (context, index) {
+                          final message = messages[index];
+                          final outgoing = _bool(message['outgoing']);
+                          return Align(
+                            alignment: outgoing
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                            child: Container(
+                              margin: const EdgeInsets.only(bottom: 10),
+                              constraints: const BoxConstraints(maxWidth: 320),
+                              padding: const EdgeInsets.fromLTRB(
+                                14,
+                                10,
+                                14,
+                                10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: outgoing
+                                    ? const Color(0xFF0B5ED7)
+                                    : const Color(0xFFF1F5F9),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: outgoing
+                                    ? CrossAxisAlignment.end
+                                    : CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _string(message['body']),
+                                    style: TextStyle(
+                                      color: outgoing
+                                          ? Colors.white
+                                          : const Color(0xFF0F172A),
+                                      fontSize: 14,
+                                      height: 1.35,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    _formatSmsTimestamp(message['timestamp']),
+                                    style: TextStyle(
+                                      color: outgoing
+                                          ? Colors.white70
+                                          : const Color(0xFF64748B),
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: composerController,
+                      minLines: 1,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        hintText: 'Write SMS',
+                        border: InputBorder.none,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: sending ? null : onSend,
+                    style: FilledButton.styleFrom(
+                      shape: const CircleBorder(),
+                      padding: const EdgeInsets.all(14),
+                    ),
+                    child: sending
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.send_rounded),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _threadInitial(Map<dynamic, dynamic> thread) {
+    final title = _string(thread['title'], fallback: '?').trim();
+    return title.isEmpty ? '?' : title.substring(0, 1).toUpperCase();
+  }
+
+  String _formatSmsTimestamp(dynamic raw) {
+    final timestamp = raw is num ? raw.toInt() : int.tryParse('$raw') ?? 0;
+    if (timestamp <= 0) {
+      return '--';
+    }
+    final time = DateTime.fromMillisecondsSinceEpoch(timestamp);
+    final now = DateTime.now();
+    final sameDay =
+        time.year == now.year && time.month == now.month && time.day == now.day;
+    if (sameDay) {
+      final hour = time.hour == 0
+          ? 12
+          : time.hour > 12
+          ? time.hour - 12
+          : time.hour;
+      final minute = time.minute.toString().padLeft(2, '0');
+      final suffix = time.hour >= 12 ? 'PM' : 'AM';
+      return '$hour:$minute $suffix';
+    }
+    return '${time.day}/${time.month}/${time.year}';
+  }
+}
+
+class _SmsHeader extends StatelessWidget {
+  const _SmsHeader({
+    required this.title,
+    required this.subtitle,
+    required this.actionLabel,
+    required this.onActionTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final String actionLabel;
+  final Future<void> Function() onActionTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF0F172A),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    color: Color(0xFF64748B),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          FilledButton(onPressed: onActionTap, child: Text(actionLabel)),
+        ],
+      ),
+    );
+  }
+}
+
+class _SmsConversationHeader extends StatelessWidget {
+  const _SmsConversationHeader({
+    required this.title,
+    required this.subtitle,
+    required this.onBackTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final VoidCallback onBackTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 8, 14, 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: onBackTap,
+            icon: const Icon(Icons.arrow_back_rounded),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF0F172A),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF64748B),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SmsEmptyState extends StatelessWidget {
+  const _SmsEmptyState({required this.title, required this.detail});
+
+  final String title;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.sms_outlined, size: 34, color: Color(0xFF94A3B8)),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFF0F172A),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              detail,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 12.5,
+                height: 1.45,
+                color: Color(0xFF64748B),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -3239,7 +4093,7 @@ class _OverviewPanel extends StatelessWidget {
                           : normalizedCallStatus == 'missed'
                           ? Icons.call_missed_rounded
                           : normalizedCallStatus == 'ended' ||
-                                  normalizedCallStatus == 'rejected'
+                                normalizedCallStatus == 'rejected'
                           ? Icons.call_end_rounded
                           : Icons.phone_in_talk_rounded,
                       size: 16,
@@ -4328,114 +5182,6 @@ class _SettingsCompactRow extends StatelessWidget {
               style: const TextStyle(
                 fontSize: 11.5,
                 fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SettingsFeatureCard extends StatelessWidget {
-  const _SettingsFeatureCard({
-    required this.icon,
-    required this.accent,
-    required this.title,
-    required this.detail,
-    required this.statusLabel,
-    required this.statusColor,
-    required this.actionLabel,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final Color accent;
-  final String title;
-  final String detail;
-  final String statusLabel;
-  final Color statusColor;
-  final String actionLabel;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final enabled = onTap != null;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(icon, color: accent, size: 22),
-              ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: statusColor.withValues(alpha: 0.28),
-                  ),
-                ),
-                child: Text(
-                  statusLabel,
-                  style: TextStyle(
-                    color: statusColor,
-                    fontSize: 10.4,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            title,
-            style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 5),
-          Text(
-            detail,
-            style: const TextStyle(
-              fontSize: 12.2,
-              height: 1.4,
-              color: Color(0xFF64748B),
-            ),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: onTap,
-              style: FilledButton.styleFrom(
-                backgroundColor: enabled ? accent : const Color(0xFFCBD5E1),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              child: Text(
-                actionLabel,
-                style: const TextStyle(fontWeight: FontWeight.w800),
               ),
             ),
           ),

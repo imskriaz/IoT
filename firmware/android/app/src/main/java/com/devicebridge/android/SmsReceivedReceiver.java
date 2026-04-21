@@ -37,6 +37,7 @@ public class SmsReceivedReceiver extends BroadcastReceiver {
             }
 
             int slot = intent.getIntExtra("android.telephony.extra.SLOT_INDEX", -1);
+            BridgeSmsStore.recordIncoming(context, from, body.toString(), timestamp);
             MqttBridgeService.publishIncomingFromReceiver(context, from, body.toString(), timestamp, slot);
         } catch (RuntimeException error) {
             Log.e(TAG, "Failed to process inbound SMS", error);

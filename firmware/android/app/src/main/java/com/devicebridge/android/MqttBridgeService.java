@@ -526,6 +526,7 @@ public class MqttBridgeService extends Service {
             return;
         }
         logConsoleEvent("sms", "SMS accepted for " + number + " (" + result.partCount + " part)");
+        BridgeSmsStore.recordOutgoing(this, actionId, number, text, System.currentTimeMillis());
         lastSendAcceptedAtMs = System.currentTimeMillis();
         persistRuntimeTelemetry();
 
@@ -937,6 +938,8 @@ public class MqttBridgeService extends Service {
     }
 
     private void publishIncomingSms(String from, String text, long timestamp, int slot) {
+        BridgeSmsStore.recordIncoming(this, from, text, timestamp);
+        logConsoleEvent("sms", "Incoming SMS from " + firstNonEmpty(from, "unknown"));
         JSONObject json = new JSONObject();
         try {
             json.put("type", "sms_incoming");

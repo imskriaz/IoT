@@ -25,6 +25,7 @@ public class FlutterHomeActivity extends FlutterActivity {
     private static final int REQ_QR_PERMISSIONS = 4813;
     private static final int REQ_WEBCAM_PERMISSIONS = 4814;
     private static final int REQ_INTERCOM_PERMISSIONS = 4815;
+    private static final int REQ_SMS_INBOX_PERMISSIONS = 4816;
 
     private String pendingSetupToken = "";
     private MethodChannel.Result pendingScanResult;
@@ -63,7 +64,8 @@ public class FlutterHomeActivity extends FlutterActivity {
         if (requestCode != REQ_CALL_PERMISSIONS
                 && requestCode != REQ_QR_PERMISSIONS
                 && requestCode != REQ_WEBCAM_PERMISSIONS
-                && requestCode != REQ_INTERCOM_PERMISSIONS) {
+                && requestCode != REQ_INTERCOM_PERMISSIONS
+                && requestCode != REQ_SMS_INBOX_PERMISSIONS) {
             return;
         }
         if (pendingFeaturePermissionResult == null) {
@@ -158,6 +160,52 @@ public class FlutterHomeActivity extends FlutterActivity {
                 }
                 pendingFeaturePermissionResult = result;
                 BridgePermissionHelper.requestIntercomFeature(this, REQ_INTERCOM_PERMISSIONS);
+                return;
+            case "requestSmsInboxFeaturePermissions":
+                if (BridgePermissionHelper.hasSmsInboxFeature(this)) {
+                    result.success(buildFlutterState());
+                    return;
+                }
+                if (pendingFeaturePermissionResult != null) {
+                    result.error("permission_busy", "Another permission request is already running.", null);
+                    return;
+                }
+                pendingFeaturePermissionResult = result;
+                BridgePermissionHelper.requestSmsInboxFeature(this, REQ_SMS_INBOX_PERMISSIONS);
+                return;
+            case "getSmsThreads":
+                result.success(BridgeSmsStore.buildThreadSummaries(this));
+                return;
+            case "getSmsThreadMessages":
+                String threadKey = call.argument("threadKey");
+                result.success(BridgeSmsStore.buildThreadMessages(this, threadKey));
+                return;
+            case "sendSmsConversation":
+                String number = call.argument("number");
+                String text = call.argument("text");
+                Integer timeoutMs = call.argument("timeoutMs");
+                long sentAt = System.currentTimeMillis();
+                String actionId = "local_compose_" + sentAt;
+                SmsSender.SendResult sendResult = SmsSender.send(
+                        this,
+                        actionId,
+                        number,
+                        text,
+                        timeoutMs == null ? 90000 : timeoutMs,
+                        null,
+                        null
+                );
+                if (!sendResult.accepted) {
+                    result.error(sendResult.detail, "Unable to send SMS right now.", null);
+                    return;
+                }
+                BridgeSmsStore.recordOutgoing(this, actionId, number, text, sentAt);
+                BridgeEventLog.append(this, "sms: Local compose accepted for " + (number == null ? "" : number.trim()));
+                Map<String, Object> sendState = new HashMap<>();
+                sendState.put("accepted", true);
+                sendState.put("actionId", actionId);
+                sendState.put("timestamp", sentAt);
+                result.success(sendState);
                 return;
             case "importSetupCode":
                 String rawCode = call.argument("code");
@@ -269,6 +317,7 @@ public class FlutterHomeActivity extends FlutterActivity {
         state.put("wifiFeatureReady", BridgePermissionHelper.hasWifiFeature(this));
         state.put("webcamFeatureReady", BridgePermissionHelper.hasWebcamFeature(this));
         state.put("intercomFeatureReady", BridgePermissionHelper.hasIntercomFeature(this));
+        state.put("smsInboxReady", BridgePermissionHelper.hasSmsInboxFeature(this));
         state.put("batteryOptimizationDisabled", isBatteryOptimizationDisabled());
         state.put("connectionReady", BridgeAppGate.hasConnectionDetails(this));
         state.put("needsOnboarding", !BridgeAppGate.hasConnectionDetails(this));
