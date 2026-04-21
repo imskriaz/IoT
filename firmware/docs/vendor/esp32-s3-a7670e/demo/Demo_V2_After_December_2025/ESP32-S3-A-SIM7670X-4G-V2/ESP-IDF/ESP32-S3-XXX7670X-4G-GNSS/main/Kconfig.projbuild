@@ -1,0 +1,58 @@
+menu "UART AT Example Configuration"
+
+    orsource "$IDF_PATH/examples/common_components/env_caps/$IDF_TARGET/Kconfig.env_caps"
+
+    config APP_UART_PORT_NUM
+        int "UART port number"
+        range 0 2 if IDF_TARGET_ESP32 || IDF_TARGET_ESP32S3
+        default 1 if IDF_TARGET_ESP32 || IDF_TARGET_ESP32S3
+        range 0 1
+        default 1
+        help
+            UART port used to communicate with the modem.
+            Note: UART0 is often used by console/USB-Serial-JTAG.
+            Using UART1 is recommended for modem communication.
+
+    config APP_UART_BAUD_RATE
+        int "UART baud rate"
+        range 1200 3000000
+        default 115200
+        help
+            UART communication speed for modem AT commands.
+
+    config APP_UART_RXD
+        int "UART RXD GPIO"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_IN_RANGE_MAX
+        default 17
+        help
+            GPIO number for UART RX pin (ESP32-S3 typical: 17).
+
+    config APP_UART_TXD
+        int "UART TXD GPIO"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 18
+        help
+            GPIO number for UART TX pin (ESP32-S3 typical: 18).
+
+    config APP_UART_BUF_SIZE
+        int "UART buffer size"
+        range 256 4096
+        default 1024
+        help
+            UART RX temporary buffer size used to receive AT responses.
+
+    config APP_RESPONSE_TIMEOUT_MS
+        int "AT response timeout (ms)"
+        range 100 60000
+        default 2000
+        help
+            Timeout for waiting expected response string, in milliseconds.
+
+    config APP_TASK_STACK_SIZE
+        int "Main task stack size"
+        range 2048 16384
+        default 4096
+        help
+            Stack size for app_main task. Increase if you add more parsing or features.
+
+endmenu

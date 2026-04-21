@@ -1,0 +1,596 @@
+<!-- Intercom Page - P2P Webcam & Audio -->
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4 gap-3">
+    <div>
+        <h2 class="mb-1">
+            <i class="bi bi-camera-video me-2 text-primary"></i>Intercom
+        </h2>
+        <p class="text-muted mb-0">P2P video and audio communication with device</p>
+    </div>
+    <div class="d-flex gap-2">
+        <span id="deviceStatus" class="badge bg-secondary d-flex align-items-center px-3 py-2">
+            <span class="spinner-grow spinner-grow-sm me-2"></span>Checking...
+        </span>
+    </div>
+</div>
+
+<!-- Device Offline Warning -->
+<div id="deviceOfflineWarning" class="alert alert-warning d-none align-items-center mb-4" role="alert">
+    <i class="bi bi-exclamation-triangle-fill fs-4 me-3 text-warning"></i>
+    <div class="flex-grow-1">
+        <strong>Device Offline</strong> - Intercom requires device to be connected.
+        <span class="d-block mt-1 small">Please check MQTT connection and device power.</span>
+    </div>
+</div>
+
+<div id="intercomCapabilityBanner" class="alert alert-info d-none mb-4" role="alert">
+    <strong>Intercom availability is capability-aware.</strong>
+    <span id="intercomCapabilityBannerText" class="ms-1">Waiting for active device profile...</span>
+</div>
+
+<div class="row g-3 mb-4" id="intercomStateStrip">
+    <div class="col-6 col-xl-3">
+        <div class="card border-0 bg-light h-100">
+            <div class="card-body py-3">
+                <div class="text-muted small mb-1">Browser Permission</div>
+                <div class="fw-semibold" id="browserPermissionState">Checking...</div>
+                <div class="small text-muted" id="browserPermissionHint">Camera and microphone access</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-xl-3">
+        <div class="card border-0 bg-light h-100">
+            <div class="card-body py-3">
+                <div class="text-muted small mb-1">Dashboard Signaling</div>
+                <div class="fw-semibold" id="signalingState">Checking...</div>
+                <div class="small text-muted" id="signalingHint">MQTT + Socket.IO bridge</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-xl-3">
+        <div class="card border-0 bg-light h-100">
+            <div class="card-body py-3">
+                <div class="text-muted small mb-1">Device Camera</div>
+                <div class="fw-semibold" id="deviceCameraState">Checking...</div>
+                <div class="small text-muted" id="deviceCameraHint">Video stream and snapshots</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-xl-3">
+        <div class="card border-0 bg-light h-100">
+            <div class="card-body py-3">
+                <div class="text-muted small mb-1">Device Microphone</div>
+                <div class="fw-semibold" id="deviceAudioState">Checking...</div>
+                <div class="small text-muted" id="deviceAudioHint">Audio-only and two-way talk</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tabs -->
+<ul class="nav nav-tabs nav-fill mb-4" id="intercomTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="video-tab" data-bs-toggle="tab" data-bs-target="#video" type="button">
+            <i class="bi bi-camera-video me-2"></i>Video Call
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="audio-tab" data-bs-toggle="tab" data-bs-target="#audio" type="button">
+            <i class="bi bi-mic me-2"></i>Audio Only
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings" type="button">
+            <i class="bi bi-gear me-2"></i>Settings
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="history-tab" data-bs-toggle="tab" data-bs-target="#history" type="button">
+            <i class="bi bi-clock-history me-2"></i>History
+        </button>
+    </li>
+</ul>
+
+<!-- Tab Content -->
+<div class="tab-content">
+    <!-- Video Call Tab -->
+    <div class="tab-pane fade show active" id="video" role="tabpanel">
+        <div class="row g-4">
+            <!-- Video Grid -->
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="bi bi-camera-video me-2 text-primary"></i>Video Call
+                        </h5>
+                        <div class="d-flex gap-2">
+                            <span id="callStatus" class="badge bg-secondary">No active call</span>
+                            <span id="callTimer" class="badge bg-dark">00:00</span>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="position-relative bg-dark" style="min-height: 400px;">
+                            <!-- Remote Video (full size) -->
+                            <video id="remoteVideo" class="w-100 h-100" autoplay playsinline style="display: none; max-height: 400px;"></video>
+                            <!-- Local Video (picture-in-picture) -->
+                            <video id="localVideo" class="position-absolute bottom-0 end-0 m-3 border border-2 border-white rounded" 
+                                   style="width: 160px; height: 120px; display: none;" autoplay playsinline muted></video>
+                            <!-- Audio only element -->
+                            <audio id="remoteAudio" autoplay style="display: none;"></audio>
+                            <!-- No video placeholder -->
+                            <div id="noVideoPlaceholder" class="text-white d-flex flex-column align-items-center justify-content-center w-100 h-100" style="min-height: 400px;">
+                                <i class="bi bi-camera-video-off fs-1 mb-3"></i>
+                                <h5>No active video call</h5>
+                                <p class="text-muted">Click Start Video Call to begin</p>
+                            </div>
+                            <!-- Audio level indicator -->
+                            <div class="position-absolute top-0 start-0 m-3">
+                                <div class="bg-dark bg-opacity-75 rounded p-2">
+                                    <div class="d-flex align-items-center gap-2">
+                                        <i class="bi bi-mic text-white"></i>
+                                        <div class="progress" style="width: 100px; height: 8px;">
+                                            <div class="progress-bar bg-success" id="audioLevel" style="width: 0%"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-footer bg-white py-3">
+                        <div class="d-flex justify-content-center gap-3">
+                            <button class="btn btn-lg btn-primary" id="startVideoCall" 
+                                    onclick="startCall('video')">
+                                <i class="bi bi-camera-video"></i> Start Video
+                            </button>
+                            <button class="btn btn-lg btn-outline-danger" id="endCall" 
+                                    onclick="endCall()" disabled>
+                                <i class="bi bi-telephone-x"></i> End
+                            </button>
+                            <button class="btn btn-lg btn-outline-warning" id="muteMic" 
+                                    onclick="toggleMuteMic()" disabled>
+                                <i class="bi bi-mic"></i> Mute
+                            </button>
+                            <button class="btn btn-lg btn-outline-info" id="snapshot" 
+                                    onclick="takeSnapshot()" disabled>
+                                <i class="bi bi-camera"></i> Snapshot
+                            </button>
+                            <button class="btn btn-lg btn-outline-secondary" id="fullscreen" 
+                                    onclick="toggleFullscreen()" disabled>
+                                <i class="bi bi-arrows-fullscreen"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audio Only Tab -->
+    <div class="tab-pane fade" id="audio" role="tabpanel">
+        <div class="row g-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="bi bi-mic me-2 text-success"></i>Audio Only Call
+                        </h5>
+                        <div class="d-flex gap-2">
+                            <span id="audioCallStatus" class="badge bg-secondary">No active call</span>
+                            <span id="audioCallTimer" class="badge bg-dark">00:00</span>
+                        </div>
+                    </div>
+                    <div class="card-body text-center py-5">
+                        <div class="audio-visualizer mb-4">
+                            <i class="bi bi-mic fs-1 text-success"></i>
+                            <div class="audio-wave mt-3">
+                                <span></span><span></span><span></span><span></span><span></span>
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-center gap-3">
+                            <button class="btn btn-lg btn-success" id="startAudioCall" 
+                                    onclick="startCall('audio')">
+                                <i class="bi bi-telephone"></i> Start Audio
+                            </button>
+                            <button class="btn btn-lg btn-outline-danger" id="endAudioCall" 
+                                    onclick="endCall()" disabled>
+                                <i class="bi bi-telephone-x"></i> End
+                            </button>
+                            <button class="btn btn-lg btn-outline-warning" id="muteMicAudio" 
+                                    onclick="toggleMuteMic()" disabled>
+                                <i class="bi bi-mic"></i> Mute
+                            </button>
+                            <button class="btn btn-lg btn-outline-info" id="muteSpeaker" 
+                                    onclick="toggleMuteSpeaker()" disabled>
+                                <i class="bi bi-volume-up"></i> Mute Speaker
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Tab -->
+    <div class="tab-pane fade" id="settings" role="tabpanel">
+        <div class="row g-4">
+            <!-- Video Settings -->
+            <div class="col-12 col-lg-6">
+                <div class="card">
+                    <div class="card-header bg-white py-3">
+                        <h5 class="mb-0">
+                            <i class="bi bi-camera-video me-2 text-primary"></i>Video Settings
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="videoSettingsForm">
+                            <div class="mb-3 form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="videoEnabled">
+                                <label class="form-check-label fw-bold" for="videoEnabled">Enable Video</label>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Resolution</label>
+                                <select class="form-select" id="videoResolution">
+                                    <option value="1600x1200">1600x1200 (UXGA)</option>
+                                    <option value="1280x1024">1280x1024 (SXGA)</option>
+                                    <option value="1024x768">1024x768 (XGA)</option>
+                                    <option value="800x600">800x600 (SVGA)</option>
+                                    <option value="640x480" selected>640x480 (VGA)</option>
+                                    <option value="352x288">352x288 (CIF)</option>
+                                    <option value="320x240">320x240 (QVGA)</option>
+                                    <option value="176x144">176x144 (QCIF)</option>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Frame Rate (FPS)</label>
+                                <input type="range" class="form-range" id="videoFps" min="1" max="30" value="15">
+                                <div class="d-flex justify-content-between">
+                                    <span>1 fps</span>
+                                    <span id="fpsValue">15 fps</span>
+                                    <span>30 fps</span>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">JPEG Quality</label>
+                                <input type="range" class="form-range" id="videoQuality" min="10" max="100" value="80">
+                                <div class="d-flex justify-content-between">
+                                    <span>10%</span>
+                                    <span id="qualityValue">80%</span>
+                                    <span>100%</span>
+                                </div>
+                            </div>
+
+                            <button type="button" class="btn btn-primary w-100" id="saveVideoSettings">
+                                <i class="bi bi-check-lg me-2"></i>Save Video Settings
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audio Settings -->
+            <div class="col-12 col-lg-6">
+                <div class="card">
+                    <div class="card-header bg-white py-3">
+                        <h5 class="mb-0">
+                            <i class="bi bi-mic me-2 text-success"></i>Audio Settings
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="audioSettingsForm">
+                            <div class="mb-3 form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="audioEnabled">
+                                <label class="form-check-label fw-bold" for="audioEnabled">Enable Audio</label>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Bitrate (bps)</label>
+                                <select class="form-select" id="audioBitrate">
+                                    <option value="32000">32 kbps (Low)</option>
+                                    <option value="64000" selected>64 kbps (Normal)</option>
+                                    <option value="128000">128 kbps (High)</option>
+                                    <option value="256000">256 kbps (Very High)</option>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="echoCancellation" checked>
+                                    <label class="form-check-label" for="echoCancellation">Echo Cancellation</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="noiseSuppression" checked>
+                                    <label class="form-check-label" for="noiseSuppression">Noise Suppression</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="autoGainControl" checked>
+                                    <label class="form-check-label" for="autoGainControl">Auto Gain Control</label>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Microphone Sensitivity</label>
+                                <input type="range" class="form-range" id="micSensitivity" min="0" max="100" value="50">
+                                <div class="d-flex justify-content-between">
+                                    <span>Low</span>
+                                    <span id="sensitivityValue">50%</span>
+                                    <span>High</span>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Speaker Volume</label>
+                                <input type="range" class="form-range" id="speakerVolume" min="0" max="100" value="80">
+                                <div class="d-flex justify-content-between">
+                                    <span>Mute</span>
+                                    <span id="volumeValue">80%</span>
+                                    <span>Max</span>
+                                </div>
+                            </div>
+
+                            <button type="button" class="btn btn-success w-100" id="saveAudioSettings">
+                                <i class="bi bi-check-lg me-2"></i>Save Audio Settings
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- STUN/TURN Settings -->
+                <div class="card mt-4">
+                    <div class="card-header bg-white py-3">
+                        <h5 class="mb-0">
+                            <i class="bi bi-hdd-network me-2 text-info"></i>STUN/TURN Servers
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="serverSettingsForm">
+                            <div class="mb-3">
+                                <label class="form-label">STUN Server</label>
+                                <input type="text" class="form-control" id="stunServer" placeholder="stun.l.google.com:19302">
+                                <small class="text-muted">Public STUN server for NAT traversal</small>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">TURN Server (optional)</label>
+                                <input type="text" class="form-control" id="turnServer" placeholder="turn:example.com:3478">
+                            </div>
+
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">TURN Username</label>
+                                    <input type="text" class="form-control" id="turnUsername">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">TURN Password</label>
+                                    <input type="password" class="form-control" id="turnPassword">
+                                </div>
+                            </div>
+
+                            <button type="button" class="btn btn-info w-100" id="saveServerSettings">
+                                <i class="bi bi-check-lg me-2"></i>Save Server Settings
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="card mt-4">
+                    <div class="card-header bg-white py-3">
+                        <h5 class="mb-0">
+                            <i class="bi bi-person-bounding-box me-2 text-warning"></i>Capture & Detection
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="webcamSettingsForm">
+                            <div class="mb-3 form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="motionDetection">
+                                <label class="form-check-label fw-bold" for="motionDetection">Motion Detection</label>
+                            </div>
+                            <div class="mb-3 form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="faceDetection">
+                                <label class="form-check-label fw-bold" for="faceDetection">Face Detection</label>
+                            </div>
+                            <div class="mb-3 form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="recognitionEnabled">
+                                <label class="form-check-label fw-bold" for="recognitionEnabled">Face Recognition Metadata</label>
+                            </div>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">Retention (days)</label>
+                                    <input type="number" class="form-control" id="retentionDays" min="1" max="365" value="30">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Privacy Mode</label>
+                                    <select class="form-select" id="privacyMode">
+                                        <option value="events-only">Events Only</option>
+                                        <option value="faces-only">Faces Only</option>
+                                        <option value="full-frame">Full Frame</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="small text-muted mt-3">
+                                Recognition depends on future device firmware support. The dashboard stores the settings and capture metadata now so the pipeline is ready when firmware catches up.
+                            </div>
+                            <button type="button" class="btn btn-warning w-100 mt-3" id="saveWebcamSettings">
+                                <i class="bi bi-check-lg me-2"></i>Save Capture Settings
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- History Tab -->
+    <div class="tab-pane fade" id="history" role="tabpanel">
+        <div class="card mb-3">
+            <div class="card-header bg-white py-3 d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2">
+                <div>
+                    <h5 class="mb-1">
+                        <i class="bi bi-camera me-2 text-primary"></i>Camera Events
+                    </h5>
+                    <div class="small text-muted">MQTT ingest path for captures, motion, and face metadata.</div>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <span class="badge bg-secondary" id="captureTotal">0 total</span>
+                    <span class="badge bg-warning text-dark" id="captureFaces">0 faces</span>
+                    <span class="badge bg-info text-dark" id="captureRecognized">0 recognized</span>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="row g-2 align-items-end mb-3">
+                    <div class="col-md-3">
+                        <label class="form-label small text-muted">Face Filter</label>
+                        <select class="form-select" id="captureFaceFilter">
+                            <option value="">All Captures</option>
+                            <option value="true">Face Detected</option>
+                            <option value="false">No Face</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small text-muted">Motion Filter</label>
+                        <select class="form-select" id="captureMotionFilter">
+                            <option value="">Any Motion State</option>
+                            <option value="true">Motion Detected</option>
+                            <option value="false">No Motion</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small text-muted">Recognition</label>
+                        <select class="form-select" id="captureRecognitionFilter">
+                            <option value="">Any</option>
+                            <option value="known">Recognized Face</option>
+                            <option value="unknown">Unknown Face</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3 d-flex gap-2">
+                        <button class="btn btn-outline-secondary flex-grow-1" id="refreshCapturesBtn" type="button">
+                            <i class="bi bi-arrow-repeat me-1"></i>Refresh
+                        </button>
+                        <button class="btn btn-outline-primary" id="exportCapturesBtn" type="button">
+                            <i class="bi bi-download"></i>
+                        </button>
+                    </div>
+                </div>
+                <div id="webcamCaptureGrid" class="row g-2">
+                    <div class="col-12 text-center py-4">
+                        <div class="spinner-border text-primary" role="status"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header bg-white py-3">
+                <h5 class="mb-0">
+                    <i class="bi bi-clock-history me-2 text-info"></i>Call History
+                </h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="list-group list-group-flush" id="callHistory" style="max-height: 400px; overflow-y: auto;">
+                    <!-- Populated by JavaScript -->
+                    <div class="text-center py-4">
+                        <div class="spinner-border text-primary" role="status"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="bi bi-camera me-2 text-primary"></i>Snapshot History
+                </h5>
+                <span class="badge bg-secondary" id="snapshotCount">0</span>
+            </div>
+            <div class="card-body">
+                <div id="snapshotGrid" class="row g-2">
+                    <div class="col-12 text-center py-4">
+                        <div class="spinner-border text-primary" role="status"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Snapshot lightbox modal -->
+<div class="modal fade" id="snapshotModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content bg-dark">
+            <div class="modal-header border-0 pb-0">
+                <small class="text-muted" id="snapshotModalLabel"></small>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center p-2">
+                <img id="snapshotModalImg" src="" class="img-fluid rounded" style="max-height: 70vh;" alt="Snapshot">
+            </div>
+            <div class="modal-footer border-0 pt-0 justify-content-between">
+                <a id="snapshotModalDownload" href="#" download class="btn btn-sm btn-outline-light">
+                    <i class="bi bi-download me-1"></i>Download
+                </a>
+                <button type="button" class="btn btn-sm btn-outline-danger" id="snapshotModalDelete">
+                    <i class="bi bi-trash me-1"></i>Delete
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Audio Wave Animation CSS -->
+<style>
+.audio-wave {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    height: 60px;
+}
+
+.audio-wave span {
+    display: inline-block;
+    width: 8px;
+    height: 20px;
+    background: linear-gradient(180deg, #198754, #20c997);
+    border-radius: 4px;
+    animation: wave 1.5s infinite ease-in-out;
+}
+
+.audio-wave span:nth-child(2) { animation-delay: 0.2s; }
+.audio-wave span:nth-child(3) { animation-delay: 0.4s; }
+.audio-wave span:nth-child(4) { animation-delay: 0.6s; }
+.audio-wave span:nth-child(5) { animation-delay: 0.8s; }
+
+@keyframes wave {
+    0%, 100% { height: 20px; }
+    50% { height: 60px; }
+}
+
+/* Video container */
+#remoteVideo {
+    object-fit: cover;
+    background: #1a1a1a;
+}
+
+#localVideo {
+    object-fit: cover;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .btn-lg {
+        padding: 0.5rem 1rem;
+        font-size: 1rem;
+    }
+    
+    #localVideo {
+        width: 120px;
+        height: 90px;
+    }
+}
+</style>
+
+<!-- Load Intercom script -->
+<script src="/js/intercom.js"></script>

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d6efd"/>
+      <stop offset="100%" stop-color="#0a58ca"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#dbe8ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="112" y="112" width="288" height="288" rx="72" fill="#081c3a" opacity="0.22"/>
+  <path d="M176 178c0-18.8 15.2-34 34-34h92c18.8 0 34 15.2 34 34v22h20c24.3 0 44 19.7 44 44v58c0 24.3-19.7 44-44 44h-20v22c0 18.8-15.2 34-34 34h-92c-18.8 0-34-15.2-34-34v-22h-20c-24.3 0-44-19.7-44-44v-58c0-24.3 19.7-44 44-44h20v-22zm48 10v156h64c12.2 0 22-9.8 22-22v-112c0-12.2-9.8-22-22-22h-64zm-24 56h-24c-6.6 0-12 5.4-12 12v34c0 6.6 5.4 12 12 12h24v-58zm136 0v58h24c6.6 0 12-5.4 12-12v-34c0-6.6-5.4-12-12-12h-24z" fill="url(#accent)"/>
+  <circle cx="256" cy="256" r="28" fill="#0d6efd"/>
+</svg>

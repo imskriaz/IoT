@@ -1,0 +1,1504 @@
+<!-- User Management -->
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4 gap-3">
+    <div>
+        <h2 class="mb-1">
+            <i class="bi bi-people me-2"></i>User Management
+        </h2>
+        <p class="text-muted mb-0">Manage dashboard users and their access levels</p>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <button class="btn btn-primary" onclick="showAddUserModal()">
+            <i class="bi bi-person-plus me-2"></i>Add User
+        </button>
+    </div>
+</div>
+
+<!-- Tab Navigation -->
+<ul class="nav nav-tabs mb-4" id="userMgmtTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="tab-users-btn" data-bs-toggle="tab" data-bs-target="#tab-users" type="button" role="tab" aria-selected="true">
+            <i class="bi bi-people me-1"></i>Users
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-audit-btn" data-bs-toggle="tab" data-bs-target="#tab-audit" type="button" role="tab" aria-selected="false" onclick="loadAuditLog(1)">
+            <i class="bi bi-journal-text me-1"></i>Audit Log
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-sessions-btn" data-bs-toggle="tab" data-bs-target="#tab-sessions" type="button" role="tab" aria-selected="false" onclick="loadSessions()">
+            <i class="bi bi-display me-1"></i>Sessions
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-apikeys-btn" data-bs-toggle="tab" data-bs-target="#tab-apikeys" type="button" role="tab" aria-selected="false" onclick="loadApiKeys()">
+            <i class="bi bi-key me-1"></i>API Keys
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-webhooks-btn" data-bs-toggle="tab" data-bs-target="#tab-webhooks" type="button" role="tab" aria-selected="false" onclick="loadWebhooks()">
+            <i class="bi bi-broadcast me-1"></i>Webhooks
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-invites-btn" data-bs-toggle="tab" data-bs-target="#tab-invites" type="button" role="tab" aria-selected="false" onclick="loadInvites()">
+            <i class="bi bi-envelope-plus me-1"></i>Invites
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content">
+
+<!-- ==================== Tab: Users ==================== -->
+<div class="tab-pane fade show active" id="tab-users" role="tabpanel">
+
+<!-- Stats Bar -->
+<div class="row g-3 mb-4" id="statsRow">
+    <div class="col-6 col-md-3">
+        <div class="card bg-primary bg-opacity-10 border-0">
+            <div class="card-body py-3">
+                <div class="d-flex align-items-center">
+                    <i class="bi bi-people fs-2 text-primary me-3"></i>
+                    <div>
+                        <div class="small text-muted">Total Users</div>
+                        <h4 class="mb-0" id="statTotal">—</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card bg-success bg-opacity-10 border-0">
+            <div class="card-body py-3">
+                <div class="d-flex align-items-center">
+                    <i class="bi bi-person-check fs-2 text-success me-3"></i>
+                    <div>
+                        <div class="small text-muted">Active</div>
+                        <h4 class="mb-0" id="statActive">—</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card bg-warning bg-opacity-10 border-0">
+            <div class="card-body py-3">
+                <div class="d-flex align-items-center">
+                    <i class="bi bi-shield-lock fs-2 text-warning me-3"></i>
+                    <div>
+                        <div class="small text-muted">Admins</div>
+                        <h4 class="mb-0" id="statAdmins">—</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card bg-secondary bg-opacity-10 border-0">
+            <div class="card-body py-3">
+                <div class="d-flex align-items-center">
+                    <i class="bi bi-eye fs-2 text-secondary me-3"></i>
+                    <div>
+                        <div class="small text-muted">Viewers</div>
+                        <h4 class="mb-0" id="statViewers">—</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <div class="row g-2 align-items-center">
+            <div class="col-auto">
+                <select class="form-select form-select-sm" id="filterRole" onchange="loadUsers(1)">
+                    <option value="">All Roles</option>
+                    <option value="superadmin">Superadmin</option>
+                    <option value="admin">Admin</option>
+                    <option value="operator">Operator</option>
+                    <option value="viewer">Viewer</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <select class="form-select form-select-sm" id="filterActive" onchange="loadUsers(1)">
+                    <option value="">All Status</option>
+                    <option value="true">Active</option>
+                    <option value="false">Inactive</option>
+                </select>
+            </div>
+            <div class="col-auto ms-auto">
+                <button class="btn btn-sm btn-outline-secondary" onclick="loadUsers(1)">
+                    <i class="bi bi-arrow-repeat me-1"></i>Refresh
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Users Table -->
+<div class="card">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0" id="usersTable">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-3">User</th>
+                        <th>Email</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Last Login</th>
+                        <th class="pe-3 text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="usersTableBody">
+                    <tr>
+                        <td colspan="6" class="text-center py-4">
+                            <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+                            Loading users…
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Pagination -->
+<nav class="mt-3" id="paginationContainer">
+    <ul class="pagination pagination-sm justify-content-center" id="usersPagination"></ul>
+</nav>
+
+</div><!-- /.tab-pane #tab-users -->
+
+<!-- ==================== Tab: Audit Log ==================== -->
+<div class="tab-pane fade" id="tab-audit" role="tabpanel">
+
+    <!-- Audit Filter Bar -->
+    <div class="card mb-3">
+        <div class="card-body py-2">
+            <div class="row g-2 align-items-center">
+                <div class="col-auto">
+                    <input type="text" class="form-control form-control-sm" id="auditFilterUsername"
+                           placeholder="Filter by username…" style="min-width:180px;">
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-sm btn-primary" onclick="loadAuditLog(1)">
+                        <i class="bi bi-search me-1"></i>Search
+                    </button>
+                </div>
+                <div class="col-auto ms-auto">
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadAuditLog(1)">
+                        <i class="bi bi-arrow-repeat me-1"></i>Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audit Table -->
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0" id="auditTable">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3">Username</th>
+                            <th>Result</th>
+                            <th>Reason</th>
+                            <th>IP Address</th>
+                            <th>User Agent</th>
+                            <th class="pe-3">Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="auditTableBody">
+                        <tr>
+                            <td colspan="6" class="text-center py-4 text-muted">Select the Audit Log tab to load entries.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audit Pagination -->
+    <nav class="mt-3" id="auditPaginationContainer">
+        <ul class="pagination pagination-sm justify-content-center" id="auditPagination"></ul>
+    </nav>
+
+</div><!-- /.tab-pane #tab-audit -->
+
+<!-- ==================== Tab: Sessions ==================== -->
+<div class="tab-pane fade" id="tab-sessions" role="tabpanel">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <p class="text-muted mb-0 small">Active sessions are refreshed automatically every 30 seconds.</p>
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadSessions()">
+            <i class="bi bi-arrow-repeat me-1"></i>Refresh
+        </button>
+    </div>
+
+    <!-- Sessions Table -->
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0" id="sessionsTable">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3">Username</th>
+                            <th>Role</th>
+                            <th>Expires</th>
+                            <th>Current?</th>
+                            <th class="pe-3 text-end">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sessionsTableBody">
+                        <tr>
+                            <td colspan="5" class="text-center py-4 text-muted">Select the Sessions tab to load active sessions.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div><!-- /.tab-pane #tab-sessions -->
+
+<!-- ==================== Tab: API Keys ==================== -->
+<div class="tab-pane fade" id="tab-apikeys" role="tabpanel">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <p class="text-muted mb-0 small">API keys allow programmatic access to the dashboard on your behalf.</p>
+        <button class="btn btn-sm btn-primary" onclick="showCreateKeyForm()">
+            <i class="bi bi-plus-lg me-1"></i>Create New Key
+        </button>
+    </div>
+
+    <!-- Create key inline form (hidden by default) -->
+    <div class="card mb-3" id="createKeyCard" style="display:none;">
+        <div class="card-header fw-semibold"><i class="bi bi-plus-circle me-1"></i>New API Key</div>
+        <div class="card-body">
+            <div id="createKeyAlert" class="alert d-none"></div>
+            <div class="row g-3 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label fw-semibold">Name <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control form-control-sm" id="newKeyName" placeholder="e.g. Home automation">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label fw-semibold">Scope</label>
+                    <select class="form-select form-select-sm" id="newKeyScope">
+                        <option value="read">read</option>
+                        <option value="write">write</option>
+                        <option value="admin">admin</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label fw-semibold">Expires (days)</label>
+                    <input type="number" class="form-control form-control-sm" id="newKeyExpiry" placeholder="Never" min="1" max="365">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label fw-semibold">Rate limit (req/min)</label>
+                    <input type="number" class="form-control form-control-sm" id="newKeyRateLimit" placeholder="Unlimited" min="1" max="10000">
+                </div>
+                <div class="col-md-2 d-flex gap-2 align-items-end">
+                    <button class="btn btn-sm btn-primary" onclick="createApiKey()">
+                        <i class="bi bi-check-lg me-1"></i>Create
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="hideCreateKeyForm()">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Newly created key reveal banner -->
+    <div class="alert alert-warning alert-dismissible d-none" id="newKeyReveal" role="alert">
+        <strong><i class="bi bi-exclamation-triangle me-1"></i>Copy your key now — it will not be shown again.</strong>
+        <div class="input-group mt-2">
+            <input type="text" class="form-control form-control-sm font-monospace" id="newKeyValue" readonly>
+            <button class="btn btn-outline-secondary btn-sm" id="copyNewKeyBtn" onclick="copyNewKey()" title="Copy key">
+                <i class="bi bi-clipboard"></i>
+            </button>
+        </div>
+        <button type="button" class="btn-close" onclick="dismissNewKey()"></button>
+    </div>
+
+    <!-- Keys table -->
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0" id="apiKeysTable">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3">Name</th>
+                            <th>Prefix</th>
+                            <th>Scope</th>
+                            <th>Rate</th>
+                            <th>Last Used</th>
+                            <th>Expires</th>
+                            <th>Status</th>
+                            <th class="pe-3 text-end">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="apiKeysTableBody">
+                        <tr>
+                            <td colspan="8" class="text-center py-4 text-muted">Select the API Keys tab to load keys.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div><!-- /.tab-pane #tab-apikeys -->
+
+<!-- ==================== Tab: Webhooks ==================== -->
+<div class="tab-pane fade" id="tab-webhooks" role="tabpanel">
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-broadcast me-1"></i>Webhooks</span>
+        <button class="btn btn-sm btn-primary" data-bs-toggle="collapse" data-bs-target="#webhookCreateForm">
+            <i class="bi bi-plus-lg me-1"></i>New Webhook
+        </button>
+    </div>
+    <div class="collapse" id="webhookCreateForm">
+        <div class="card-body border-bottom bg-light">
+            <div class="row g-2">
+                <div class="col-md-4">
+                    <label class="form-label small mb-1">Name</label>
+                    <input type="text" class="form-control form-control-sm" id="whName" placeholder="My webhook">
+                </div>
+                <div class="col-md-8">
+                    <label class="form-label small mb-1">URL</label>
+                    <input type="url" class="form-control form-control-sm" id="whUrl" placeholder="https://example.com/webhook">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small mb-1">Events</label>
+                    <div class="d-flex flex-wrap gap-2">
+                        <div class="form-check form-check-inline"><input class="form-check-input wh-event" type="checkbox" value="sms.incoming" id="evSms"><label class="form-check-label small" for="evSms">SMS incoming</label></div>
+                        <div class="form-check form-check-inline"><input class="form-check-input wh-event" type="checkbox" value="call.incoming" id="evCall"><label class="form-check-label small" for="evCall">Call incoming</label></div>
+                        <div class="form-check form-check-inline"><input class="form-check-input wh-event" type="checkbox" value="call.status" id="evCallStatus"><label class="form-check-label small" for="evCallStatus">Call status</label></div>
+                        <div class="form-check form-check-inline"><input class="form-check-input wh-event" type="checkbox" value="gps.location" id="evGps"><label class="form-check-label small" for="evGps">GPS location</label></div>
+                        <div class="form-check form-check-inline"><input class="form-check-input wh-event" type="checkbox" value="device.online" id="evOnline"><label class="form-check-label small" for="evOnline">Device online</label></div>
+                        <div class="form-check form-check-inline"><input class="form-check-input wh-event" type="checkbox" value="device.offline" id="evOffline"><label class="form-check-label small" for="evOffline">Device offline</label></div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small mb-1">HMAC Secret <span class="text-muted">(optional — for request signing)</span></label>
+                    <input type="text" class="form-control form-control-sm" id="whSecret" placeholder="your-secret-key">
+                </div>
+                <div class="col-12 text-end">
+                    <button class="btn btn-sm btn-primary" onclick="createWebhook()"><i class="bi bi-plus-lg me-1"></i>Create</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="card-body p-0">
+        <div id="webhooksList">
+            <div class="text-center text-muted py-4"><div class="spinner-border spinner-border-sm me-2"></div>Loading...</div>
+        </div>
+    </div>
+</div>
+<div class="mt-3 alert alert-info py-2 small">
+    <i class="bi bi-info-circle me-1"></i>
+    Webhooks POST JSON to your URL on each event. Include an HMAC secret to verify requests via
+    <code>X-Hub-Signature-256</code> header. Events: <code>sms.incoming</code>, <code>call.incoming</code>,
+    <code>gps.location</code>, <code>device.online</code>, <code>device.offline</code>.
+</div>
+</div><!-- /.tab-pane #tab-webhooks -->
+
+<!-- ==================== Tab: Invites ==================== -->
+<div class="tab-pane fade" id="tab-invites" role="tabpanel">
+<div class="card mb-3">
+    <div class="card-header"><i class="bi bi-envelope-plus me-1"></i>Create Invite Link</div>
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label small mb-1">Role</label>
+                <select class="form-select form-select-sm" id="inviteRole">
+                    <option value="viewer">Viewer</option>
+                    <option value="operator">Operator</option>
+                    <option value="admin">Admin</option>
+                </select>
+            </div>
+            <div class="col-md-5">
+                <label class="form-label small mb-1">Email <span class="text-muted">(optional — pre-fills form)</span></label>
+                <input type="email" class="form-control form-control-sm" id="inviteEmail" placeholder="user@example.com">
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-sm btn-primary w-100" onclick="createInvite()">
+                    <i class="bi bi-link-45deg me-1"></i>Generate Link
+                </button>
+            </div>
+        </div>
+        <div id="inviteResult" class="mt-3 d-none">
+            <div class="input-group">
+                <input type="text" class="form-control form-control-sm font-monospace" id="inviteLink" readonly>
+                <button class="btn btn-sm btn-outline-secondary" onclick="copyInviteLink()">
+                    <i class="bi bi-clipboard"></i>
+                </button>
+            </div>
+            <div class="small text-muted mt-1">Valid for 7 days. Share this link with the recipient.</div>
+        </div>
+    </div>
+</div>
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-list-ul me-1"></i>Pending Invites</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadInvites()"><i class="bi bi-arrow-repeat"></i></button>
+    </div>
+    <div class="card-body p-0" id="invitesList">
+        <div class="text-center text-muted py-4"><div class="spinner-border spinner-border-sm me-2"></div>Loading...</div>
+    </div>
+</div>
+</div><!-- /.tab-pane #tab-invites -->
+
+</div><!-- /.tab-content -->
+
+<!-- ==================== Add / Edit Modal ==================== -->
+<div class="modal fade" id="userModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="userModalTitle">
+                    <i class="bi bi-person-plus me-2"></i>Add User
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="userModalAlert" class="alert d-none"></div>
+                <form id="userForm" onsubmit="return false;">
+                    <input type="hidden" id="userId">
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Username <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="userUsername" autocomplete="off"
+                               placeholder="e.g. john_doe">
+                        <div class="form-text">Letters, numbers, _ . - only (3–30 chars)</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Full Name</label>
+                        <input type="text" class="form-control" id="userName" placeholder="John Doe">
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Email</label>
+                        <input type="email" class="form-control" id="userEmail" placeholder="john@example.com">
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Role <span class="text-danger">*</span></label>
+                        <select class="form-select" id="userRole">
+                            <option value="viewer">Viewer</option>
+                            <option value="operator">Operator</option>
+                            <option value="admin">Admin</option>
+                            <option value="superadmin" id="superadminOption">Superadmin</option>
+                        </select>
+                    </div>
+
+                    <!-- Password — required on create, optional on edit -->
+                    <div class="mb-3" id="passwordField">
+                        <label class="form-label fw-semibold">Password <span class="text-danger" id="passwordRequired">*</span></label>
+                        <input type="password" class="form-control" id="userPassword" autocomplete="new-password"
+                               placeholder="Min. 8 characters">
+                        <div class="form-text" id="passwordHint">User will be required to change password on first login.</div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="saveUserBtn" onclick="saveUser()">
+                    <i class="bi bi-check-lg me-1"></i>Save
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== Reset Password Modal ==================== -->
+<div class="modal fade" id="resetPwdModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-key me-2"></i>Reset Password</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="resetPwdAlert" class="alert d-none"></div>
+                <p class="text-muted small mb-3">Set a new temporary password for <strong id="resetPwdUsername"></strong>.</p>
+                <input type="hidden" id="resetPwdUserId">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">New Password <span class="text-danger">*</span></label>
+                    <input type="password" class="form-control" id="resetPwdValue" placeholder="Min. 8 characters">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-warning" onclick="doResetPassword()">
+                    <i class="bi bi-key me-1"></i>Reset
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== Deactivate Confirmation Modal ==================== -->
+<div class="modal fade" id="deactivateModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-person-x me-2 text-danger"></i>Deactivate User</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>Deactivate <strong id="deactivateUsername"></strong>? They will no longer be able to log in.</p>
+                <input type="hidden" id="deactivateUserId">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="doDeactivate()">Deactivate</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Magic Link Modal -->
+<div class="modal fade" id="magicLinkModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-magic me-2 text-primary"></i>One-Time Login Link</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small mb-3">Share this link with <strong id="magicLinkUsername"></strong>. It expires in <strong>15 minutes</strong> and can only be used once.</p>
+                <div class="input-group">
+                    <input type="text" class="form-control form-control-sm font-monospace" id="magicLinkUrl" readonly>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="copyMagicLink()" title="Copy">
+                        <i class="bi bi-clipboard" id="magicLinkCopyIcon"></i>
+                    </button>
+                </div>
+                <div class="alert alert-warning mt-3 py-2 small mb-0">
+                    <i class="bi bi-exclamation-triangle me-1"></i>Anyone with this link can log in as this user. Do not share publicly.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .role-badge-superadmin { background-color: #6f42c1; color: #fff; }
+    .role-badge-admin       { background-color: #dc3545; color: #fff; }
+    .role-badge-operator    { background-color: #fd7e14; color: #fff; }
+    .role-badge-viewer      { background-color: #6c757d; color: #fff; }
+    .role-badge {
+        display: inline-block;
+        padding: 0.2em 0.55em;
+        border-radius: 0.35rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        text-transform: capitalize;
+    }
+</style>
+
+<script>
+// ============================================================
+// State
+// ============================================================
+let currentPage  = 1;
+const SESSION_ROLE    = '<%= user && user.role ? user.role : "admin" %>';
+const SESSION_USER_ID = <%= user && user.id ? user.id : 0 %>;
+
+// ============================================================
+// Helpers
+// ============================================================
+function roleBadge(role) {
+    return `<span class="role-badge role-badge-${role}">${role}</span>`;
+}
+
+function statusBadge(isActive) {
+    return isActive
+        ? '<span class="badge bg-success">Active</span>'
+        : '<span class="badge bg-secondary">Inactive</span>';
+}
+
+function formatDate(dt) {
+    if (!dt) return '<span class="text-muted">Never</span>';
+    try {
+        return new Date(dt).toLocaleString();
+    } catch (e) {
+        return dt;
+    }
+}
+
+function showModalAlert(alertId, msg, type = 'danger') {
+    const el = document.getElementById(alertId);
+    el.className = `alert alert-${type}`;
+    el.textContent = msg;
+    el.classList.remove('d-none');
+}
+
+function hideModalAlert(alertId) {
+    const el = document.getElementById(alertId);
+    el.classList.add('d-none');
+}
+
+// ============================================================
+// Load users
+// ============================================================
+async function loadUsers(page = 1) {
+    currentPage = page;
+    const role   = document.getElementById('filterRole').value;
+    const active = document.getElementById('filterActive').value;
+
+    let url = `/admin/api/users?page=${page}&limit=20`;
+    if (role)   url += `&role=${role}`;
+    if (active) url += `&active=${active}`;
+
+    const tbody = document.getElementById('usersTableBody');
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4"><div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>Loading…</td></tr>';
+
+    try {
+        const res  = await fetch(url);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Load failed');
+
+        renderTable(data.users);
+        renderPagination(data.pagination);
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${err.message}</td></tr>`;
+    }
+}
+
+function renderTable(users) {
+    const tbody = document.getElementById('usersTableBody');
+    if (!users.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-5 text-muted">No users found</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = users.map(u => {
+        const viewBtn   = `<a class="btn btn-sm btn-outline-dark me-1" href="/admin/users/${u.id}" title="View detail"><i class="bi bi-eye"></i></a>`;
+        const canEdit   = !(u.is_protected && SESSION_ROLE !== 'superadmin');
+        const editBtn   = canEdit
+            ? `<button class="btn btn-sm btn-outline-primary me-1" onclick="showEditUserModal(${u.id})" title="Edit"><i class="bi bi-pencil"></i></button>`
+            : `<button class="btn btn-sm btn-outline-secondary me-1" disabled title="Protected"><i class="bi bi-lock"></i></button>`;
+
+        const resetBtn  = canEdit
+            ? `<button class="btn btn-sm btn-outline-warning me-1" onclick="showResetPwdModal(${u.id},'${escHtml(u.username)}')" title="Reset password"><i class="bi bi-key"></i></button>`
+            : '';
+
+        const canDelete = canEdit && !u.is_protected && u.id !== SESSION_USER_ID;
+
+        const deactBtn  = (canEdit && !u.is_protected && u.id !== SESSION_USER_ID)
+            ? (u.is_active
+                ? `<button class="btn btn-sm btn-outline-secondary me-1" onclick="showDeactivateModal(${u.id},'${escHtml(u.username)}')" title="Deactivate"><i class="bi bi-person-x"></i></button>`
+                : `<button class="btn btn-sm btn-outline-success me-1" onclick="activateUser(${u.id})" title="Activate"><i class="bi bi-person-check"></i></button>`)
+            : '';
+
+        const magicBtn  = (canEdit && u.is_active && u.id !== SESSION_USER_ID)
+            ? `<button class="btn btn-sm btn-outline-info me-1" onclick="getMagicLink(${u.id},'${escHtml(u.username)}')" title="Get one-time login link"><i class="bi bi-magic"></i></button>`
+            : '';
+
+        const deleteBtn = canDelete
+            ? `<button class="btn btn-sm btn-outline-danger" onclick="confirmDeleteUser(${u.id},'${escHtml(u.username)}')" title="Permanently delete user"><i class="bi bi-trash"></i></button>`
+            : '';
+
+        return `
+        <tr>
+            <td class="ps-3">
+                <div class="d-flex align-items-center">
+                    <div class="bg-secondary bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center me-2" style="width:2rem;height:2rem;flex-shrink:0;">
+                        <i class="bi bi-person text-secondary"></i>
+                    </div>
+                    <div>
+                        <div class="fw-semibold"><a href="/admin/users/${u.id}" class="text-decoration-none">${escHtml(u.username)}</a></div>
+                        <small class="text-muted">${escHtml(u.name || '')}</small>
+                    </div>
+                </div>
+            </td>
+            <td><small>${escHtml(u.email || '—')}</small></td>
+            <td>${roleBadge(u.role)}</td>
+            <td>${statusBadge(u.is_active)}</td>
+            <td><small>${formatDate(u.last_login)}</small></td>
+            <td class="pe-3 text-end">${viewBtn}${editBtn}${resetBtn}${magicBtn}${deactBtn}${deleteBtn}</td>
+        </tr>`;
+    }).join('');
+}
+
+function renderPagination(p) {
+    const el = document.getElementById('usersPagination');
+    if (p.pages <= 1) { el.innerHTML = ''; return; }
+    let html = '';
+    for (let i = 1; i <= p.pages; i++) {
+        html += `<li class="page-item ${i === p.page ? 'active' : ''}">
+            <button class="page-link" onclick="loadUsers(${i})">${i}</button>
+        </li>`;
+    }
+    el.innerHTML = html;
+}
+
+function escHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ============================================================
+// Load stats
+// ============================================================
+async function loadStats() {
+    try {
+        const res  = await fetch('/admin/api/users/stats');
+        const data = await res.json();
+        if (!data.success) return;
+
+        document.getElementById('statTotal').textContent  = data.stats.total;
+        document.getElementById('statActive').textContent = data.stats.active;
+
+        let admins = 0, viewers = 0;
+        (data.stats.byRole || []).forEach(r => {
+            if (r.role === 'admin' || r.role === 'superadmin') admins += r.count;
+            if (r.role === 'viewer') viewers += r.count;
+        });
+        document.getElementById('statAdmins').textContent  = admins;
+        document.getElementById('statViewers').textContent = viewers;
+    } catch (e) { /* ignore */ }
+}
+
+// ============================================================
+// Add / Edit modal
+// ============================================================
+function showAddUserModal() {
+    document.getElementById('userId').value       = '';
+    document.getElementById('userUsername').value = '';
+    document.getElementById('userName').value     = '';
+    document.getElementById('userEmail').value    = '';
+    document.getElementById('userRole').value     = 'operator';
+    document.getElementById('userPassword').value = '';
+    document.getElementById('userUsername').disabled    = false;
+    document.getElementById('passwordRequired').style.display = '';
+    document.getElementById('passwordHint').style.display     = '';
+    document.getElementById('userModalTitle').innerHTML = '<i class="bi bi-person-plus me-2"></i>Add User';
+
+    // Only show superadmin option to superadmins
+    document.getElementById('superadminOption').style.display = SESSION_ROLE === 'superadmin' ? '' : 'none';
+
+    hideModalAlert('userModalAlert');
+    new bootstrap.Modal(document.getElementById('userModal')).show();
+}
+
+async function showEditUserModal(id) {
+    try {
+        const res  = await fetch(`/admin/api/users?page=1&limit=200`);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        const u = data.users.find(x => x.id === id);
+        if (!u) throw new Error('User not found');
+
+        document.getElementById('userId').value       = u.id;
+        document.getElementById('userUsername').value = u.username;
+        document.getElementById('userName').value     = u.name || '';
+        document.getElementById('userEmail').value    = u.email || '';
+        document.getElementById('userRole').value     = u.role;
+        document.getElementById('userPassword').value = '';
+        document.getElementById('userUsername').disabled          = true;
+        document.getElementById('passwordRequired').style.display = 'none';
+        document.getElementById('passwordHint').textContent       = 'Leave blank to keep the current password.';
+        document.getElementById('userModalTitle').innerHTML = '<i class="bi bi-pencil me-2"></i>Edit User';
+
+        document.getElementById('superadminOption').style.display = SESSION_ROLE === 'superadmin' ? '' : 'none';
+
+        hideModalAlert('userModalAlert');
+        new bootstrap.Modal(document.getElementById('userModal')).show();
+    } catch (err) {
+        if (typeof showToast === 'function') showToast(err.message, 'danger');
+    }
+}
+
+async function saveUser() {
+    hideModalAlert('userModalAlert');
+    const id       = document.getElementById('userId').value;
+    const username = document.getElementById('userUsername').value.trim();
+    const name     = document.getElementById('userName').value.trim();
+    const email    = document.getElementById('userEmail').value.trim();
+    const role     = document.getElementById('userRole').value;
+    const password = document.getElementById('userPassword').value;
+    const isEdit   = !!id;
+
+    if (!isEdit && !username) {
+        return showModalAlert('userModalAlert', 'Username is required');
+    }
+    if (!isEdit && !password) {
+        return showModalAlert('userModalAlert', 'Password is required for new users');
+    }
+    if (password && password.length < 8) {
+        return showModalAlert('userModalAlert', 'Password must be at least 8 characters');
+    }
+
+    const btn = document.getElementById('saveUserBtn');
+    btn.disabled = true;
+
+    try {
+        let res, data;
+        if (!isEdit) {
+            res  = await fetch('/admin/api/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, name, email, role, password })
+            });
+        } else {
+            const body = { name, email, role };
+            if (password) body.password_inline = password; // not used — kept for future
+            res = await fetch(`/admin/api/users/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+        }
+        data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Save failed');
+
+        bootstrap.Modal.getInstance(document.getElementById('userModal'))?.hide();
+        if (typeof showToast === 'function') showToast(data.message, 'success');
+        loadUsers(currentPage);
+        loadStats();
+    } catch (err) {
+        showModalAlert('userModalAlert', err.message);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// ============================================================
+// Reset password modal
+// ============================================================
+function showResetPwdModal(id, username) {
+    document.getElementById('resetPwdUserId').value    = id;
+    document.getElementById('resetPwdUsername').textContent = username;
+    document.getElementById('resetPwdValue').value     = '';
+    hideModalAlert('resetPwdAlert');
+    new bootstrap.Modal(document.getElementById('resetPwdModal')).show();
+}
+
+async function doResetPassword() {
+    hideModalAlert('resetPwdAlert');
+    const id  = document.getElementById('resetPwdUserId').value;
+    const pwd = document.getElementById('resetPwdValue').value;
+
+    if (!pwd || pwd.length < 8) {
+        return showModalAlert('resetPwdAlert', 'Password must be at least 8 characters');
+    }
+
+    try {
+        const res  = await fetch(`/admin/api/users/${id}/password`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: pwd })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Reset failed');
+
+        bootstrap.Modal.getInstance(document.getElementById('resetPwdModal'))?.hide();
+        if (typeof showToast === 'function') showToast(data.message, 'success');
+    } catch (err) {
+        showModalAlert('resetPwdAlert', err.message);
+    }
+}
+
+// ============================================================
+// Deactivate modal
+// ============================================================
+function showDeactivateModal(id, username) {
+    document.getElementById('deactivateUserId').value           = id;
+    document.getElementById('deactivateUsername').textContent   = username;
+    new bootstrap.Modal(document.getElementById('deactivateModal')).show();
+}
+
+async function doDeactivate() {
+    const id = document.getElementById('deactivateUserId').value;
+    try {
+        const res  = await fetch(`/admin/api/users/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Deactivate failed');
+
+        bootstrap.Modal.getInstance(document.getElementById('deactivateModal'))?.hide();
+        if (typeof showToast === 'function') showToast(data.message, 'success');
+        loadUsers(currentPage);
+        loadStats();
+    } catch (err) {
+        if (typeof showToast === 'function') showToast(err.message, 'danger');
+    }
+}
+
+async function activateUser(id) {
+    try {
+        const res  = await fetch(`/admin/api/users/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_active: true })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Activate failed');
+
+        if (typeof showToast === 'function') showToast('User activated', 'success');
+        loadUsers(currentPage);
+        loadStats();
+    } catch (err) {
+        if (typeof showToast === 'function') showToast(err.message, 'danger');
+    }
+}
+
+// ============================================================
+// Permanent delete
+
+async function confirmDeleteUser(id, username) {
+    const confirmed = await window.appConfirm({
+        title: 'Permanently Delete User',
+        message: `This will permanently remove "${username}" and all their data. This cannot be undone.`,
+        confirmText: 'Delete',
+        confirmClass: 'btn btn-danger',
+        requiredText: username
+    });
+    if (!confirmed) return;
+
+    try {
+        const res  = await fetch(`/admin/api/users/${id}?force=true`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Delete failed');
+        if (typeof showToast === 'function') showToast(data.message, 'success');
+        loadUsers(currentPage);
+        loadStats();
+    } catch (err) {
+        if (typeof showToast === 'function') showToast(err.message, 'danger');
+    }
+}
+
+// ============================================================
+// Magic Link
+
+async function getMagicLink(id, username) {
+    try {
+        const res  = await fetch(`/admin/api/users/${id}/magic-link`, { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Failed to generate link');
+
+        document.getElementById('magicLinkUsername').textContent = username;
+        document.getElementById('magicLinkUrl').value = data.url;
+        document.getElementById('magicLinkCopyIcon').className = 'bi bi-clipboard';
+        new bootstrap.Modal(document.getElementById('magicLinkModal')).show();
+    } catch (err) {
+        if (typeof showToast === 'function') showToast(err.message, 'danger');
+    }
+}
+
+function copyMagicLink() {
+    const url = document.getElementById('magicLinkUrl').value;
+    navigator.clipboard.writeText(url).then(() => {
+        document.getElementById('magicLinkCopyIcon').className = 'bi bi-clipboard-check text-success';
+    }).catch(() => {
+        document.getElementById('magicLinkUrl').select();
+        document.execCommand('copy');
+    });
+}
+
+// ============================================================
+// Init
+// ============================================================
+document.addEventListener('DOMContentLoaded', () => {
+    loadUsers(1);
+    loadStats();
+});
+
+// ============================================================
+// Audit Log
+// ============================================================
+let auditCurrentPage = 1;
+
+async function loadAuditLog(page = 1) {
+    auditCurrentPage = page;
+    const username = document.getElementById('auditFilterUsername')?.value.trim() || '';
+    let url = `/admin/api/audit?page=${page}&limit=50`;
+    if (username) url += `&username=${encodeURIComponent(username)}`;
+
+    const tbody = document.getElementById('auditTableBody');
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4"><div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>Loading…</td></tr>';
+
+    try {
+        const res  = await fetch(url);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Load failed');
+        renderAuditTable(data.audit);
+        renderAuditPagination(data.total, data.page, data.limit);
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${escHtml(err.message)}</td></tr>`;
+    }
+}
+
+function renderAuditTable(rows) {
+    const tbody = document.getElementById('auditTableBody');
+    if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-5 text-muted">No audit entries found</td></tr>';
+        return;
+    }
+    tbody.innerHTML = rows.map(r => {
+        const badge = r.success
+            ? '<span class="badge bg-success">Success</span>'
+            : '<span class="badge bg-danger">Failed</span>';
+        const ua = r.user_agent ? `<span title="${escHtml(r.user_agent)}" style="cursor:help;">${escHtml(r.user_agent.substring(0, 40))}${r.user_agent.length > 40 ? '…' : ''}</span>` : '<span class="text-muted">—</span>';
+        return `<tr>
+            <td class="ps-3 fw-semibold">${escHtml(r.username)}</td>
+            <td>${badge}</td>
+            <td><small class="text-muted">${escHtml(r.reason || '—')}</small></td>
+            <td><small>${escHtml(r.ip || '—')}</small></td>
+            <td><small>${ua}</small></td>
+            <td class="pe-3"><small>${formatDate(r.created_at)}</small></td>
+        </tr>`;
+    }).join('');
+}
+
+function renderAuditPagination(total, page, limit) {
+    const pages = Math.ceil(total / limit);
+    const el = document.getElementById('auditPagination');
+    if (pages <= 1) { el.innerHTML = ''; return; }
+    let html = '';
+    for (let i = 1; i <= pages; i++) {
+        html += `<li class="page-item ${i === page ? 'active' : ''}">
+            <button class="page-link" onclick="loadAuditLog(${i})">${i}</button>
+        </li>`;
+    }
+    el.innerHTML = html;
+}
+
+// Allow pressing Enter in the filter box to search
+document.addEventListener('DOMContentLoaded', () => {
+    const filterInput = document.getElementById('auditFilterUsername');
+    if (filterInput) {
+        filterInput.addEventListener('keydown', e => { if (e.key === 'Enter') loadAuditLog(1); });
+    }
+});
+
+// ============================================================
+// Sessions
+// ============================================================
+let sessionsRefreshTimer = null;
+
+async function loadSessions() {
+    const tbody = document.getElementById('sessionsTableBody');
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center py-4"><div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>Loading…</td></tr>';
+
+    try {
+        const res  = await fetch('/admin/api/sessions');
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Load failed');
+        renderSessionsTable(data.sessions);
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${escHtml(err.message)}</td></tr>`;
+    }
+}
+
+function renderSessionsTable(sessions) {
+    const tbody = document.getElementById('sessionsTableBody');
+    if (!sessions.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-5 text-muted">No active sessions</td></tr>';
+        return;
+    }
+    tbody.innerHTML = sessions.map(s => {
+        const username = s.user ? escHtml(s.user.username) : '<span class="text-muted">Anonymous</span>';
+        const role     = s.user ? roleBadge(s.user.role) : '—';
+        const current  = s.isCurrent ? '<span class="badge bg-primary">Current</span>' : '';
+        const action   = s.isCurrent
+            ? '<button class="btn btn-sm btn-outline-secondary" disabled title="Cannot terminate your own session">Terminate</button>'
+            : `<button class="btn btn-sm btn-outline-danger" onclick="terminateSession('${escHtml(s.sid)}')">Terminate</button>`;
+        return `<tr>
+            <td class="ps-3 fw-semibold">${username}</td>
+            <td>${role}</td>
+            <td><small>${formatDate(s.expires)}</small></td>
+            <td>${current}</td>
+            <td class="pe-3 text-end">${action}</td>
+        </tr>`;
+    }).join('');
+}
+
+async function terminateSession(sid) {
+    const confirmed = typeof window.appConfirm === 'function'
+        ? await window.appConfirm({
+            title: 'Terminate Session',
+            message: 'Terminate this session? The user will be logged out immediately.',
+            confirmText: 'Terminate',
+            confirmClass: 'btn btn-danger'
+        })
+        : confirm('Terminate this session? The user will be logged out immediately.');
+    if (!confirmed) return;
+    try {
+        const res  = await fetch(`/admin/api/sessions/${encodeURIComponent(sid)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Terminate failed');
+        if (typeof showToast === 'function') showToast('Session terminated', 'success');
+        loadSessions();
+    } catch (err) {
+        if (typeof showToast === 'function') showToast(err.message, 'danger');
+    }
+}
+
+// Auto-refresh sessions every 30 seconds when the Sessions tab is active
+document.addEventListener('DOMContentLoaded', () => {
+    const sessionsTab = document.getElementById('tab-sessions-btn');
+    if (sessionsTab) {
+        sessionsTab.addEventListener('shown.bs.tab', () => {
+            loadSessions();
+            sessionsRefreshTimer = setInterval(loadSessions, 30000);
+        });
+        sessionsTab.addEventListener('hidden.bs.tab', () => {
+            if (sessionsRefreshTimer) { clearInterval(sessionsRefreshTimer); sessionsRefreshTimer = null; }
+        });
+    }
+});
+
+// ============================================================
+// API Keys
+// ============================================================
+async function loadApiKeys() {
+    const tbody = document.getElementById('apiKeysTableBody');
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4"><div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>Loading…</td></tr>';
+
+    try {
+        const res  = await fetch('/api/keys');
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Load failed');
+        renderApiKeysTable(data.keys);
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${escHtml(err.message)}</td></tr>`;
+    }
+}
+
+function renderApiKeysTable(keys) {
+    const tbody = document.getElementById('apiKeysTableBody');
+    if (!keys.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center py-5 text-muted">No API keys yet. Create one above.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = keys.map(k => {
+        const status = k.is_active
+            ? '<span class="badge bg-success">Active</span>'
+            : '<span class="badge bg-secondary">Revoked</span>';
+        const revokeBtn = k.is_active
+            ? `<button class="btn btn-sm btn-outline-danger" onclick="revokeApiKey(${k.id})" title="Revoke"><i class="bi bi-x-lg"></i></button>`
+            : '<span class="text-muted small">—</span>';
+        const rateLabel = k.rate_limit_rpm
+            ? `<span class="badge bg-secondary">${k.rate_limit_rpm}/min</span>`
+            : '<span class="text-muted small">—</span>';
+        return `<tr>
+            <td class="ps-3 fw-semibold">${escHtml(k.name)}</td>
+            <td><code class="small">${escHtml(k.key_prefix)}…</code></td>
+            <td><span class="badge bg-primary bg-opacity-75">${escHtml(k.scopes)}</span></td>
+            <td>${rateLabel}</td>
+            <td><small>${k.last_used ? formatDate(k.last_used) : '<span class="text-muted">Never</span>'}</small></td>
+            <td><small>${k.expires_at ? formatDate(k.expires_at) : '<span class="text-muted">Never</span>'}</small></td>
+            <td>${status}</td>
+            <td class="pe-3 text-end">${revokeBtn}</td>
+        </tr>`;
+    }).join('');
+}
+
+function showCreateKeyForm() {
+    document.getElementById('createKeyCard').style.display = '';
+    document.getElementById('newKeyName').focus();
+    hideApiKeyAlert();
+}
+
+function hideCreateKeyForm() {
+    document.getElementById('createKeyCard').style.display = 'none';
+    document.getElementById('newKeyName').value      = '';
+    document.getElementById('newKeyScope').value     = 'read';
+    document.getElementById('newKeyExpiry').value    = '';
+    document.getElementById('newKeyRateLimit').value = '';
+    hideApiKeyAlert();
+}
+
+function hideApiKeyAlert() {
+    const el = document.getElementById('createKeyAlert');
+    el.classList.add('d-none');
+}
+
+function showApiKeyAlert(msg, type = 'danger') {
+    const el = document.getElementById('createKeyAlert');
+    el.className = `alert alert-${type}`;
+    el.textContent = msg;
+    el.classList.remove('d-none');
+}
+
+async function createApiKey() {
+    hideApiKeyAlert();
+    const name           = document.getElementById('newKeyName').value.trim();
+    const scopes         = document.getElementById('newKeyScope').value;
+    const expiryRaw      = document.getElementById('newKeyExpiry').value.trim();
+    const rateLimitRaw   = document.getElementById('newKeyRateLimit').value.trim();
+    const expires_days   = expiryRaw    ? parseInt(expiryRaw, 10)    : undefined;
+    const rate_limit_rpm = rateLimitRaw ? parseInt(rateLimitRaw, 10) : undefined;
+
+    if (!name) return showApiKeyAlert('Name is required');
+
+    try {
+        const body = { name, scopes };
+        if (expires_days)   body.expires_days   = expires_days;
+        if (rate_limit_rpm) body.rate_limit_rpm = rate_limit_rpm;
+
+        const res  = await fetch('/api/keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Create failed');
+
+        hideCreateKeyForm();
+
+        // Show the plaintext key once
+        document.getElementById('newKeyValue').value = data.key;
+        document.getElementById('newKeyReveal').classList.remove('d-none');
+
+        loadApiKeys();
+        if (typeof showToast === 'function') showToast('API key created', 'success');
+    } catch (err) {
+        showApiKeyAlert(err.message);
+    }
+}
+
+function copyNewKey() {
+    const val = document.getElementById('newKeyValue').value;
+    if (!val) return;
+    navigator.clipboard.writeText(val).then(() => {
+        const btn = document.getElementById('copyNewKeyBtn');
+        btn.innerHTML = '<i class="bi bi-check"></i>';
+        setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 1500);
+    }).catch(() => {});
+}
+
+function dismissNewKey() {
+    document.getElementById('newKeyReveal').classList.add('d-none');
+    document.getElementById('newKeyValue').value = '';
+}
+
+async function revokeApiKey(id) {
+    const confirmed = typeof window.appConfirm === 'function'
+        ? await window.appConfirm({
+            title: 'Revoke API Key',
+            message: 'Revoke this API key? It will stop working immediately.',
+            confirmText: 'Revoke',
+            confirmClass: 'btn btn-danger'
+        })
+        : confirm('Revoke this API key? It will stop working immediately.');
+    if (!confirmed) return;
+    try {
+        const res  = await fetch(`/api/keys/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Revoke failed');
+        if (typeof showToast === 'function') showToast('API key revoked', 'success');
+        loadApiKeys();
+    } catch (err) {
+        if (typeof showToast === 'function') showToast(err.message, 'danger');
+    }
+}
+
+// ==================== Webhooks ====================
+
+function escHtmlWh(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+async function loadWebhooks() {
+    const el = document.getElementById('webhooksList');
+    try {
+        const data = await fetch('/api/webhooks').then(r => r.json());
+        if (!data.success) throw new Error(data.message);
+        if (!data.data.length) {
+            el.innerHTML = '<p class="text-center text-muted py-4 mb-0">No webhooks yet. Create one above.</p>';
+            return;
+        }
+        el.innerHTML = `<table class="table table-sm table-hover mb-0">
+            <thead class="table-light"><tr>
+                <th>Name</th><th>URL</th><th>Events</th><th>Last fired</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody>${data.data.map(w => `
+            <tr>
+                <td class="fw-semibold small">${escHtmlWh(w.name)}</td>
+                <td class="small text-muted" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtmlWh(w.url)}">${escHtmlWh(w.url)}</td>
+                <td class="small">${w.events.split(',').map(e=>`<span class="badge bg-secondary me-1">${escHtmlWh(e)}</span>`).join('')}</td>
+                <td class="small text-muted">${w.last_fired_at ? new Date(w.last_fired_at+'Z').toLocaleString() : '—'}</td>
+                <td>${w.last_status ? `<span class="badge ${w.last_status >= 200 && w.last_status < 300 ? 'bg-success' : 'bg-danger'}">${w.last_status}</span>` : '<span class="text-muted small">—</span>'} ${w.is_active ? '' : '<span class="badge bg-warning text-dark">Paused</span>'}</td>
+                <td class="text-end text-nowrap">
+                    <button class="btn btn-xs btn-outline-info me-1" onclick="testWebhook(${w.id})" title="Send test"><i class="bi bi-play"></i></button>
+                    <button class="btn btn-xs btn-outline-warning me-1" onclick="toggleWebhook(${w.id},${w.is_active ? 0 : 1})" title="${w.is_active ? 'Pause' : 'Resume'}">
+                        <i class="bi bi-${w.is_active ? 'pause' : 'play-fill'}"></i>
+                    </button>
+                    <button class="btn btn-xs btn-outline-danger" onclick="deleteWebhook(${w.id})" title="Delete"><i class="bi bi-trash"></i></button>
+                </td>
+            </tr>`).join('')}
+            </tbody></table>`;
+    } catch (e) {
+        el.innerHTML = `<p class="text-center text-danger py-3 small">${escHtmlWh(e.message)}</p>`;
+    }
+}
+
+async function createWebhook() {
+    const name   = document.getElementById('whName').value.trim();
+    const url    = document.getElementById('whUrl').value.trim();
+    const secret = document.getElementById('whSecret').value.trim();
+    const events = [...document.querySelectorAll('.wh-event:checked')].map(c => c.value);
+    if (!name || !url || !events.length) {
+        if (typeof showToast === 'function') showToast('Name, URL, and at least one event are required.', 'warning');
+        return;
+    }
+    try {
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const data = await fetch('/api/webhooks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+            body: JSON.stringify({ name, url, events, secret: secret || null })
+        }).then(r => r.json());
+        if (!data.success) throw new Error(data.message);
+        if (typeof showToast === 'function') showToast('Webhook created', 'success');
+        document.getElementById('whName').value = '';
+        document.getElementById('whUrl').value = '';
+        document.getElementById('whSecret').value = '';
+        document.querySelectorAll('.wh-event').forEach(c => c.checked = false);
+        bootstrap.Collapse.getInstance(document.getElementById('webhookCreateForm'))?.hide();
+        loadWebhooks();
+    } catch (e) {
+        if (typeof showToast === 'function') showToast(e.message, 'danger');
+    }
+}
+
+async function testWebhook(id) {
+    try {
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const data = await fetch(`/api/webhooks/${id}/test`, {
+            method: 'POST', headers: { 'X-CSRF-Token': csrfToken }
+        }).then(r => r.json());
+        if (typeof showToast === 'function') showToast(data.success ? 'Test sent!' : data.message, data.success ? 'success' : 'danger');
+        loadWebhooks();
+    } catch (e) {
+        if (typeof showToast === 'function') showToast(e.message, 'danger');
+    }
+}
+
+async function toggleWebhook(id, newActive) {
+    try {
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const hook = (await fetch('/api/webhooks').then(r => r.json())).data?.find(w => w.id === id);
+        if (!hook) return;
+        const events = hook.events.split(',');
+        await fetch(`/api/webhooks/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+            body: JSON.stringify({ name: hook.name, url: hook.url, events, is_active: newActive })
+        });
+        loadWebhooks();
+    } catch (e) {
+        if (typeof showToast === 'function') showToast(e.message, 'danger');
+    }
+}
+
+async function deleteWebhook(id) {
+    const confirmed = typeof window.appConfirm === 'function'
+        ? await window.appConfirm({
+            title: 'Delete Webhook',
+            message: 'Delete this webhook?',
+            confirmText: 'Delete',
+            confirmClass: 'btn btn-danger'
+        })
+        : confirm('Delete this webhook?');
+    if (!confirmed) return;
+    try {
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const data = await fetch(`/api/webhooks/${id}`, {
+            method: 'DELETE', headers: { 'X-CSRF-Token': csrfToken }
+        }).then(r => r.json());
+        if (!data.success) throw new Error(data.message);
+        if (typeof showToast === 'function') showToast('Webhook deleted', 'success');
+        loadWebhooks();
+    } catch (e) {
+        if (typeof showToast === 'function') showToast(e.message, 'danger');
+    }
+}
+
+// ==================== Invites ====================
+
+async function createInvite() {
+    const role  = document.getElementById('inviteRole').value;
+    const email = document.getElementById('inviteEmail').value.trim();
+    try {
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const data = await fetch('/admin/api/invites', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+            body: JSON.stringify({ role, email: email || null })
+        }).then(r => r.json());
+        if (!data.success) throw new Error(data.message);
+        document.getElementById('inviteLink').value = data.link;
+        document.getElementById('inviteResult').classList.remove('d-none');
+        loadInvites();
+    } catch (e) {
+        if (typeof showToast === 'function') showToast(e.message, 'danger');
+    }
+}
+
+function copyInviteLink() {
+    const inp = document.getElementById('inviteLink');
+    navigator.clipboard?.writeText(inp.value).then(() => {
+        if (typeof showToast === 'function') showToast('Link copied!', 'success');
+    }).catch(() => { inp.select(); document.execCommand('copy'); });
+}
+
+async function loadInvites() {
+    const el = document.getElementById('invitesList');
+    try {
+        const data = await fetch('/admin/api/invites').then(r => r.json());
+        if (!data.success) throw new Error(data.message);
+        if (!data.data.length) {
+            el.innerHTML = '<p class="text-center text-muted py-4 mb-0">No pending invites.</p>';
+            return;
+        }
+        el.innerHTML = `<table class="table table-sm table-hover mb-0">
+            <thead class="table-light"><tr>
+                <th>Email</th><th>Role</th><th>Created by</th><th>Expires</th><th></th>
+            </tr></thead>
+            <tbody>${data.data.map(i => `
+            <tr>
+                <td class="small">${i.email ? escHtmlWh(i.email) : '<span class="text-muted">—</span>'}</td>
+                <td><span class="badge bg-secondary">${escHtmlWh(i.role)}</span></td>
+                <td class="small text-muted">${escHtmlWh(i.created_by_username || '—')}</td>
+                <td class="small text-muted">${new Date(i.expires_at).toLocaleDateString()}</td>
+                <td class="text-end">
+                    <button class="btn btn-xs btn-outline-danger" onclick="revokeInvite(${i.id})">
+                        <i class="bi bi-x-lg"></i> Revoke
+                    </button>
+                </td>
+            </tr>`).join('')}</tbody></table>`;
+    } catch (e) {
+        el.innerHTML = `<p class="text-center text-danger py-3 small">${escHtmlWh(e.message)}</p>`;
+    }
+}
+
+async function revokeInvite(id) {
+    const confirmed = typeof window.appConfirm === 'function'
+        ? await window.appConfirm({
+            title: 'Revoke Invite',
+            message: 'Revoke this invite?',
+            confirmText: 'Revoke',
+            confirmClass: 'btn btn-danger'
+        })
+        : confirm('Revoke this invite?');
+    if (!confirmed) return;
+    try {
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        await fetch(`/admin/api/invites/${id}`, { method: 'DELETE', headers: { 'X-CSRF-Token': csrfToken } });
+        loadInvites();
+    } catch (e) {
+        if (typeof showToast === 'function') showToast(e.message, 'danger');
+    }
+}
+</script>

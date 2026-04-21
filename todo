@@ -1,0 +1,9 @@
+[] Pending, [~] WIP [x] Done
+
+[]  USSD don't complete response in UI and no option for send USSD response on ask, test 2 level USSD for Robi, test and fix in UI and firmware. 
+[] In http://localhost:3001/modem, Make Share Internet and Routing more advanced and make firmware support 
+[] for indentfy SIM number is buggy and slow, any way to fix it to get always number, avoid checking text
+[~] in dashboard show active device first, for overflow in device row make + .. device and on click open modal to show all.
+[] For Service SMS, dont show compose form as it dont support reply
+[] In SMS in exisiting conversation, changed receipeint consider it new conversion, for that check if with same reciepient/s have exisiting or create new and open on send sms.
+[] http://localhost:3001/modem?tab=usb, add tabs to add source of internet from USB

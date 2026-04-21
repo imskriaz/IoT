@@ -1,0 +1,21 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'IoTAndroidBridge'
+include ':app'
+
+setBinding(new Binding([gradle: this]))
+evaluate(new File(settingsDir.parentFile, 'flutter_ui/.android/include_flutter.groovy'))

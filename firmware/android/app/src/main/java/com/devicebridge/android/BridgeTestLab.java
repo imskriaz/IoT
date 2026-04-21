@@ -1,0 +1,98 @@
+package com.devicebridge.android;
+
+import android.app.Activity;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+final class BridgeTestLab {
+    interface Callback {
+        void onComplete(String title, String detail);
+    }
+
+    private BridgeTestLab() {
+    }
+
+    static void runStatusPushTest(Activity activity, Callback callback) {
+        new Thread(() -> {
+            BridgeConfig config = BridgeConfig.load(activity);
+            BridgeRuntimeState runtime = BridgeRuntimeState.load(activity);
+            String detail;
+
+            if ("http".equals(config.transportMode)) {
+                if (!config.hasHttpBridgeConfig()) {
+                    detail = "HTTP status push blocked. Server URL, API key, or device ID is missing.";
+                } else {
+                    JSONObject payload = new JSONObject();
+                    try {
+                        payload.put("type", "status");
+                        payload.put("device_id", config.deviceId);
+                        payload.put("bridge", "android_sms");
+                        payload.put("transport_mode", config.transportMode);
+                        payload.put("status", "lab");
+                        payload.put("active_path", "http");
+                        payload.put("source", "android_test_lab");
+                        payload.put("timestamp", System.currentTimeMillis());
+                    } catch (JSONException ignored) {
+                    }
+                    BridgeHttpClient.Result result = BridgeHttpClient.postStatus(config, payload);
+                    detail = result.success
+                            ? "HTTP status push succeeded. Dashboard auth and device status endpoint responded."
+                            : "HTTP status push failed: " + result.detail;
+                }
+            } else if (!config.hasProvisionedMqttConfig()) {
+                detail = "MQTT status push blocked. Broker host or device routing details are incomplete.";
+            } else {
+                MqttBridgeService.requestImmediateStatusPush(activity);
+                detail = runtime.isTransportConnected(config)
+                        ? "MQTT status push queued through the running bridge."
+                        : "Bridge start/status request sent. If MQTT is reachable the next heartbeat will publish status.";
+            }
+
+            BridgeEventLog.append(activity, "Test Lab status push: " + detail);
+            finish(activity, callback, "Status Push Test", detail);
+        }).start();
+    }
+
+    static void runQueuePickupTest(Activity activity, Callback callback) {
+        new Thread(() -> {
+            BridgeConfig config = BridgeConfig.load(activity);
+            BridgeRuntimeState runtime = BridgeRuntimeState.load(activity);
+            String detail;
+
+            if (!"http".equals(config.transportMode)) {
+                detail = "Queue pickup is broker-driven in MQTT mode. Local queue depth is " + runtime.queueDepth + ".";
+            } else if (!config.hasHttpBridgeConfig()) {
+                detail = "HTTP queue pickup blocked. Complete server URL, API key, and device ID first.";
+            } else {
+                try {
+                    int count = BridgeHttpClient.fetchOutstandingMessages(config).size();
+                    detail = "HTTP queue pickup responded. Outstanding dashboard messages: " + count + ".";
+                } catch (Exception error) {
+                    detail = "HTTP queue pickup failed: " + error.getMessage();
+                }
+            }
+
+            BridgeEventLog.append(activity, "Test Lab queue pickup: " + detail);
+            finish(activity, callback, "Queue Pickup Test", detail);
+        }).start();
+    }
+
+    static void runPermissionProbe(Activity activity, Callback callback) {
+        String detail = BridgeDiagnostics.buildPermissionWatchdog(activity);
+        BridgeEventLog.append(activity, "Test Lab permission probe opened");
+        finish(activity, callback, "Permission Probe", detail);
+    }
+
+    static void runRecoveryProbe(Activity activity, Callback callback) {
+        String detail = BridgeRecoveryAdvisor.buildAdvisorText(activity);
+        BridgeEventLog.append(activity, "Test Lab recovery probe opened");
+        finish(activity, callback, "Recovery Probe", detail);
+    }
+
+    private static void finish(Activity activity, Callback callback, String title, String detail) {
+        activity.runOnUiThread(() -> callback.onComplete(title, detail));
+    }
+}
+
+

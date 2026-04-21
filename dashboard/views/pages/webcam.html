@@ -1,0 +1,265 @@
+<div class="container-fluid py-4">
+    <%- include('../partials/cap-banner.html', { cap: 'camera', label: 'camera module with MQTT image publish support' }) %>
+    <%- include('../partials/wifi-banner.html', { message: 'Live camera access and direct device camera services need the device on local Wi-Fi.' }) %>
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-3">
+        <div>
+            <h2 class="mb-1 fs-4">
+                <i class="bi bi-camera me-2 text-primary"></i>Camera
+            </h2>
+            <p class="text-muted small mb-0">Capture history, face-detection metadata, and camera preferences for the active device.</p>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-sm btn-outline-secondary" id="refreshCameraBtn" data-action-requires-online="true">
+                <i class="bi bi-arrow-repeat me-1"></i>Refresh
+            </button>
+            <button class="btn btn-sm btn-primary" id="requestCaptureBtn" data-action-requires-online="true" data-action-requires-wifi="true">
+                <i class="bi bi-camera-fill me-1"></i>Capture Now
+            </button>
+            <a class="btn btn-sm btn-outline-primary" id="exportCapturesBtn" href="#" target="_blank" rel="noopener" data-action-requires-online="true">
+                <i class="bi bi-download me-1"></i>Export JSON
+            </a>
+        </div>
+    </div>
+
+    <div class="alert alert-info d-none" id="cameraSupportNotice"></div>
+    <div class="alert alert-warning d-none" id="cameraDeferredNotice">
+        Live camera actions are deferred until the active firmware reports integrated camera support. Stored settings and capture history can still be reviewed here.
+    </div>
+
+    <div class="row g-3 mb-3" id="cameraSummaryCards">
+        <div class="col-6 col-xl-2">
+            <div class="card h-100 border-0 bg-light-subtle">
+                <div class="card-body py-3">
+                    <div class="text-muted small mb-1">Captures</div>
+                    <div class="fw-semibold fs-5" id="summaryTotal">0</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-xl-2">
+            <div class="card h-100 border-0 bg-light-subtle">
+                <div class="card-body py-3">
+                    <div class="text-muted small mb-1">Motion Events</div>
+                    <div class="fw-semibold fs-5" id="summaryMotion">0</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-xl-2">
+            <div class="card h-100 border-0 bg-light-subtle">
+                <div class="card-body py-3">
+                    <div class="text-muted small mb-1">Face Frames</div>
+                    <div class="fw-semibold fs-5" id="summaryFaces">0</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-xl-2">
+            <div class="card h-100 border-0 bg-light-subtle">
+                <div class="card-body py-3">
+                    <div class="text-muted small mb-1">Recognized</div>
+                    <div class="fw-semibold fs-5" id="summaryRecognized">0</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-xl-4">
+            <div class="card h-100 border-0 bg-light-subtle">
+                <div class="card-body py-3">
+                    <div class="text-muted small mb-1">Last Capture</div>
+                    <div class="fw-semibold" id="summaryLastCapture">No captures yet</div>
+                    <div class="small text-muted mt-1" id="summaryLastMeta">Waiting for first camera frame.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header fw-semibold">
+                    <i class="bi bi-activity me-2"></i>Camera Status
+                </div>
+                <div class="card-body">
+                    <div class="d-flex align-items-center justify-content-between mb-3">
+                        <span class="text-muted small">Device</span>
+                        <span class="badge bg-secondary" id="cameraDeviceStatus">Checking...</span>
+                    </div>
+                    <div class="small text-muted mb-2">Module Health</div>
+                    <div class="d-flex flex-wrap gap-2 mb-3" id="cameraModuleHealth"></div>
+                    <div class="small text-muted mb-2">Capability Flags</div>
+                    <div class="d-flex flex-wrap gap-2" id="cameraCapabilityBadges"></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-8">
+            <div class="card h-100">
+                <div class="card-header fw-semibold">
+                    <i class="bi bi-sliders me-2"></i>Camera Preferences
+                </div>
+                <div class="card-body">
+                    <form id="cameraSettingsForm" class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label small">Resolution</label>
+                            <select class="form-select form-select-sm" id="cameraResolution">
+                                <option value="1600x1200">1600x1200</option>
+                                <option value="1280x1024">1280x1024</option>
+                                <option value="1024x768">1024x768</option>
+                                <option value="800x600">800x600</option>
+                                <option value="640x480">640x480</option>
+                                <option value="352x288">352x288</option>
+                                <option value="320x240">320x240</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small">FPS</label>
+                            <input type="number" class="form-control form-control-sm" id="cameraFps" min="1" max="60" value="15">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small">JPEG Quality</label>
+                            <input type="number" class="form-control form-control-sm" id="cameraQuality" min="10" max="100" value="80">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small">Retention Days</label>
+                            <input type="number" class="form-control form-control-sm" id="cameraRetentionDays" min="1" max="365" value="30">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small">Privacy Mode</label>
+                            <select class="form-select form-select-sm" id="cameraPrivacyMode">
+                                <option value="events-only">Events Only</option>
+                                <option value="faces-only">Faces Only</option>
+                                <option value="full-frame">Full Frame</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4 d-flex align-items-end">
+                            <button type="submit" class="btn btn-sm btn-success w-100" id="saveCameraSettingsBtn">
+                                <i class="bi bi-check-lg me-1"></i>Save Camera Settings
+                            </button>
+                        </div>
+                        <div class="col-12">
+                            <div class="row g-2">
+                                <div class="col-sm-6 col-xl-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="cameraEnabled">
+                                        <label class="form-check-label" for="cameraEnabled">Camera enabled</label>
+                                    </div>
+                                </div>
+                                <div class="col-sm-6 col-xl-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="cameraMotionDetection">
+                                        <label class="form-check-label" for="cameraMotionDetection">Motion detection</label>
+                                    </div>
+                                </div>
+                                <div class="col-sm-6 col-xl-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="cameraFaceDetection">
+                                        <label class="form-check-label" for="cameraFaceDetection">Face detection</label>
+                                    </div>
+                                </div>
+                                <div class="col-sm-6 col-xl-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="cameraRecognitionEnabled">
+                                        <label class="form-check-label" for="cameraRecognitionEnabled">Face recognition</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-text mt-2" id="cameraSettingsHint">
+                                Recognition preferences are stored now; live recognition still depends on device-side firmware support.
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-2">
+            <div class="fw-semibold">
+                <i class="bi bi-images me-2"></i>Capture Gallery
+            </div>
+            <div class="d-flex flex-wrap gap-2 small">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="filterFaces">
+                    <label class="form-check-label" for="filterFaces">Face detected</label>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="filterRecognized">
+                    <label class="form-check-label" for="filterRecognized">Recognized</label>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="filterMotion">
+                    <label class="form-check-label" for="filterMotion">Motion only</label>
+                </div>
+            </div>
+        </div>
+        <div class="card-body">
+            <div id="cameraGallery" class="row g-3">
+                <div class="col-12 text-center py-4 text-muted">
+                    <div class="spinner-border spinner-border-sm me-2"></div>Loading camera captures...
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="cameraCaptureModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <h5 class="modal-title">Capture Details</h5>
+                    <div class="small text-muted" id="cameraModalMeta"></div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3">
+                    <div class="col-lg-8">
+                        <img id="cameraModalImage" src="" class="img-fluid rounded border" alt="Camera capture">
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="small text-muted mb-2">Metadata</div>
+                        <pre id="cameraModalDetails" class="bg-light rounded p-3 small mb-0" style="max-height: 60vh; overflow:auto;"></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer justify-content-between">
+                <a href="#" class="btn btn-sm btn-outline-primary" id="cameraModalDownload" target="_blank" rel="noopener">
+                    <i class="bi bi-download me-1"></i>Open Image
+                </a>
+                <button type="button" class="btn btn-sm btn-outline-danger" id="cameraModalDelete">
+                    <i class="bi bi-trash me-1"></i>Delete Capture
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.camera-card {
+    cursor: pointer;
+    transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.camera-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1.2rem rgba(13, 110, 253, 0.12);
+}
+
+.camera-thumb {
+    width: 100%;
+    height: 170px;
+    object-fit: cover;
+    background: linear-gradient(135deg, #dfe9f3, #f8fbff);
+}
+
+.camera-badge-row .badge {
+    font-size: 0.68rem;
+}
+
+@media (max-width: 767.98px) {
+    .camera-thumb {
+        height: 145px;
+    }
+}
+</style>
+
+<script src="/js/webcam.js"></script>

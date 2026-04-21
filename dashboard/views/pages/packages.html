@@ -1,0 +1,290 @@
+<div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-4">
+    <div>
+        <h2 class="mb-1"><i class="bi bi-box-seam me-2"></i>Packages</h2>
+        <p class="text-muted mb-0">Manage commercial plans, payment instructions, and device package approvals.</p>
+    </div>
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-secondary" type="button" onclick="loadPackagesAdmin()">
+            <i class="bi bi-arrow-repeat me-2"></i>Refresh
+        </button>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-12 col-xl-5">
+        <div class="card h-100">
+            <div class="card-header bg-body py-3 d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="mb-1"><i class="bi bi-tags me-2"></i>Plan Catalog</h5>
+                    <div class="small text-muted">These plans appear in landing, device package apply, and admin approvals.</div>
+                </div>
+                <button class="btn btn-sm btn-primary" type="button" onclick="addPackagePlanRow()">
+                    <i class="bi bi-plus-lg me-1"></i>Add Plan
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="packagePlanList" class="d-grid gap-3"></div>
+                <div class="alert alert-info py-2 small mt-3 mb-0" id="packagePaymentHint">
+                    Loading payment gateway...
+                </div>
+                <div class="d-flex gap-2 mt-3">
+                    <button class="btn btn-success" type="button" onclick="savePackagePlans()">
+                        <i class="bi bi-check-lg me-2"></i>Save Plans
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-7">
+        <div class="card">
+            <div class="card-header bg-body py-3">
+                <h5 class="mb-1"><i class="bi bi-receipt-cutoff me-2"></i>Package Requests</h5>
+                <div class="small text-muted">Approve or reject device package applications after payment confirmation.</div>
+            </div>
+            <div class="card-body p-0">
+                <div id="packageRequestList" class="list-group list-group-flush">
+                    <div class="list-group-item text-muted">Loading requests...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.package-plan-card {
+    border: 1px solid var(--bs-border-color);
+    border-radius: 1rem;
+    padding: 1rem;
+    background: linear-gradient(180deg, rgba(13,110,253,0.03), rgba(13,110,253,0.01));
+}
+</style>
+
+<script>
+let packageOffers = [];
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function packageCurrency(value) {
+    const amount = Number(value || 0);
+    return `৳${amount.toLocaleString()}`;
+}
+
+function renderPackagePaymentHint(payment) {
+    const hint = document.getElementById('packagePaymentHint');
+    if (!hint) return;
+    if (!payment) {
+        hint.innerHTML = 'No payment gateway configured yet.';
+        return;
+    }
+    hint.innerHTML = `Primary gateway: <strong>${escapeHtml(payment.method || 'Payment')}</strong> <strong>${escapeHtml(payment.number || '')}</strong>.`;
+}
+
+function renderPackagePlanList() {
+    const list = document.getElementById('packagePlanList');
+    if (!list) return;
+    if (!packageOffers.length) {
+        list.innerHTML = '<div class="text-muted">No plans configured.</div>';
+        return;
+    }
+
+    list.innerHTML = packageOffers.map((offer, index) => `
+        <div class="package-plan-card">
+            <div class="row g-2">
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Code</label>
+                    <input class="form-control form-control-sm" value="${escapeHtml(offer.code || '')}" onchange="updatePackagePlanField(${index}, 'code', this.value)">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Name</label>
+                    <input class="form-control form-control-sm" value="${escapeHtml(offer.name || '')}" onchange="updatePackagePlanField(${index}, 'name', this.value)">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold">Price (BDT)</label>
+                    <input type="number" min="0" class="form-control form-control-sm" value="${Number(offer.price_bdt || 0)}" onchange="updatePackagePlanField(${index}, 'price_bdt', this.value)">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold">SMS / day</label>
+                    <input type="number" min="0" class="form-control form-control-sm" value="${Number(offer.limits?.sms_per_day || 0)}" onchange="updatePackageLimitField(${index}, 'sms_per_day', this.value)">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold">SMS / month</label>
+                    <input type="number" min="0" class="form-control form-control-sm" value="${Number(offer.limits?.sms_per_month || 0)}" onchange="updatePackageLimitField(${index}, 'sms_per_month', this.value)">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">API req / min</label>
+                    <input type="number" min="0" class="form-control form-control-sm" value="${Number(offer.limits?.api_requests_per_minute || 0)}" onchange="updatePackageLimitField(${index}, 'api_requests_per_minute', this.value)">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold">Assigned users</label>
+                    <input type="number" min="0" class="form-control form-control-sm" value="${Number(offer.limits?.assigned_users || 0)}" onchange="updatePackageLimitField(${index}, 'assigned_users', this.value)">
+                </div>
+                <div class="col-md-2 d-flex align-items-end">
+                    <button class="btn btn-outline-danger btn-sm w-100" type="button" onclick="removePackagePlan(${index})">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function updatePackagePlanField(index, key, value) {
+    packageOffers[index][key] = key === 'price_bdt' ? Number(value || 0) : String(value || '');
+}
+
+function updatePackageLimitField(index, key, value) {
+    packageOffers[index].limits = packageOffers[index].limits || {};
+    packageOffers[index].limits[key] = Number(value || 0);
+}
+
+function addPackagePlanRow() {
+    packageOffers.push({
+        code: `plan${packageOffers.length + 1}`,
+        name: 'New Plan',
+        price_bdt: 0,
+        limits: {
+            sms_per_day: 0,
+            sms_per_month: 0,
+            api_requests_per_minute: 0,
+            assigned_users: 0
+        }
+    });
+    renderPackagePlanList();
+}
+
+function removePackagePlan(index) {
+    packageOffers.splice(index, 1);
+    renderPackagePlanList();
+}
+
+async function savePackagePlans() {
+    try {
+        const response = await fetch('/api/devices/package-offers', {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+            },
+            body: JSON.stringify({
+                offers: packageOffers.map((offer) => ({
+                    code: offer.code,
+                    name: offer.name,
+                    priceBdt: Number(offer.price_bdt || offer.priceBdt || 0),
+                    limits: { ...(offer.limits || {}) }
+                }))
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.message || 'Failed to save package plans');
+        }
+        packageOffers = payload.offers || [];
+        renderPackagePlanList();
+        renderPackagePaymentHint(payload.payment || null);
+        if (window.showToast) window.showToast('Package plans saved', 'success');
+    } catch (error) {
+        if (window.showToast) window.showToast(error.message || 'Failed to save package plans', 'danger');
+    }
+}
+
+function renderPackageRequests(requests) {
+    const list = document.getElementById('packageRequestList');
+    if (!list) return;
+    if (!requests.length) {
+        list.innerHTML = '<div class="list-group-item text-muted">No package requests yet.</div>';
+        return;
+    }
+
+    list.innerHTML = requests.map((request) => {
+        const statusCls = request.status === 'approved'
+            ? 'bg-success'
+            : (request.status === 'rejected' ? 'bg-danger' : 'bg-warning text-dark');
+        return `
+            <div class="list-group-item">
+                <div class="d-flex flex-column flex-lg-row justify-content-between gap-3">
+                    <div>
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <strong>${escapeHtml(request.device_name || request.device_id)}</strong>
+                            <span class="badge ${statusCls}">${escapeHtml(request.status)}</span>
+                            <span class="badge bg-secondary">${escapeHtml(request.package_name)}</span>
+                        </div>
+                        <div class="small text-muted mt-1">
+                            Device: <code>${escapeHtml(request.device_id)}</code> · User: ${escapeHtml(request.username || 'unknown')} · Price: ${packageCurrency(request.price_bdt)}
+                        </div>
+                        <div class="small text-muted">Payment: ${escapeHtml(request.payment_method)} ${escapeHtml(request.payment_number)}${request.payment_reference ? ` · Ref: ${escapeHtml(request.payment_reference)}` : ''}</div>
+                        ${request.notes ? `<div class="small mt-2">${escapeHtml(request.notes)}</div>` : ''}
+                    </div>
+                    ${request.status === 'pending' ? `
+                        <div class="d-flex gap-2 align-self-start">
+                            <button class="btn btn-sm btn-success" type="button" onclick="reviewPackageRequest(${request.id}, 'approve')">
+                                <i class="bi bi-check-lg me-1"></i>Approve
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger" type="button" onclick="reviewPackageRequest(${request.id}, 'reject')">
+                                <i class="bi bi-x-lg me-1"></i>Reject
+                            </button>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function reviewPackageRequest(id, action) {
+    try {
+        const response = await fetch(`/api/devices/package-requests/${encodeURIComponent(id)}/${action}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+            },
+            body: JSON.stringify({})
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.message || `Failed to ${action} request`);
+        }
+        if (window.showToast) window.showToast(payload.message || `Request ${action}d`, 'success');
+        loadPackagesAdmin();
+    } catch (error) {
+        if (window.showToast) window.showToast(error.message || 'Request update failed', 'danger');
+    }
+}
+
+async function loadPackagesAdmin() {
+    try {
+        const [offerResponse, requestResponse] = await Promise.all([
+            fetch('/api/devices/package-offers', { cache: 'no-store' }),
+            fetch('/api/devices/package-requests', { cache: 'no-store' })
+        ]);
+        const offerPayload = await offerResponse.json().catch(() => ({}));
+        const requestPayload = await requestResponse.json().catch(() => ({}));
+        if (!offerResponse.ok || offerPayload.success === false) {
+            throw new Error(offerPayload.message || 'Failed to load package plans');
+        }
+        if (!requestResponse.ok || requestPayload.success === false) {
+            throw new Error(requestPayload.message || 'Failed to load package requests');
+        }
+
+        packageOffers = offerPayload.offers || [];
+        renderPackagePlanList();
+        renderPackagePaymentHint(offerPayload.payment || null);
+        renderPackageRequests(requestPayload.requests || []);
+    } catch (error) {
+        const requests = document.getElementById('packageRequestList');
+        const plans = document.getElementById('packagePlanList');
+        if (requests) requests.innerHTML = `<div class="list-group-item text-danger">${escapeHtml(error.message || 'Failed to load packages')}</div>`;
+        if (plans) plans.innerHTML = `<div class="text-danger">${escapeHtml(error.message || 'Failed to load packages')}</div>`;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', loadPackagesAdmin);
+</script>

@@ -1,0 +1,101 @@
+<div class="container-fluid py-4">
+    <%- include('../partials/cap-banner.html', { cap: 'keyboard', label: 'matrix keyboard module (4×4 keypad)' }) %>
+    <div class="row mb-3">
+        <div class="col">
+            <h4 class="mb-0"><i class="bi bi-keyboard me-2 text-primary"></i>Keyboard / Matrix Input</h4>
+            <small class="text-muted">Monitor keypad matrix key presses from device</small>
+        </div>
+        <div class="col-auto">
+            <span class="badge bg-secondary" id="kbStatus">Idle</span>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <!-- Visual keypad -->
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header fw-semibold"><i class="bi bi-grid-3x3 me-2"></i>Keypad Preview</div>
+                <div class="card-body">
+                    <div id="keypadGrid" class="d-grid gap-1" style="grid-template-columns:repeat(4,1fr);display:grid;"></div>
+                    <hr>
+                    <button class="btn btn-primary w-100" onclick="startKbMonitor()">
+                        <i class="bi bi-play-circle me-1"></i>Start Monitor
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input buffer -->
+        <div class="col-md-8">
+            <div class="card mb-3">
+                <div class="card-header fw-semibold d-flex justify-content-between">
+                    <span><i class="bi bi-input-cursor me-2"></i>Input Buffer</span>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('kbBuffer').value=''">Clear</button>
+                </div>
+                <div class="card-body">
+                    <textarea id="kbBuffer" class="form-control font-monospace" rows="4" readonly
+                        placeholder="Key presses appear here…"></textarea>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header fw-semibold d-flex justify-content-between">
+                    <span><i class="bi bi-clock-history me-2"></i>Key Log</span>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('kbLog').innerHTML=''">Clear</button>
+                </div>
+                <div id="kbLog" class="card-body font-monospace small" style="max-height:200px;overflow-y:auto;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const DEVICE_ID = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
+const KEYS = ['1','2','3','A','4','5','6','B','7','8','9','C','*','0','#','D'];
+
+(function renderKeypad() {
+    const grid = document.getElementById('keypadGrid');
+    KEYS.forEach(k => {
+        const btn = document.createElement('button');
+        btn.id = 'key_' + k;
+        btn.className = 'btn btn-outline-secondary btn-sm fw-bold py-2';
+        btn.textContent = k;
+        grid.appendChild(btn);
+    });
+})();
+
+function startKbMonitor() {
+    document.getElementById('kbStatus').textContent = 'Monitoring';
+    document.getElementById('kbStatus').className = 'badge bg-success';
+    fetch('/api/gpio/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId: DEVICE_ID, command: 'keyboard-monitor', params: {} })
+    }).then(r => r.json()).then(d => {
+        if (!d.success) showToast(d.error || 'Failed', 'danger');
+    }).catch(() => showToast('Request failed', 'danger'));
+}
+
+function handleKey(key) {
+    // Flash key button
+    const btn = document.getElementById('key_' + key);
+    if (btn) {
+        btn.className = 'btn btn-primary btn-sm fw-bold py-2';
+        setTimeout(() => { btn.className = 'btn btn-outline-secondary btn-sm fw-bold py-2'; }, 200);
+    }
+    // Append to buffer
+    const buf = document.getElementById('kbBuffer');
+    buf.value += key;
+    // Log entry
+    const log = document.getElementById('kbLog');
+    const div = document.createElement('div');
+    div.textContent = `[${new Date().toLocaleTimeString()}] KEY: ${key}`;
+    log.prepend(div);
+}
+
+if (window.socket) {
+    socket.on('keyboard:key', data => {
+        if (data.deviceId !== DEVICE_ID) return;
+        handleKey(String(data.key));
+    });
+}
+</script>

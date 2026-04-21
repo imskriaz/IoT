@@ -1,0 +1,231 @@
+<!-- Device Test Center - Complete IO Testing Interface -->
+<div class="container-fluid px-0">
+    <!-- Header -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-3 gap-2">
+        <div>
+            <h2 class="mb-0 fs-4">
+                <i class="bi bi-bug me-2 text-danger"></i>Device Test Center
+            </h2>
+            <small class="text-muted">API-explorer style device testing with live MQTT and device response tracing</small>
+        </div>
+        <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-primary" onclick="runAllTests()" id="runAllBtn" title="Run all tests">
+                <i class="bi bi-play-circle"></i> Run All
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="clearTestResults()" id="clearResultsBtn" title="Clear results">
+                <i class="bi bi-eraser"></i> Clear
+            </button>
+            <span class="badge bg-success d-flex align-items-center" id="deviceTestStatus">
+                <span class="spinner-grow spinner-grow-sm me-1" style="width: 8px; height: 8px;"></span>
+                <span id="deviceTestStatusText">Checking...</span>
+            </span>
+        </div>
+    </div>
+
+    <!-- Test Console - Always visible at top -->
+    <div class="card mb-3">
+        <div class="card-header bg-dark text-white py-1 px-2 d-flex justify-content-between align-items-center">
+            <h6 class="mb-0"><i class="bi bi-terminal me-1"></i>Test Console</h6>
+            <div>
+                <span class="badge bg-success me-1" id="testSuccessCount">0</span>
+                <span class="badge bg-danger me-1" id="testFailCount">0</span>
+                <span class="badge bg-secondary" id="testTotalCount">0</span>
+                <button class="btn btn-sm btn-outline-light ms-2 py-0" onclick="exportTestLog()">
+                    <i class="bi bi-download"></i>
+                </button>
+            </div>
+        </div>
+        <div class="card-body p-0" style="max-height: 150px; overflow-y: auto; background: #1e1e1e; font-family: monospace;" id="testConsole">
+            <div class="p-1 text-success small console-line">
+                <span class="text-muted">[System]</span> Test console ready. The runner will log API send, MQTT payload, wait state, device response, and errors here.
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Test Controls - Compact Dropdown UI -->
+    <div class="row g-2 mb-3">
+        <div class="col-12 col-md-3">
+            <select class="form-select form-select-sm" id="testCategory">
+                <option value="">Select Category</option>
+            </select>
+        </div>
+
+        <div class="col-12 col-md-4">
+            <select class="form-select form-select-sm" id="testSelector">
+                <option value="">Select a test to run...</option>
+            </select>
+        </div>
+
+        <div class="col-12 col-md-3" id="testParameters"></div>
+
+        <div class="col-12 col-md-2 d-flex gap-1">
+            <button class="btn btn-sm btn-primary flex-grow-1" id="runTestBtn">
+                <i class="bi bi-play-fill"></i> Run
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" id="stopTestBtn" title="Stop test" disabled>
+                <i class="bi bi-stop-fill"></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="alert alert-warning d-none py-2 small" id="testSupportNotice"></div>
+
+    <!-- Quick Test Grid - Common tests at a glance -->
+    <div class="row g-1 mb-3">
+        <div class="col-12">
+            <div class="d-flex flex-wrap gap-1">
+                <span class="badge bg-primary quick-test-badge" data-test-badge="led" onclick="quickTest('led')">LED</span>
+                <span class="badge bg-success quick-test-badge" data-test-badge="microphone" onclick="quickTest('microphone')">Mic</span>
+                <span class="badge bg-warning quick-test-badge" data-test-badge="speaker" onclick="quickTest('speaker')">Speaker</span>
+                <span class="badge bg-info quick-test-badge" data-test-badge="camera" onclick="quickTest('camera')">Camera</span>
+                <span class="badge bg-danger quick-test-badge" data-test-badge="gps" onclick="quickTest('gps')">GPS</span>
+                <span class="badge bg-secondary quick-test-badge" data-test-badge="sdCard" onclick="quickTest('sdCard')">SD</span>
+                <span class="badge bg-dark quick-test-badge" data-test-badge="storageDiagnostics" onclick="quickTest('storageDiagnostics')">SD Diag</span>
+                <span class="badge bg-secondary quick-test-badge" data-test-badge="storageBenchmark" onclick="quickTest('storageBenchmark')">SD Bench</span>
+                <span class="badge bg-primary quick-test-badge" data-test-badge="wifi" onclick="quickTest('wifi')">WiFi</span>
+                <span class="badge bg-success quick-test-badge" data-test-badge="modem" onclick="quickTest('modem')">4G</span>
+                <span class="badge bg-warning quick-test-badge" data-test-badge="button" onclick="quickTest('button')">Button</span>
+                <span class="badge bg-info quick-test-badge" data-test-badge="gpioLoopback" onclick="quickTest('gpioLoopback')">Loopback</span>
+                <span class="badge bg-danger quick-test-badge" data-test-badge="battery" onclick="quickTest('battery')">Battery</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Current Test Status -->
+    <div class="card mb-3">
+        <div class="card-header bg-info text-white py-1 px-2">
+            <h6 class="mb-0"><i class="bi bi-activity me-1"></i>Live Test Status</h6>
+        </div>
+        <div class="card-body p-2">
+            <div class="row g-2 small">
+                <div class="col-6 col-md-3">
+                    <span class="text-muted">Current Test:</span>
+                    <span class="fw-bold ms-1" id="currentTestName">None</span>
+                </div>
+                <div class="col-6 col-md-3">
+                    <span class="text-muted">Status:</span>
+                    <span id="testStatus" class="ms-1"><span class="badge bg-secondary">Idle</span></span>
+                </div>
+                <div class="col-12 col-md-6">
+                    <div class="progress" style="height: 20px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated"
+                             id="testProgressBar" role="progressbar" style="width: 0%">0%</div>
+                    </div>
+                </div>
+                <div class="col-12 mt-1" id="liveTestResult">
+                    <span class="text-muted">Ready for test</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detailed Test Results -->
+    <div class="card">
+        <div class="card-header bg-secondary text-white py-1 px-2 d-flex justify-content-between">
+            <h6 class="mb-0"><i class="bi bi-clipboard-data me-1"></i>Test Results</h6>
+            <span class="small" id="resultTimestamp"></span>
+        </div>
+        <div class="card-body p-2" style="max-height: 300px; overflow-y: auto;">
+            <div id="detailedResults" class="small">
+                <div class="text-muted">No tests run yet. Select a test from dropdown and click Run.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Test Details Modal -->
+<div class="modal fade" id="testDetailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title">
+                    <i class="bi bi-file-text me-2"></i>Test Details: <span id="detailsTestName"></span>
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-2">
+                    <span class="text-muted">Time:</span>
+                    <span id="detailsTimestamp" class="ms-2"></span>
+                </div>
+                <div class="mb-2">
+                    <span class="text-muted">Result:</span>
+                    <span id="detailsResult" class="ms-2"></span>
+                </div>
+                <hr>
+                <pre id="detailsContent" class="bg-light p-2 rounded" style="max-height: 400px; overflow-y: auto;"></pre>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" onclick="exportTestLog()">
+                    <i class="bi bi-download"></i> Export
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/js/test.js"></script>
+
+<style>
+.console-line {
+    border-bottom: 1px solid #333;
+    font-family: 'Consolas', monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.console-line:hover {
+    background: #2a2a2a;
+    white-space: normal;
+    overflow: visible;
+}
+
+.test-result {
+    transition: all 0.2s;
+}
+
+.test-result:hover {
+    background: #f8f9fa;
+}
+
+.test-result.pass {
+    border-left-color: #198754 !important;
+}
+
+.test-result.fail {
+    border-left-color: #dc3545 !important;
+}
+
+.test-result.skip {
+    border-left-color: #6c757d !important;
+}
+
+.quick-test-badge {
+    cursor: pointer;
+    transition: all 0.2s;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.75rem;
+}
+
+.quick-test-badge:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.1);
+}
+
+.progress-bar-animated {
+    animation: progress-bar-stripes 1s linear infinite;
+}
+
+@media (max-width: 768px) {
+    .quick-test-badge {
+        padding: 0.3rem 0.4rem;
+        font-size: 0.7rem;
+    }
+
+    #testConsole {
+        max-height: 100px;
+    }
+}
+</style>

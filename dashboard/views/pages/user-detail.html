@@ -1,0 +1,730 @@
+<div class="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <h2 class="mb-1"><i class="bi bi-person-vcard me-2"></i><span id="userDetailHeading">User Account</span></h2>
+        <p class="text-muted mb-0" id="userDetailSubheading">Loading user profile, usage, and allocation details.</p>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <% if (canManageUser) { %>
+            <a class="btn btn-outline-secondary" href="/admin/users">
+                <i class="bi bi-people me-2"></i>Back to Users
+            </a>
+        <% } %>
+        <button class="btn btn-primary" type="button" onclick="loadUserDetail()">
+            <i class="bi bi-arrow-repeat me-2"></i>Refresh
+        </button>
+    </div>
+</div>
+
+<div class="row g-3 mb-4" id="userSummaryCards">
+    <div class="col-6 col-xl-3">
+        <div class="card h-100 border-0 bg-primary bg-opacity-10">
+            <div class="card-body">
+                <div class="small text-muted">Outgoing SMS</div>
+                <div class="display-6 fw-semibold" id="summaryOutgoingTotal">-</div>
+                <div class="small text-muted">All time</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-xl-3">
+        <div class="card h-100 border-0 bg-success bg-opacity-10">
+            <div class="card-body">
+                <div class="small text-muted">30 Day Usage</div>
+                <div class="display-6 fw-semibold" id="summaryOutgoing30d">-</div>
+                <div class="small text-muted">API + dashboard combined</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-xl-3">
+        <div class="card h-100 border-0 bg-warning bg-opacity-10">
+            <div class="card-body">
+                <div class="small text-muted">Assigned Devices</div>
+                <div class="display-6 fw-semibold" id="summaryAssignedDevices">-</div>
+                <div class="small text-muted">Current access scope</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-xl-3">
+        <div class="card h-100 border-0 bg-secondary bg-opacity-10">
+            <div class="card-body">
+                <div class="small text-muted">Audit Entries</div>
+                <div class="display-6 fw-semibold" id="summaryAuditEntries">-</div>
+                <div class="small text-muted">Recent sign-in history</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-12 col-xl-7">
+        <div class="card mb-4">
+            <div class="card-header bg-body py-3 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-person-lines-fill me-2"></i>Profile</h5>
+                <div id="userIdentityBadges" class="d-flex gap-2 flex-wrap"></div>
+            </div>
+            <div class="card-body">
+                <form id="userProfileForm" class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Username</label>
+                        <input class="form-control" id="profileUsername" disabled>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Full Name</label>
+                        <input class="form-control" id="profileName">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Email</label>
+                        <input type="email" class="form-control" id="profileEmail">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Role</label>
+                        <select class="form-select" id="profileRole" <% if (!canManageUser) { %>disabled<% } %>>
+                            <option value="viewer">Viewer</option>
+                            <option value="operator">Operator</option>
+                            <option value="admin">Admin</option>
+                            <option value="superadmin">Superadmin</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Status</label>
+                        <select class="form-select" id="profileIsActive" <% if (!canManageUser) { %>disabled<% } %>>
+                            <option value="true">Active</option>
+                            <option value="false">Inactive</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Created</label>
+                        <input class="form-control" id="profileCreatedAt" disabled>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Last Login</label>
+                        <input class="form-control" id="profileLastLogin" disabled>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Last Sent SMS</label>
+                        <input class="form-control" id="profileLastSentAt" disabled>
+                    </div>
+                    <div class="col-12 d-flex justify-content-end">
+                        <button class="btn btn-primary" type="submit">
+                            <i class="bi bi-check2-circle me-2"></i>Save Profile
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header bg-body py-3 d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="mb-0"><i class="bi bi-bar-chart-line me-2"></i>Usage Graph</h5>
+                    <div class="small text-muted">Outgoing SMS over the last 14 days, split between dashboard and API traffic.</div>
+                </div>
+                <div class="small text-muted" id="usageLegend">Dashboard and API usage</div>
+            </div>
+            <div class="card-body">
+                <div id="usageChart" class="usage-chart"></div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header bg-body py-3">
+                <h5 class="mb-0"><i class="bi bi-send-check me-2"></i>Usage Log</h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="ps-3">Time</th>
+                                <th>Device</th>
+                                <th>Recipient</th>
+                                <th>Source</th>
+                                <th>Status</th>
+                                <th class="pe-3">Message</th>
+                            </tr>
+                        </thead>
+                        <tbody id="usageLogBody">
+                            <tr><td colspan="6" class="text-center py-4 text-muted">Loading usage log...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header bg-body py-3">
+                <h5 class="mb-0"><i class="bi bi-journal-text me-2"></i>Audit Log</h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="ps-3">Time</th>
+                                <th>Result</th>
+                                <th>IP</th>
+                                <th>Reason</th>
+                                <th class="pe-3">User Agent</th>
+                            </tr>
+                        </thead>
+                        <tbody id="auditLogBody">
+                            <tr><td colspan="5" class="text-center py-4 text-muted">Loading audit log...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-5">
+        <div class="card mb-4">
+            <div class="card-header bg-body py-3">
+                <h5 class="mb-0"><i class="bi bi-door-open me-2"></i>Sessions</h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="list-group list-group-flush" id="sessionList">
+                    <div class="list-group-item text-muted">Loading sessions...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header bg-body py-3">
+                <h5 class="mb-0"><i class="bi bi-cpu me-2"></i>Allocated Devices</h5>
+            </div>
+            <div class="card-body">
+                <div id="assignedDeviceList" class="d-grid gap-2 mb-3">
+                    <div class="text-muted">Loading device allocation...</div>
+                </div>
+                <% if (canManageUser) { %>
+                    <hr>
+                    <h6 class="fw-semibold mb-3">Change Device Allocation</h6>
+                    <form id="deviceAssignmentForm">
+                        <div id="deviceAssignmentEditor" class="d-grid gap-2"></div>
+                        <div class="d-flex justify-content-end mt-3">
+                            <button class="btn btn-outline-primary" type="submit">
+                                <i class="bi bi-hdd-network me-2"></i>Save Device Allocation
+                            </button>
+                        </div>
+                    </form>
+                <% } %>
+            </div>
+        </div>
+
+        <% if (canManageUser) { %>
+            <div class="card mb-4">
+                <div class="card-header bg-body py-3">
+                    <h5 class="mb-0"><i class="bi bi-sliders me-2"></i>Admin Controls</h5>
+                </div>
+                <div class="card-body">
+                    <form id="adminControlsForm" class="row g-3">
+                        <div class="col-6">
+                            <label class="form-label">Shared SMS / day</label>
+                            <input type="number" min="0" class="form-control" id="ctrlSmsDayLimit">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">Shared SMS / month</label>
+                            <input type="number" min="0" class="form-control" id="ctrlSmsMonthLimit">
+                        </div>
+                        <div class="col-6">
+                            <div class="form-check form-switch mt-4">
+                                <input class="form-check-input" type="checkbox" id="ctrlAllowDashboard">
+                                <label class="form-check-label" for="ctrlAllowDashboard">Allow dashboard sends</label>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-check form-switch mt-4">
+                                <input class="form-check-input" type="checkbox" id="ctrlAllowApi">
+                                <label class="form-check-label" for="ctrlAllowApi">Allow API sends</label>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">Notes</label>
+                            <textarea class="form-control" rows="3" id="ctrlNotes" placeholder="Internal notes for this user"></textarea>
+                        </div>
+                        <div class="col-12 d-flex justify-content-end">
+                            <button class="btn btn-warning" type="submit">
+                                <i class="bi bi-save me-2"></i>Save Admin Controls
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        <% } %>
+
+        <div class="card">
+            <div class="card-header bg-body py-3">
+                <h5 class="mb-0"><i class="bi bi-box-seam me-2"></i>Package Requests</h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="list-group list-group-flush" id="packageRequestList">
+                    <div class="list-group-item text-muted">Loading package requests...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.usage-chart {
+    display: grid;
+    grid-template-columns: repeat(14, minmax(0, 1fr));
+    gap: 0.75rem;
+    align-items: end;
+    min-height: 250px;
+}
+
+.usage-chart-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.usage-chart-stack {
+    width: 100%;
+    max-width: 34px;
+    height: 180px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.16);
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    overflow: hidden;
+}
+
+.usage-chart-bar-dashboard {
+    background: linear-gradient(180deg, rgba(25, 135, 84, 0.75), rgba(25, 135, 84, 1));
+}
+
+.usage-chart-bar-api {
+    background: linear-gradient(180deg, rgba(13, 110, 253, 0.72), rgba(13, 110, 253, 1));
+}
+
+.usage-chart-day {
+    font-size: 0.72rem;
+    color: var(--bs-secondary-color);
+}
+
+.usage-chart-value {
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
+.device-alloc-item {
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.9rem;
+    padding: 0.8rem 0.9rem;
+    background: rgba(248, 249, 250, 0.85);
+}
+</style>
+
+<script>
+const USER_DETAIL_ID = <%= Number(targetUserId || 0) %>;
+const USER_DETAIL_CAN_MANAGE = <%= canManageUser ? 'true' : 'false' %>;
+let userDetailState = null;
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function formatDate(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function roleBadge(role) {
+    const palette = {
+        superadmin: 'bg-danger',
+        admin: 'bg-warning text-dark',
+        operator: 'bg-info text-dark',
+        viewer: 'bg-secondary'
+    };
+    return `<span class="badge ${palette[role] || 'bg-secondary'}">${escapeHtml(role || 'user')}</span>`;
+}
+
+function statusBadge(isActive) {
+    return isActive
+        ? '<span class="badge bg-success">Active</span>'
+        : '<span class="badge bg-danger">Inactive</span>';
+}
+
+function connectionBadge(status) {
+    return String(status || '').toLowerCase() === 'online'
+        ? '<span class="badge bg-success">Online</span>'
+        : '<span class="badge bg-secondary">Offline</span>';
+}
+
+function sourceBadge(source) {
+    const text = String(source || '').toLowerCase();
+    if (text.includes('api')) return '<span class="badge bg-primary">API</span>';
+    if (text.includes('scheduled')) return '<span class="badge bg-info text-dark">Scheduled</span>';
+    return '<span class="badge bg-success">Dashboard</span>';
+}
+
+function renderUsageChart(points) {
+    const target = document.getElementById('usageChart');
+    if (!target) return;
+    const items = Array.isArray(points) ? points : [];
+    const maxTotal = Math.max(1, ...items.map((point) => Number(point.outgoing_total || 0)));
+
+    target.innerHTML = items.map((point) => {
+        const total = Number(point.outgoing_total || 0);
+        const api = Number(point.api_total || 0);
+        const dashboard = Number(point.dashboard_total || 0);
+        const totalHeight = Math.max(6, Math.round((total / maxTotal) * 180));
+        const apiHeight = total ? Math.round((api / total) * totalHeight) : 0;
+        const dashboardHeight = Math.max(0, totalHeight - apiHeight);
+        return `
+            <div class="usage-chart-col" title="${escapeHtml(point.day)}: ${total} SMS">
+                <div class="usage-chart-value">${total}</div>
+                <div class="usage-chart-stack">
+                    <div class="usage-chart-bar-dashboard" style="height:${dashboardHeight}px"></div>
+                    <div class="usage-chart-bar-api" style="height:${apiHeight}px"></div>
+                </div>
+                <div class="usage-chart-day">${escapeHtml(point.day.slice(5))}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderSummary(payload) {
+    const user = payload.user || {};
+    const usage = payload.usage || {};
+    const usageSummary = usage.summary || {};
+    const devices = Array.isArray(payload.devices) ? payload.devices : [];
+    const audit = Array.isArray(payload.audit) ? payload.audit : [];
+    const controls = user.admin_controls || {};
+
+    document.getElementById('userDetailHeading').textContent = payload.permissions?.is_self
+        ? `My Account: ${user.username || ''}`
+        : `User Detail: ${user.username || ''}`;
+    document.getElementById('userDetailSubheading').textContent =
+        `Role ${user.role || 'viewer'} • ${controls.shared_sms_day_limit || 0 ? `${controls.shared_sms_day_limit}/day limit` : 'no day limit'} • ${controls.shared_sms_month_limit || 0 ? `${controls.shared_sms_month_limit}/month limit` : 'no month limit'}`;
+
+    document.getElementById('summaryOutgoingTotal').textContent = Number(usageSummary.outgoing_total || 0).toLocaleString();
+    document.getElementById('summaryOutgoing30d').textContent = Number(usageSummary.outgoing_30d || 0).toLocaleString();
+    document.getElementById('summaryAssignedDevices').textContent = Number(devices.length || 0).toLocaleString();
+    document.getElementById('summaryAuditEntries').textContent = Number(audit.length || 0).toLocaleString();
+
+    document.getElementById('profileUsername').value = user.username || '';
+    document.getElementById('profileName').value = user.name || '';
+    document.getElementById('profileEmail').value = user.email || '';
+    document.getElementById('profileRole').value = user.role || 'viewer';
+    document.getElementById('profileIsActive').value = user.is_active ? 'true' : 'false';
+    document.getElementById('profileCreatedAt').value = formatDate(user.created_at);
+    document.getElementById('profileLastLogin').value = formatDate(user.last_login);
+    document.getElementById('profileLastSentAt').value = formatDate(usageSummary.last_sent_at);
+
+    const badges = document.getElementById('userIdentityBadges');
+    if (badges) {
+        badges.innerHTML = `${roleBadge(user.role)} ${statusBadge(user.is_active)} ${user.is_protected ? '<span class="badge bg-dark">Protected</span>' : ''}`;
+    }
+
+    if (USER_DETAIL_CAN_MANAGE) {
+        document.getElementById('ctrlSmsDayLimit').value = Number(controls.shared_sms_day_limit || 0);
+        document.getElementById('ctrlSmsMonthLimit').value = Number(controls.shared_sms_month_limit || 0);
+        document.getElementById('ctrlAllowDashboard').checked = controls.allow_dashboard_send !== false;
+        document.getElementById('ctrlAllowApi').checked = controls.allow_api_send !== false;
+        document.getElementById('ctrlNotes').value = controls.notes || '';
+    }
+}
+
+function renderUsageLog(rows) {
+    const target = document.getElementById('usageLogBody');
+    if (!target) return;
+    const items = Array.isArray(rows) ? rows : [];
+    if (!items.length) {
+        target.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">No outgoing usage recorded for this user.</td></tr>';
+        return;
+    }
+
+    target.innerHTML = items.map((row) => `
+        <tr>
+            <td class="ps-3 small">${escapeHtml(formatDate(row.timestamp))}</td>
+            <td><code>${escapeHtml(row.device_id || '')}</code></td>
+            <td>${escapeHtml(row.to_number || '')}</td>
+            <td>${sourceBadge(row.source)}</td>
+            <td>${escapeHtml(row.status || 'queued')}</td>
+            <td class="pe-3"><div class="text-truncate" style="max-width:260px;" title="${escapeHtml(row.message || '')}">${escapeHtml(row.message || '')}</div></td>
+        </tr>
+    `).join('');
+}
+
+function renderAuditLog(rows) {
+    const target = document.getElementById('auditLogBody');
+    if (!target) return;
+    const items = Array.isArray(rows) ? rows : [];
+    if (!items.length) {
+        target.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-muted">No audit entries found for this user.</td></tr>';
+        return;
+    }
+
+    target.innerHTML = items.map((row) => `
+        <tr>
+            <td class="ps-3 small">${escapeHtml(formatDate(row.created_at))}</td>
+            <td>${row.success ? '<span class="badge bg-success">Success</span>' : '<span class="badge bg-danger">Failed</span>'}</td>
+            <td><small>${escapeHtml(row.ip || '—')}</small></td>
+            <td><small>${escapeHtml(row.reason || '—')}</small></td>
+            <td class="pe-3"><div class="text-truncate" style="max-width:220px;" title="${escapeHtml(row.user_agent || '')}">${escapeHtml(row.user_agent || '—')}</div></td>
+        </tr>
+    `).join('');
+}
+
+function renderSessions(rows) {
+    const target = document.getElementById('sessionList');
+    if (!target) return;
+    const items = Array.isArray(rows) ? rows : [];
+    if (!items.length) {
+        target.innerHTML = '<div class="list-group-item text-muted">No active sessions recorded.</div>';
+        return;
+    }
+
+    target.innerHTML = items.map((row) => `
+        <div class="list-group-item">
+            <div class="d-flex justify-content-between align-items-start gap-3">
+                <div>
+                    <div class="fw-semibold">${escapeHtml(row.device_info || 'Browser session')}</div>
+                    <div class="small text-muted">IP: ${escapeHtml(row.ip_address || '—')}</div>
+                    <div class="small text-muted">Login: ${escapeHtml(formatDate(row.logged_in_at))}</div>
+                    <div class="small text-muted">Last active: ${escapeHtml(formatDate(row.last_active))}</div>
+                </div>
+                <button class="btn btn-sm btn-outline-danger" type="button" onclick="terminateUserSession('${escapeHtml(row.id)}')">
+                    <i class="bi bi-x-circle me-1"></i>End
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function renderAssignedDevices(rows, availableDevices) {
+    const target = document.getElementById('assignedDeviceList');
+    if (!target) return;
+    const items = Array.isArray(rows) ? rows : [];
+    if (!items.length) {
+        target.innerHTML = '<div class="text-muted">No devices allocated to this user.</div>';
+    } else {
+        target.innerHTML = items.map((row) => `
+            <div class="device-alloc-item">
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                    <div>
+                        <div class="fw-semibold">${escapeHtml(row.name || row.device_id)}</div>
+                        <div class="small text-muted"><code>${escapeHtml(row.device_id)}</code> • ${escapeHtml(row.type || 'unknown')}</div>
+                        <div class="small text-muted">Assigned ${escapeHtml(formatDate(row.assigned_at))}</div>
+                    </div>
+                    <div class="text-end">
+                        ${connectionBadge(row.status)}
+                        <div class="small text-muted mt-1">${row.can_write ? 'Read + write' : 'Read only'}</div>
+                    </div>
+                </div>
+                ${row.package_name ? `<div class="small mt-2 text-muted">Package: <strong>${escapeHtml(row.package_name)}</strong></div>` : ''}
+            </div>
+        `).join('');
+    }
+
+    if (!USER_DETAIL_CAN_MANAGE) return;
+    const editor = document.getElementById('deviceAssignmentEditor');
+    if (!editor) return;
+    const assignedMap = new Map(items.map((row) => [String(row.device_id), row]));
+    const allDevices = Array.isArray(availableDevices) ? availableDevices : [];
+    editor.innerHTML = allDevices.map((device) => {
+        const assigned = assignedMap.get(String(device.id));
+        return `
+            <label class="device-alloc-item d-flex justify-content-between align-items-start gap-3">
+                <span>
+                    <span class="fw-semibold d-block">${escapeHtml(device.name || device.id)}</span>
+                    <span class="small text-muted"><code>${escapeHtml(device.id)}</code> • ${escapeHtml(device.type || 'unknown')}</span>
+                </span>
+                <span class="text-end">
+                    <span class="form-check form-switch d-inline-flex align-items-center justify-content-end gap-2 mb-2">
+                        <input class="form-check-input user-device-assign" type="checkbox" value="${escapeHtml(device.id)}" ${assigned ? 'checked' : ''}>
+                        <span class="small">Assigned</span>
+                    </span>
+                    <span class="form-check form-switch d-inline-flex align-items-center justify-content-end gap-2">
+                        <input class="form-check-input user-device-write" type="checkbox" value="${escapeHtml(device.id)}" ${assigned?.can_write ? 'checked' : ''} ${assigned ? '' : 'disabled'}>
+                        <span class="small">Write</span>
+                    </span>
+                </span>
+            </label>
+        `;
+    }).join('');
+
+    editor.querySelectorAll('.user-device-assign').forEach((checkbox) => {
+        checkbox.addEventListener('change', (event) => {
+            const writeToggle = editor.querySelector(`.user-device-write[value="${CSS.escape(event.target.value)}"]`);
+            if (writeToggle) {
+                writeToggle.disabled = !event.target.checked;
+                if (!event.target.checked) writeToggle.checked = false;
+            }
+        });
+    });
+}
+
+function renderPackageRequests(rows) {
+    const target = document.getElementById('packageRequestList');
+    if (!target) return;
+    const items = Array.isArray(rows) ? rows : [];
+    if (!items.length) {
+        target.innerHTML = '<div class="list-group-item text-muted">No package requests from this user.</div>';
+        return;
+    }
+
+    target.innerHTML = items.map((row) => `
+        <div class="list-group-item">
+            <div class="d-flex justify-content-between align-items-start gap-3">
+                <div>
+                    <div class="fw-semibold">${escapeHtml(row.package_name || 'Package')}</div>
+                    <div class="small text-muted"><code>${escapeHtml(row.device_id || '')}</code> • ৳${Number(row.price_bdt || 0).toLocaleString()}</div>
+                    <div class="small text-muted">Requested ${escapeHtml(formatDate(row.requested_at))}</div>
+                </div>
+                <span class="badge ${row.status === 'approved' ? 'bg-success' : (row.status === 'rejected' ? 'bg-danger' : 'bg-warning text-dark')}">${escapeHtml(row.status || 'pending')}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function loadUserDetail() {
+    try {
+        const response = await fetch(`/admin/api/users/${encodeURIComponent(USER_DETAIL_ID)}/detail`, { cache: 'no-store' });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.message || 'Failed to load user detail');
+        }
+        userDetailState = payload;
+        renderSummary(payload);
+        renderUsageChart(payload.usage?.chart || []);
+        renderUsageLog(payload.usage?.recent || []);
+        renderAuditLog(payload.audit || []);
+        renderSessions(payload.sessions || []);
+        renderAssignedDevices(payload.devices || [], payload.available_devices || []);
+        renderPackageRequests(payload.package_requests || []);
+    } catch (error) {
+        if (window.showToast) window.showToast(error.message || 'Failed to load user detail', 'danger');
+    }
+}
+
+async function terminateUserSession(sessionRecordId) {
+    try {
+        const confirmed = window.appConfirm
+            ? await window.appConfirm({
+                title: 'End Session',
+                message: 'Terminate this session now?',
+                confirmText: 'End Session',
+                confirmClass: 'btn btn-danger'
+            })
+            : window.confirm('Terminate this session?');
+        if (!confirmed) return;
+
+        const response = await fetch(`/admin/api/users/${encodeURIComponent(USER_DETAIL_ID)}/sessions/${encodeURIComponent(sessionRecordId)}`, {
+            method: 'DELETE',
+            headers: {
+                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+            }
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.message || payload.error || 'Failed to end session');
+        }
+        if (window.showToast) window.showToast(payload.message || 'Session terminated', 'success');
+        loadUserDetail();
+    } catch (error) {
+        if (window.showToast) window.showToast(error.message || 'Failed to end session', 'danger');
+    }
+}
+
+document.getElementById('userProfileForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+        const body = {
+            name: document.getElementById('profileName').value.trim(),
+            email: document.getElementById('profileEmail').value.trim()
+        };
+        if (USER_DETAIL_CAN_MANAGE) {
+            body.role = document.getElementById('profileRole').value;
+            body.is_active = document.getElementById('profileIsActive').value === 'true';
+        }
+        const response = await fetch(`/admin/api/users/${encodeURIComponent(USER_DETAIL_ID)}/profile`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+            },
+            body: JSON.stringify(body)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.message || 'Failed to save profile');
+        }
+        if (window.showToast) window.showToast(payload.message || 'Profile updated', 'success');
+        loadUserDetail();
+    } catch (error) {
+        if (window.showToast) window.showToast(error.message || 'Failed to save profile', 'danger');
+    }
+});
+
+document.getElementById('adminControlsForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+        const body = {
+            shared_sms_day_limit: Number(document.getElementById('ctrlSmsDayLimit').value || 0),
+            shared_sms_month_limit: Number(document.getElementById('ctrlSmsMonthLimit').value || 0),
+            allow_dashboard_send: document.getElementById('ctrlAllowDashboard').checked,
+            allow_api_send: document.getElementById('ctrlAllowApi').checked,
+            notes: document.getElementById('ctrlNotes').value.trim()
+        };
+        const response = await fetch(`/admin/api/users/${encodeURIComponent(USER_DETAIL_ID)}/admin-controls`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+            },
+            body: JSON.stringify(body)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.message || 'Failed to save admin controls');
+        }
+        if (window.showToast) window.showToast(payload.message || 'Admin controls updated', 'success');
+        loadUserDetail();
+    } catch (error) {
+        if (window.showToast) window.showToast(error.message || 'Failed to save admin controls', 'danger');
+    }
+});
+
+document.getElementById('deviceAssignmentForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+        const assignments = Array.from(document.querySelectorAll('.user-device-assign'))
+            .filter((checkbox) => checkbox.checked)
+            .map((checkbox) => ({
+                device_id: checkbox.value,
+                can_write: !!document.querySelector(`.user-device-write[value="${CSS.escape(checkbox.value)}"]`)?.checked
+            }));
+
+        const response = await fetch(`/admin/api/users/${encodeURIComponent(USER_DETAIL_ID)}/devices`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+            },
+            body: JSON.stringify({ assignments })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.message || 'Failed to save device allocation');
+        }
+        if (window.showToast) window.showToast(payload.message || 'Device allocation updated', 'success');
+        loadUserDetail();
+    } catch (error) {
+        if (window.showToast) window.showToast(error.message || 'Failed to save device allocation', 'danger');
+    }
+});
+
+document.addEventListener('DOMContentLoaded', loadUserDetail);
+</script>

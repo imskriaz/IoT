@@ -1,0 +1,662 @@
+<!-- Modem/Internet Management Page -->
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4 gap-3">
+    <div>
+        <h2 class="mb-1">
+            <i class="bi bi-globe2 me-2"></i>Internet Connection Manager
+        </h2>
+        <p class="text-muted mb-0">Manage mobile data, Wi-Fi connections, and internet sharing</p>
+    </div>
+    <div class="d-flex gap-2 align-items-center">
+        <span id="deviceOnlineStatus" class="badge bg-secondary d-flex align-items-center px-3 py-2">
+            <span class="spinner-grow spinner-grow-sm me-2" style="width: 0.8rem; height: 0.8rem;"></span>
+            <span id="deviceStatusText">Checking...</span>
+        </span>
+        <button class="btn btn-outline-primary" onclick="refreshStatus()">
+            <i class="bi bi-arrow-repeat"></i> Refresh
+        </button>
+    </div>
+</div>
+
+<!-- Device Offline Warning -->
+<div id="deviceOfflineWarning" class="alert alert-warning d-none align-items-center mb-4" role="alert">
+    <i class="bi bi-exclamation-triangle-fill fs-4 me-3 text-warning"></i>
+    <div class="flex-grow-1">
+        <strong>Device Offline</strong> - Cannot get real-time internet status.
+        <span class="d-block mt-1 small">Please check MQTT connection and device power.</span>
+    </div>
+</div>
+
+<!-- Internet Status Overview -->
+<div class="row g-3 mb-4">
+    <div class="col-12">
+        <div class="card" id="internetStatusCard">
+            <div class="card-body">
+                <div class="d-flex align-items-center">
+                    <div class="flex-shrink-0">
+                        <i class="bi bi-globe2 fs-1" id="internetIcon"></i>
+                    </div>
+                    <div class="flex-grow-1 ms-3">
+                        <h4 class="mb-1" id="internetStatus">Checking connection...</h4>
+                        <p class="mb-0" id="internetDetails">Connecting to device...</p>
+                    </div>
+                    <div class="flex-shrink-0">
+                        <span class="badge bg-primary p-2" id="activeSource">---</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Connection Sources Tabs -->
+<ul class="nav nav-tabs nav-fill mb-4" id="internetTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="mobile-tab" data-bs-toggle="tab" data-bs-target="#mobile" type="button">
+            <i class="bi bi-broadcast me-2"></i>Mobile Data
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="wifi-tab" data-bs-toggle="tab" data-bs-target="#wifi" type="button">
+            <i class="bi bi-wifi me-2"></i>Wi-Fi Client
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="hotspot-tab" data-bs-toggle="tab" data-bs-target="#hotspot" type="button">
+            <i class="bi bi-share me-2"></i>Share Internet
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content">
+    <!-- ==================== MOBILE DATA TAB ==================== -->
+    <div class="tab-pane fade show active" id="mobile" role="tabpanel">
+        <div class="row g-4">
+            <!-- Mobile Status Card -->
+            <div class="col-12 col-lg-6">
+                <div class="card h-100">
+                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="bi bi-broadcast me-2"></i>Mobile Data Status
+                        </h5>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="mobileToggle">
+                            <label class="form-check-label" for="mobileToggle" id="mobileToggleLabel">Enable</label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="text-center mb-4">
+                            <div class="display-1 mb-2">
+                                <i class="bi bi-broadcast" id="mobileIcon"></i>
+                            </div>
+                            <h4 id="mobileStatus">Disabled</h4>
+                    </div>
+
+                    <table class="table table-borderless">
+                            <tr>
+                                <td class="text-muted">Operator:</td>
+                                <td class="fw-bold" id="mobileOperator">-</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Network:</td>
+                                <td class="fw-bold" id="mobileNetwork">-</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Signal:</td>
+                                <td>
+                                    <div class="progress mb-1" style="height: 10px;">
+                                        <div class="progress-bar" id="mobileSignalBar" style="width: 0%"></div>
+                                    </div>
+                                    <span id="mobileSignal">0%</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">IP Address:</td>
+                                <td class="fw-bold" id="mobileIP">-</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">SIM Status:</td>
+                                <td class="fw-bold" id="simStatus">-</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">SIM Number:</td>
+                                <td class="fw-bold" id="simNumber">-</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Data Used:</td>
+                                <td class="fw-bold" id="mobileDataUsed">0 MB</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">SIM Number Action:</td>
+                                <td>
+                                    <button type="button" class="btn btn-sm btn-outline-info" id="detectSimNumberBtn" onclick="detectSimNumber()">
+                                        <i class="bi bi-sim me-1"></i>Detect SIM Number
+                                    </button>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- APN Configuration -->
+            <div class="col-12 col-lg-6">
+                <div class="card h-100">
+                    <div class="card-header bg-white py-3">
+                        <h5 class="mb-0">
+                            <i class="bi bi-gear me-2"></i>APN Configuration
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="apnForm" onsubmit="return false;">
+                            <div class="mb-3">
+                                <label class="form-label">APN</label>
+                                <input type="text" class="form-control" id="apnName" value="internet" placeholder="e.g., internet, carrier-apn">
+                                <small class="text-muted">Access Point Name from your carrier</small>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Username (optional)</label>
+                                <input type="text" class="form-control" id="apnUsername" placeholder="Usually blank">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Password (optional)</label>
+                                <input type="password" class="form-control" id="apnPassword" placeholder="Usually blank">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Authentication</label>
+                                <select class="form-select" id="apnAuth">
+                                    <option value="none">None</option>
+                                    <option value="pap">PAP</option>
+                                    <option value="chap">CHAP</option>
+                                </select>
+                            </div>
+                            <button type="button" class="btn btn-primary w-100" onclick="saveAPN()" id="apnSaveBtn">
+                                <i class="bi bi-save"></i> Save APN Settings
+                            </button>
+                        </form>
+                        
+                        <hr>
+                        
+                        <h6 class="fw-bold mb-3">Quick APN Presets</h6>
+                        <div class="d-flex flex-wrap gap-2">
+                            <button class="btn btn-sm btn-outline-secondary" type="button" data-apn-preset onclick="setAPN('internet', '', '', 'none')">Generic Internet</button>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" data-apn-preset onclick="setAPN('', '', '', 'none')">Blank / Custom</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Signal Quality Graph -->
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header bg-white py-3">
+                        <h5 class="mb-0">
+                            <i class="bi bi-graph-up me-2"></i>Signal History
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="modem-chart">
+                            <canvas id="signalChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== WIFI CLIENT TAB ==================== -->
+    <div class="tab-pane fade" id="wifi" role="tabpanel">
+        <div class="row g-4">
+            <!-- Wi-Fi Status -->
+            <div class="col-12 col-lg-5">
+                <div class="card h-100">
+                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="bi bi-wifi me-2"></i>Wi-Fi Status
+                        </h5>
+                        <div class="d-flex align-items-center gap-3">
+                            <span class="badge" id="wifiClientBadge">Disconnected</span>
+                            <div class="form-check form-switch mb-0">
+                                <input class="form-check-input" type="checkbox" id="wifiToggle">
+                                <label class="form-check-label" for="wifiToggle" id="wifiToggleLabel">Enable</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="text-center mb-4">
+                            <div class="display-1 mb-2">
+                                <i class="bi bi-wifi" id="wifiClientIcon"></i>
+                            </div>
+                            <h5 id="wifiClientSSID">Not Connected</h5>
+                        </div>
+
+                        <table class="table table-borderless">
+                            <tr>
+                                <td class="text-muted">Status:</td>
+                                <td>
+                                    <span class="badge" id="wifiClientStatus">Disconnected</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Signal:</td>
+                                <td>
+                                    <div class="progress mb-1" style="height: 10px;">
+                                        <div class="progress-bar" id="wifiClientSignalBar" style="width: 0%"></div>
+                                    </div>
+                                    <span id="wifiClientSignal">0%</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">IP Address:</td>
+                                <td class="fw-bold" id="wifiClientIP">-</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Security:</td>
+                                <td class="fw-bold" id="wifiClientSecurity">-</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Channel:</td>
+                                <td class="fw-bold" id="wifiClientChannel">-</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">BSSID:</td>
+                                <td class="fw-bold" id="wifiClientBSSID">-</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Selected Network:</td>
+                                <td class="fw-bold" id="wifiSavedProfileMeta">Not set</td>
+                            </tr>
+                        </table>
+
+                        <div class="d-grid gap-2 mt-3">
+                            <button class="btn btn-success" onclick="retrySavedWiFi()" id="retrySavedWiFiBtn" style="display: none;">
+                                <i class="bi bi-arrow-clockwise"></i> Retry Selected Network
+                            </button>
+                        </div>
+                        <div class="alert alert-warning small mt-3 mb-0 d-none" id="wifiClientDiagnostics" role="status"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Available Networks -->
+            <div class="col-12 col-lg-7">
+                <div class="card h-100">
+                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="bi bi-search me-2"></i>Available Networks
+                        </h5>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-sm btn-outline-secondary" onclick="openManualWiFiEntry()" id="manualWiFiBtn">
+                                <i class="bi bi-plus-lg"></i> Manual Entry
+                            </button>
+                            <button class="btn btn-sm btn-outline-primary" onclick="scanWiFiNetworks()" id="scanWiFiBtn">
+                                <i class="bi bi-search"></i> Scan
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="alert alert-info rounded-0 border-start-0 border-end-0 mb-0 small d-none" id="wifiClientHint" role="status"></div>
+                        <div class="px-3 py-2 border-bottom bg-light small text-muted" id="wifiNetworksSummary">
+                            Saved and scanned networks are shown together here. Saved entries keep the same actions as scanned results and carry a Saved badge.
+                        </div>
+                        <div class="list-group list-group-flush" id="wifiNetworksList" style="max-height: 400px; overflow-y: auto;">
+                            <div class="text-center py-5">
+                                <i class="bi bi-wifi fs-1 text-muted d-block mb-3"></i>
+                                <p class="text-muted">Click Scan to see available networks</p>
+                                <button class="btn btn-primary" onclick="scanWiFiNetworks()">
+                                    <i class="bi bi-search"></i> Scan Now
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header bg-white py-3">
+                        <h5 class="mb-0">
+                            <i class="bi bi-graph-up me-2"></i>Wi-Fi Signal History
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="modem-chart">
+                            <canvas id="wifiSignalChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== SHARE INTERNET TAB ==================== -->
+    <div class="tab-pane fade" id="hotspot" role="tabpanel">
+        <div class="row g-4">
+            <!-- Wi-Fi Hotspot -->
+            <div class="col-12 col-lg-6">
+                <div class="card h-100">
+                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="bi bi-wifi me-2"></i>Wi-Fi Hotspot
+                        </h5>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="hotspotToggle">
+                            <label class="form-check-label" for="hotspotToggle" id="hotspotToggleLabel">Enable</label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="text-center mb-4">
+                            <div class="display-1 mb-2">
+                                <i class="bi bi-wifi" id="hotspotIcon"></i>
+                            </div>
+                            <h5 id="hotspotSSID">Hotspot</h5>
+                            <p class="text-muted small" id="hotspotClientsCount">0 clients connected</p>
+                        </div>
+                        
+                        <form id="hotspotForm" onsubmit="return false;">
+                            <div class="mb-3">
+                                <label class="form-label">SSID</label>
+                                <input type="text" class="form-control" id="hotspotSsid" value="Hotspot">
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Password</label>
+                                <div class="input-group">
+                                    <input type="password" class="form-control" id="hotspotPassword" value="12345678">
+                                    <button class="btn btn-outline-secondary" type="button" onclick="toggleHotspotPassword()">
+                                        <i class="bi bi-eye"></i>
+                                    </button>
+                                </div>
+                                <small class="text-muted">Minimum 8 characters</small>
+                            </div>
+                            
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">Security</label>
+                                    <select class="form-select" id="hotspotSecurity">
+                                        <option value="WPA2-PSK">WPA2-PSK</option>
+                                        <option value="WPA3">WPA3</option>
+                                        <option value="open">Open (No password)</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Band</label>
+                                    <select class="form-select" id="hotspotBand">
+                                        <option value="2.4GHz">2.4 GHz</option>
+                                        <option value="5GHz">5 GHz</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">Channel</label>
+                                    <input type="number" class="form-control" id="hotspotChannel" value="6" min="1" max="11">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Max Clients</label>
+                                    <input type="number" class="form-control" id="hotspotMaxClients" value="10" min="1" max="50">
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="hotspotHidden">
+                                <label class="form-check-label" for="hotspotHidden">Hide SSID (Hidden Network)</label>
+                            </div>
+                            
+                            <button type="button" class="btn btn-primary w-100" onclick="saveHotspotConfig()" id="hotspotSaveBtn">
+                                <i class="bi bi-save"></i> Apply Hotspot Settings
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Connected Clients & USB Tethering -->
+            <div class="col-12 col-lg-6">
+                <!-- USB Tethering -->
+                <div class="card mb-4">
+                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="bi bi-usb-symbol me-2"></i>USB Tethering
+                        </h5>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="usbToggle">
+                            <label class="form-check-label" for="usbToggle" id="usbToggleLabel">Enable</label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="flex-shrink-0 me-3">
+                                <i class="bi bi-usb-symbol fs-1" id="usbIcon"></i>
+                            </div>
+                            <div class="flex-grow-1">
+                                <h6 id="usbStatus">Disabled</h6>
+                                <p class="mb-0 small text-muted" id="usbDetails">Connect USB cable to share internet</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Connected Hotspot Clients -->
+                <div class="card">
+                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="bi bi-people me-2"></i>Connected Clients
+                        </h5>
+                        <div>
+                            <span class="badge bg-primary" id="clientCount">0</span>
+                            <button class="btn btn-sm btn-outline-secondary ms-2" id="refreshHotspotClientsBtn" onclick="loadHotspotClients()">
+                                <i class="bi bi-arrow-repeat"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="list-group list-group-flush" id="clientsList" style="max-height: 300px; overflow-y: auto;">
+                            <div class="text-center py-4 text-muted">
+                                <i class="bi bi-wifi fs-1 d-block mb-3"></i>
+                                <p>No clients connected</p>
+                                <p class="small">Hotspot client activity will appear here when the device reports it.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="bi bi-bar-chart me-2"></i>Data Usage
+                        </h5>
+                        <button class="btn btn-sm btn-outline-danger" onclick="resetDataUsage()" id="dataUsageResetBtn">
+                            <i class="bi bi-arrow-counterclockwise"></i> Reset Counters
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="row text-center g-3">
+                            <div class="col-12 col-md-4">
+                                <div class="border rounded p-3 h-100">
+                                    <small class="text-muted">Total Sent</small>
+                                    <h4 id="totalSent">0 B</h4>
+                                </div>
+                            </div>
+                            <div class="col-12 col-md-4">
+                                <div class="border rounded p-3 h-100">
+                                    <small class="text-muted">Total Received</small>
+                                    <h4 id="totalReceived">0 B</h4>
+                                </div>
+                            </div>
+                            <div class="col-12 col-md-4">
+                                <div class="border rounded p-3 h-100">
+                                    <small class="text-muted">Total Usage</small>
+                                    <h4 id="totalUsage">0 MB</h4>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row mt-4 g-3">
+                            <div class="col-12 col-md-6">
+                                <div class="border rounded p-3 h-100">
+                                    <h6 class="fw-bold mb-3">Mobile Data</h6>
+                                    <div class="d-flex justify-content-between mb-2">
+                                        <span class="text-muted">Sent:</span>
+                                        <span id="mobileSent">0 B</span>
+                                    </div>
+                                    <div class="d-flex justify-content-between">
+                                        <span class="text-muted">Received:</span>
+                                        <span id="mobileReceived">0 B</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-12 col-md-6">
+                                <div class="border rounded p-3 h-100">
+                                    <h6 class="fw-bold mb-3">Wi-Fi Data</h6>
+                                    <div class="d-flex justify-content-between mb-2">
+                                        <span class="text-muted">Sent:</span>
+                                        <span id="wifiSent">0 B</span>
+                                    </div>
+                                    <div class="d-flex justify-content-between">
+                                        <span class="text-muted">Received:</span>
+                                        <span id="wifiReceived">0 B</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mt-4">
+                            <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-1 mb-2">
+                                <h6 class="fw-bold mb-0">Usage History</h6>
+                                <small class="text-muted" id="dataUsageNotice">Waiting for live traffic counters from the device.</small>
+                            </div>
+                            <div class="modem-chart">
+                                <canvas id="dataUsageHistoryChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Wi-Fi Connect Modal -->
+<div class="modal fade" id="wifiConnectModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title">
+                    <i class="bi bi-wifi me-2"></i>Connect to Wi-Fi
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="wifiConnectForm" onsubmit="return false;">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">SSID</label>
+                        <input type="text" class="form-control" id="connectSsidDisplay" placeholder="Enter Wi-Fi name">
+                    </div>
+                    
+                    <div class="mb-3" id="passwordField">
+                        <label class="form-label fw-bold">Password</label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="connectPassword">
+                            <button class="btn btn-outline-secondary" type="button" onclick="togglePassword()">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3" id="securityField">
+                        <label class="form-label fw-bold">Security Type</label>
+                        <select class="form-select" id="connectSecurity">
+                            <option value="WPA2-PSK">WPA2-PSK</option>
+                            <option value="WPA3">WPA3</option>
+                            <option value="WPA/WPA2-PSK">WPA/WPA2-PSK</option>
+                            <option value="WEP">WEP</option>
+                            <option value="open">Open</option>
+                        </select>
+                    </div>
+                    
+                    <div class="alert alert-info small">
+                        <i class="bi bi-info-circle me-2"></i>
+                        Scan results and manual entries are saved in dashboard known networks for this device. Leave password blank only when reusing an already saved password for the same SSID.
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="connectToWiFi()">Connect</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Client Limit Modal -->
+<div class="modal fade" id="clientLimitModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-warning">
+                <h5 class="modal-title">
+                    <i class="bi bi-speedometer2 me-2"></i>Set Client Speed Limit
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="limitClientMac">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Speed Limit (Kbps)</label>
+                    <input type="number" class="form-control" id="clientSpeedLimit" value="512" min="0" max="100000">
+                    <small class="text-muted">0 = unlimited, 512 Kbps = ~64 KB/s</small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-warning" onclick="applyClientLimit()">Apply Limit</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Chart.js for signal graph -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<!-- Load script -->
+<script src="/js/modem.js?v=<%= assetVersion %>"></script>
+
+<style>
+/* modem-specific overrides */
+.list-group-item {
+    cursor: pointer;
+}
+
+.list-group-item.active {
+    background-color: #0d6efd;
+    color: white;
+    border-color: #0d6efd;
+}
+
+#internetStatusCard {
+    transition: all 0.3s ease;
+}
+
+.table td {
+    padding: 0.75rem 0.5rem;
+}
+
+.modem-chart {
+    height: 270px;
+    position: relative;
+}
+
+.modem-chart canvas {
+    height: 100% !important;
+    width: 100% !important;
+}
+
+@media (max-width: 767.98px) {
+    .form-switch {
+        padding-left: 2.5em;
+    }
+}
+</style>
