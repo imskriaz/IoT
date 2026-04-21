@@ -2962,29 +2962,12 @@ function setupEventListeners() {
     }
     
     // Message character counter
-    const messageTextarea = document.querySelector('textarea[name="message"]');
+    const messageTextarea = document.querySelector('#quickSmsForm textarea[name="message"]');
     if (messageTextarea) {
         messageTextarea.addEventListener('input', function() {
-            const count = this.value.length;
-            
-            // Find the closest counter
-            const modal = this.closest('.modal');
-            const counterId = modal ? 'composeCharCount' : 'charCount';
-            const counter = document.getElementById(counterId);
-            
-            if (counter) {
-                counter.textContent = count;
-                
-                // Change color when approaching limit
-                counter.className = '';
-                if (count > 140) {
-                    counter.classList.add('text-warning');
-                }
-                if (count >= 160) {
-                    counter.classList.add('text-danger');
-                }
-            }
+            updateDashboardSmsComposerState(this);
         });
+        updateDashboardSmsComposerState(messageTextarea);
     }
     
     // Mobile touch optimization
@@ -3028,6 +3011,70 @@ function updateDeviceStatus() {
     requestDashboardStatus({ force: true }).catch(error => console.error('Error updating device status:', error));
 }
 
+function analyzeDashboardSmsText(text) {
+    if (window.smsComposeLimits?.analyze) {
+        return window.smsComposeLimits.analyze(text);
+    }
+
+    const normalized = String(text || '');
+    return {
+        text: normalized,
+        characters: normalized.length,
+        utf8Bytes: normalized.length,
+        parts: normalized.length > 160 ? Math.ceil(normalized.length / 153) : 1,
+        encoding: 'gsm7',
+        valid: normalized.length <= 1023,
+        overByteLimit: normalized.length > 1023,
+        overPartLimit: false
+    };
+}
+
+function clampDashboardSmsText(text) {
+    if (window.smsComposeLimits?.clamp) {
+        return window.smsComposeLimits.clamp(text);
+    }
+    return String(text || '').slice(0, 1023);
+}
+
+function updateDashboardSmsComposerState(textarea) {
+    const charCount = document.getElementById('charCount');
+    const charBytes = document.getElementById('charBytes');
+    const charParts = document.getElementById('charParts');
+
+    if (!textarea || !charCount) {
+        return analyzeDashboardSmsText(textarea?.value || '');
+    }
+
+    const clamped = clampDashboardSmsText(textarea.value);
+    if (clamped !== textarea.value) {
+        textarea.value = clamped;
+    }
+
+    const analysis = analyzeDashboardSmsText(textarea.value);
+    charCount.textContent = String(analysis.characters);
+    if (charBytes) {
+        charBytes.textContent = String(analysis.utf8Bytes);
+    }
+    if (charParts) {
+        charParts.textContent = `(${analysis.parts} part${analysis.parts === 1 ? '' : 's'}, ${analysis.encoding === 'gsm7' ? 'GSM-7' : 'Unicode'})`;
+    }
+
+    charCount.className = '';
+    if (analysis.utf8Bytes >= 0.8 * (window.smsComposeLimits?.SMS_MAX_UTF8_BYTES || 1023)) {
+        charCount.classList.add('text-warning');
+    }
+    if (analysis.parts > 1) {
+        charCount.classList.remove('text-warning');
+        charCount.classList.add('text-info');
+    }
+    if (!analysis.valid) {
+        charCount.classList.remove('text-info');
+        charCount.classList.add('text-danger');
+    }
+
+    return analysis;
+}
+
 // Refresh connection status manually
 function refreshConnectionStatus(event) {
     const btn = event?.target?.closest ? event.target.closest('button') : null;
@@ -3064,6 +3111,7 @@ function sendSms(formId, button) {
     const message = String(formData.get('message') || '').trim();
     const activeDeviceId = getDashboardSmsDeviceId();
     const selectedSim = getSelectedSimSlotSnapshot(latestDeviceStatus);
+    const analysis = analyzeDashboardSmsText(message);
     
     // Validate
     if (!to || !message) {
@@ -3074,8 +3122,8 @@ function sendSms(formId, button) {
         showToast('Select a device first.', 'warning');
         return;
     }
-    if (message.length > 160) {
-        showToast('SMS message must be 160 characters or less.', 'warning');
+    if (!analysis.valid) {
+        showToast(window.smsComposeLimits?.formatError?.(analysis) || 'SMS message exceeds the device limit.', 'warning');
         return;
     }
     
@@ -3150,9 +3198,7 @@ function sendSms(formId, button) {
             form.reset();
             
             // Reset counter
-            const counterId = formId === 'quickSmsForm' ? 'charCount' : 'composeCharCount';
-            const counter = document.getElementById(counterId);
-            if (counter) counter.textContent = '0';
+            updateDashboardSmsComposerState(form.querySelector('textarea[name="message"]'));
 
             updateUnreadBadge();
             refreshDashboardSmsPreview();

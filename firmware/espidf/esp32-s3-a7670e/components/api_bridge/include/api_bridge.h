@@ -35,7 +35,7 @@
 typedef struct {
     char path[CONFIG_UNIFIED_API_BRIDGE_PATH_LEN];
     char number[UNIFIED_TEXT_SHORT_LEN];
-    char text[160];
+    char text[UNIFIED_SMS_TEXT_MAX_LEN];
     char code[UNIFIED_TEXT_SHORT_LEN];
     char key[CONFIG_UNIFIED_API_BRIDGE_CONFIG_KEY_LEN];
     char value[CONFIG_UNIFIED_API_BRIDGE_CONFIG_VALUE_LEN];

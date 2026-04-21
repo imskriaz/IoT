@@ -1099,6 +1099,10 @@ static unified_action_response_t api_bridge_dispatch_action(
             response = sms_service_send(request ? request->number : NULL, request ? request->text : NULL, action->timeout_ms);
             response.action = *action;
             return response;
+        case UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART:
+            response = sms_service_send_multipart(request ? request->number : NULL, request ? request->text : NULL, action->timeout_ms);
+            response.action = *action;
+            return response;
         case UNIFIED_ACTION_CMD_SEND_USSD:
             return api_bridge_execute_send_ussd(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_CANCEL_USSD:

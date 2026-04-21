@@ -16,7 +16,6 @@ function buildUssdSimPayload(scope = {}) {
     const payload = {};
     if (scope.simSlot !== null && scope.simSlot !== undefined) {
         payload.sim_slot = scope.simSlot;
-        payload.simSlot = scope.simSlot;
     }
     return payload;
 }

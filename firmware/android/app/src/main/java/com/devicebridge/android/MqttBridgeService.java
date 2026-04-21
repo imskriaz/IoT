@@ -56,6 +56,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Queue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
@@ -510,11 +511,7 @@ public class MqttBridgeService extends Service {
         String number = firstNonEmpty(data.optString("number", ""), data.optString("to", ""));
         String text = firstNonEmpty(data.optString("text", ""), data.optString("message", ""));
         int timeoutMs = data.optInt("timeout_ms", data.optInt("timeoutMs", data.optInt("timeout", 90000)));
-        Integer preferredSimSlot = firstInteger(
-                jsonInteger(data, "sim_slot"),
-                jsonInteger(data, "simSlot"),
-                jsonInteger(data, "slot")
-        );
+        Integer preferredSimSlot = requestedSimSlot(data);
         Integer preferredSubscriptionId = firstInteger(
                 jsonInteger(data, "subscription_id"),
                 jsonInteger(data, "sim_subscription_id"),
@@ -553,11 +550,7 @@ public class MqttBridgeService extends Service {
             return;
         }
 
-        Integer preferredSimSlot = firstInteger(
-                jsonInteger(data, "sim_slot"),
-                jsonInteger(data, "simSlot"),
-                jsonInteger(data, "slot")
-        );
+        Integer preferredSimSlot = requestedSimSlot(data);
         Integer preferredSubscriptionId = firstInteger(
                 jsonInteger(data, "subscription_id"),
                 jsonInteger(data, "sim_subscription_id"),
@@ -617,26 +610,23 @@ public class MqttBridgeService extends Service {
                 data.optString("ussd", ""),
                 data.optString("text", "")
         );
+        final int timeoutMs = data.optInt("timeout_ms", data.optInt("timeoutMs", data.optInt("timeout", 60000)));
         if (code.isEmpty()) {
-            publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_code_required", null, 60000);
+            publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_code_required", null, timeoutMs);
             return;
         }
         if (Build.VERSION.SDK_INT < 26) {
             logConsoleEvent("ussd", "USSD request rejected: Android version too old");
-            publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_not_supported", null, 60000);
+            publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_not_supported", null, timeoutMs);
             return;
         }
         if (checkSelfPermission(Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
             logConsoleEvent("ussd", "USSD request rejected: CALL_PHONE permission missing");
-            publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_permission_denied", null, 60000);
+            publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_permission_denied", null, timeoutMs);
             return;
         }
 
-        Integer preferredSimSlot = firstInteger(
-                jsonInteger(data, "sim_slot"),
-                jsonInteger(data, "simSlot"),
-                jsonInteger(data, "slot")
-        );
+        Integer preferredSimSlot = requestedSimSlot(data);
         Integer preferredSubscriptionId = firstInteger(
                 jsonInteger(data, "subscription_id"),
                 jsonInteger(data, "sim_subscription_id"),
@@ -646,7 +636,7 @@ public class MqttBridgeService extends Service {
         TelephonyManager telephonyManager = resolveTelephonyManagerForCommand(preferredSimSlot, preferredSubscriptionId);
         if (telephonyManager == null) {
             logConsoleEvent("ussd", "USSD request rejected: telephony unavailable");
-            publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_telephony_unavailable", null, 60000);
+            publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_telephony_unavailable", null, timeoutMs);
             return;
         }
 
@@ -662,11 +652,21 @@ public class MqttBridgeService extends Service {
         } catch (JSONException ignored) {
         }
 
+        final AtomicBoolean finished = new AtomicBoolean(false);
+        final ScheduledFuture<?>[] timeoutFutureRef = new ScheduledFuture<?>[1];
+
         try {
             telephonyManager.sendUssdRequest(code, new TelephonyManager.UssdResponseCallback() {
                 @Override
                 public void onReceiveUssdResponse(TelephonyManager telephonyManager, String request, CharSequence response) {
                     executor.execute(() -> {
+                        ScheduledFuture<?> timeoutFuture = timeoutFutureRef[0];
+                        if (timeoutFuture != null) {
+                            timeoutFuture.cancel(false);
+                        }
+                        if (!finished.compareAndSet(false, true)) {
+                            return;
+                        }
                         String responseText = response == null ? "" : response.toString();
                         logConsoleEvent("ussd", "USSD response received for " + request);
                         publishUssdResult(request, responseText, "success", false);
@@ -677,13 +677,20 @@ public class MqttBridgeService extends Service {
                             payload.put("response", responseText);
                         } catch (JSONException ignored) {
                         }
-                        publishActionResult(actionId, "send_ussd", "completed", 0, "ussd_response_received", payload, 60000);
+                        publishActionResult(actionId, "send_ussd", "completed", 0, "ussd_response_received", payload, timeoutMs);
                     });
                 }
 
                 @Override
                 public void onReceiveUssdResponseFailed(TelephonyManager telephonyManager, String request, int failureCode) {
                     executor.execute(() -> {
+                        ScheduledFuture<?> timeoutFuture = timeoutFutureRef[0];
+                        if (timeoutFuture != null) {
+                            timeoutFuture.cancel(false);
+                        }
+                        if (!finished.compareAndSet(false, true)) {
+                            return;
+                        }
                         String detail = mapUssdFailure(failureCode);
                         logConsoleEvent("ussd", "USSD response failed: " + detail);
                         publishUssdResult(request, detail, "failed", false);
@@ -694,19 +701,41 @@ public class MqttBridgeService extends Service {
                             payload.put("failure_code", failureCode);
                         } catch (JSONException ignored) {
                         }
-                        publishActionResult(actionId, "send_ussd", "failed", failureCode, detail, payload, 60000);
+                        publishActionResult(actionId, "send_ussd", "failed", failureCode, detail, payload, timeoutMs);
                     });
                 }
             }, new Handler(Looper.getMainLooper()));
 
+            timeoutFutureRef[0] = executor.schedule(() -> {
+                if (!finished.compareAndSet(false, true)) {
+                    return;
+                }
+
+                logConsoleEvent("ussd", "USSD response timed out for " + code);
+                publishUssdResult(code, "ussd_response_timeout", "failed", false);
+
+                JSONObject payload = new JSONObject();
+                try {
+                    payload.put("code", code);
+                    payload.put("timeout_ms", timeoutMs);
+                } catch (JSONException ignored) {
+                }
+                publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_response_timeout", payload, timeoutMs);
+            }, Math.max(1000, timeoutMs), TimeUnit.MILLISECONDS);
+
             logConsoleEvent("ussd", "USSD request sent: " + code);
-            publishActionResult(actionId, "send_ussd", "accepted", 0, "ussd_sent", acceptedPayload, 60000);
+            publishActionResult(actionId, "send_ussd", "accepted", 0, "ussd_sent", acceptedPayload, timeoutMs);
         } catch (SecurityException error) {
             logConsoleEvent("ussd", "USSD request rejected: permission denied");
-            publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_permission_denied", null, 60000);
+            publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_permission_denied", null, timeoutMs);
         } catch (RuntimeException error) {
+            ScheduledFuture<?> timeoutFuture = timeoutFutureRef[0];
+            if (timeoutFuture != null) {
+                timeoutFuture.cancel(false);
+            }
+            finished.set(true);
             logConsoleEvent("ussd", "USSD request failed: " + detailForError(error, "ussd_send_failed"));
-            publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_send_failed", acceptedPayload, 60000);
+            publishActionResult(actionId, "send_ussd", "failed", 1, "ussd_send_failed", acceptedPayload, timeoutMs);
         }
     }
 
@@ -1587,6 +1616,14 @@ public class MqttBridgeService extends Service {
                 return null;
             }
         }
+    }
+
+    private static Integer requestedSimSlot(JSONObject data) {
+        return firstInteger(
+                jsonInteger(data, "sim_slot"),
+                jsonInteger(data, "simSlot"),
+                jsonInteger(data, "slot")
+        );
     }
 
     private DeviceIdentitySnapshot captureDeviceIdentity(TelephonyManager telephonyManager) {

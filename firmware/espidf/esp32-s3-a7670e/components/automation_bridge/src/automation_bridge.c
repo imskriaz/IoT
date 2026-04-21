@@ -399,6 +399,9 @@ static unified_action_command_t automation_bridge_parse_command_name(const char 
     if (strcmp(normalized, "send_sms") == 0) {
         return UNIFIED_ACTION_CMD_SEND_SMS;
     }
+    if (strcmp(normalized, "send_sms_multipart") == 0) {
+        return UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART;
+    }
     if (strcmp(normalized, "send_ussd") == 0) {
         return UNIFIED_ACTION_CMD_SEND_USSD;
     }

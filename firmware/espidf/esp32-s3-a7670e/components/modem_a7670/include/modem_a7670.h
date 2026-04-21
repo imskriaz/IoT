@@ -45,6 +45,13 @@ esp_err_t modem_a7670_send_sms(
     size_t response_len,
     uint32_t timeout_ms
 );
+esp_err_t modem_a7670_send_sms_multipart(
+    const char *number,
+    const char *text,
+    char *response,
+    size_t response_len,
+    uint32_t timeout_ms
+);
 esp_err_t modem_a7670_dial(
     const char *number,
     char *response,
@@ -97,4 +104,5 @@ void modem_a7670_set_mqtt_event_listener(void (*listener)(void));
 void modem_a7670_set_sms_event_listener(void (*listener)(void));
 bool modem_a7670_pop_sms_index(int *out_index);
 bool modem_a7670_pop_ussd_result(unified_ussd_payload_t *out_payload);
+esp_err_t modem_a7670_consume_pending_sms(unified_sms_payload_t *out_payload, uint32_t timeout_ms);
 esp_err_t modem_a7670_read_sms(int storage_index, unified_sms_payload_t *out_payload, uint32_t timeout_ms);

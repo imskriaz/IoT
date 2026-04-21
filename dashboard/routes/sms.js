@@ -12,6 +12,7 @@ const {
 const { DEFAULT_DEVICE_ID } = require('../config/device');
 const { resolveDeviceId } = require('../utils/deviceResolver');
 const { decodeSmsRecord } = require('../utils/smsUnicode');
+const { validateSmsMessageSize } = require('../utils/smsLimits');
 const smsCache = require('../services/smsCache');
 const { createRateLimiter } = require('../utils/rateLimiter');
 const { queueSmsForDelivery } = require('../services/smsQueue');
@@ -633,8 +634,7 @@ router.post('/bulk-import', [
  *             schema: { $ref: '#/components/schemas/Error' }
  */
 router.post('/send', smsRateLimit, [
-    body('message').notEmpty().withMessage('Message is required')
-        .isLength({ max: 160 }).withMessage('Message must be less than 160 characters'),
+    body('message').custom(validateSmsMessageSize),
     body('simSlot').optional({ values: 'falsy' }).isInt({ min: 0, max: 7 }).withMessage('simSlot must be a valid SIM slot')
 ], async (req, res) => {
     try {
@@ -1212,7 +1212,7 @@ router.post('/mark-all-read', async (req, res) => {
 
 router.post('/templates', [
     body('title').trim().notEmpty().isLength({ max: 80 }).withMessage('Title required (max 80 chars)'),
-    body('message').trim().notEmpty().isLength({ max: 160 }).withMessage('Message required (max 160 chars)')
+    body('message').custom(validateSmsMessageSize)
 ], async (req, res) => {
     try {
         const errors = validationResult(req);
@@ -1235,7 +1235,7 @@ router.post('/templates', [
 
 router.put('/templates/:id', [
     body('title').trim().notEmpty().isLength({ max: 80 }).withMessage('Title required (max 80 chars)'),
-    body('message').trim().notEmpty().isLength({ max: 160 }).withMessage('Message required (max 160 chars)')
+    body('message').custom(validateSmsMessageSize)
 ], async (req, res) => {
     try {
         const { id } = req.params;
@@ -1277,7 +1277,7 @@ router.delete('/templates/:id', async (req, res) => {
 
 // POST /api/sms/scheduled — create a scheduled SMS
 router.post('/scheduled', [
-    body('message').trim().notEmpty().withMessage('Message required').isLength({ max: 160 }).withMessage('Message required (max 160 chars)'),
+    body('message').custom(validateSmsMessageSize),
     body('send_at').isISO8601().withMessage('send_at must be a valid ISO date-time'),
     body('deviceId').optional().trim(),
     body('simSlot').optional({ values: 'falsy' }).isInt({ min: 0, max: 7 }).withMessage('simSlot must be a valid SIM slot')

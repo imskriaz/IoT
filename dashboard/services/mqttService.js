@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 const EventEmitter = require('events');
 const crypto = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
+const { resolveSmsCommand } = require('../utils/smsLimits');
 
 function hasEnv(name) {
     return Object.prototype.hasOwnProperty.call(process.env, name);
@@ -23,15 +24,32 @@ function parsePort(value, fallback) {
 }
 
 function buildSimScopedPayload(payload = {}, options = {}) {
-    const scopedPayload = { ...payload };
-    const simSlot = Number.parseInt(String(options?.simSlot ?? options?.sim_slot ?? '').trim(), 10);
+    const scopedPayload = normalizeMqttContractPayload(payload);
+    const simSlot = Number.parseInt(
+        String(options?.simSlot ?? options?.sim_slot ?? scopedPayload.sim_slot ?? '').trim(),
+        10
+    );
 
     if (Number.isInteger(simSlot) && simSlot >= 0) {
         scopedPayload.sim_slot = simSlot;
-        scopedPayload.simSlot = simSlot;
     }
 
     return scopedPayload;
+}
+
+function normalizeMqttContractPayload(payload = {}) {
+    const normalized = { ...(payload || {}) };
+    const simSlot = Number.parseInt(String(normalized.sim_slot ?? normalized.simSlot ?? '').trim(), 10);
+
+    delete normalized.simSlot;
+
+    if (Number.isInteger(simSlot) && simSlot >= 0) {
+        normalized.sim_slot = simSlot;
+    } else if (normalized.sim_slot === '' || normalized.sim_slot === null || normalized.sim_slot === undefined) {
+        delete normalized.sim_slot;
+    }
+
+    return normalized;
 }
 
 function buildOptionsFromEnvironment(fallback = {}, overrides = {}) {
@@ -75,6 +93,7 @@ function sanitizeMqttError(error) {
 
 const DURABLE_COMMANDS = new Set([
     'send-sms',
+    'send-sms-multipart',
     'restart',
     'restart-modem',
     'ota-update',
@@ -103,6 +122,7 @@ const DURABLE_COMMANDS = new Set([
 
 const ACK_REQUIRED_DURABLE_COMMANDS = new Set([
     'send-sms',
+    'send-sms-multipart',
     'restart',
     'restart-modem',
     'ota-update',
@@ -130,11 +150,13 @@ const ACK_REQUIRED_DURABLE_COMMANDS = new Set([
 ]);
 
 const ASYNC_RESULT_DURABLE_COMMANDS = new Set([
-    'send-sms'
+    'send-sms',
+    'send-sms-multipart'
 ]);
 
 const NON_REPLAY_SAFE_COMMANDS = new Set([
     'send-sms',
+    'send-sms-multipart',
     'send-ussd',
     'cancel-ussd',
     'make-call',
@@ -148,6 +170,7 @@ const NON_REPLAY_SAFE_COMMANDS = new Set([
 
 const TELEPHONY_COMMANDS = new Set([
     'send-sms',
+    'send-sms-multipart',
     'send-ussd',
     'cancel-ussd',
     'make-call',
@@ -386,6 +409,8 @@ class MQTTService extends EventEmitter {
         switch (String(command || '').trim()) {
             case 'send-sms':
                 return 'send_sms';
+            case 'send-sms-multipart':
+                return 'send_sms_multipart';
             case 'send-ussd':
                 return 'send_ussd';
             case 'make-call':
@@ -408,12 +433,16 @@ class MQTTService extends EventEmitter {
     _buildFirmwareCompatibleMessage(command, payload = {}, messageId, source) {
         const normalizedCommand = String(command || '').trim();
 
-        if (normalizedCommand === 'send-sms') {
+        if (normalizedCommand === 'send-sms' || normalizedCommand === 'send-sms-multipart') {
             const message = {
                 action_id: messageId,
                 number: String(payload.to || payload.number || '').trim(),
-                text: String(payload.message || payload.text || '')
+                text: String(payload.message || payload.text || ''),
+                command: normalizedCommand === 'send-sms-multipart' ? 'send_sms_multipart' : 'send_sms'
             };
+            if (Number.isFinite(Number(payload.timeout)) && Number(payload.timeout) > 0) {
+                message.timeout = Number(payload.timeout);
+            }
             if (payload.sim_slot !== null && payload.sim_slot !== undefined && payload.sim_slot !== '') {
                 message.sim_slot = Number(payload.sim_slot);
             }
@@ -431,6 +460,7 @@ class MQTTService extends EventEmitter {
 
         switch (normalizedCommand) {
             case 'send-sms':
+            case 'send-sms-multipart':
                 if (!message.number && payload.to) message.number = String(payload.to).trim();
                 if (!message.text && payload.message) message.text = String(payload.message);
                 break;
@@ -925,6 +955,7 @@ class MQTTService extends EventEmitter {
             case 'cancel-ussd':
                 return 90_000;
             case 'send-sms':
+            case 'send-sms-multipart':
                 return 90_000;
             case 'make-call':
             case 'call-dial':
@@ -998,7 +1029,7 @@ class MQTTService extends EventEmitter {
 
     _generateCommandMessageId(command) {
         const rawCommand = String(command || '').trim().toLowerCase();
-        const prefix = rawCommand === 'send-sms'
+        const prefix = rawCommand === 'send-sms' || rawCommand === 'send-sms-multipart'
             ? 'sms'
             : (rawCommand.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 12) || 'cmd');
         const stamp = Date.now().toString(36);
@@ -1095,6 +1126,7 @@ class MQTTService extends EventEmitter {
 
         switch (normalized) {
             case 'send-sms':
+            case 'send-sms-multipart':
             case 'send-ussd':
             case 'cancel-ussd':
             case 'make-call':
@@ -1369,10 +1401,11 @@ class MQTTService extends EventEmitter {
             return Promise.reject(new Error('MQTT not connected'));
         }
 
+        const normalizedPayload = normalizeMqttContractPayload(payload);
         const topic = `device/${deviceId}/command/${command}`;
         const messageId = options.messageId || this._generateCommandMessageId(command);
         const compatibilityResponse = this._maybeHandleCompatibilityCommand(deviceId, command, messageId, options);
-        const message = this._buildFirmwareCompatibleMessage(command, payload, messageId, options.source || 'dashboard');
+        const message = this._buildFirmwareCompatibleMessage(command, normalizedPayload, messageId, options.source || 'dashboard');
 
         if (compatibilityResponse) {
             return compatibilityResponse;
@@ -1398,7 +1431,7 @@ class MQTTService extends EventEmitter {
                 this.pendingMessages.set(messageId, {
                     command,
                     deviceId,
-                    payload,
+                    payload: normalizedPayload,
                     timestamp: Date.now(),
                     resolve,
                     reject,
@@ -1543,7 +1576,7 @@ class MQTTService extends EventEmitter {
     }
 
     _extractSmsTracking(row) {
-        if (String(row?.command || '').trim() !== 'send-sms') {
+        if (!['send-sms', 'send-sms-multipart'].includes(String(row?.command || '').trim())) {
             return null;
         }
 
@@ -1719,7 +1752,7 @@ class MQTTService extends EventEmitter {
                 `SELECT *
                  FROM device_command_queue
                  WHERE device_id = ?
-                   AND command = 'send-sms'
+                   AND command IN ('send-sms', 'send-sms-multipart')
                    AND message_id = ?
                    AND status IN ('pending', 'dispatching', 'waiting_response', 'failed')
                  ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC
@@ -1736,7 +1769,7 @@ class MQTTService extends EventEmitter {
             `SELECT *
              FROM device_command_queue
              WHERE device_id = ?
-               AND command = 'send-sms'
+               AND command IN ('send-sms', 'send-sms-multipart')
                AND status IN ('pending', 'dispatching', 'waiting_response', 'failed')
              ORDER BY
                 CASE
@@ -1978,6 +2011,7 @@ class MQTTService extends EventEmitter {
             return this._publishCommandNow(deviceId, command, payload, waitForResponse, timeout, options);
         }
 
+        const normalizedPayload = normalizeMqttContractPayload(payload);
         const queueId = this._generatePersistentQueueId();
         const messageId = options.messageId || this._generateCommandMessageId(command);
         const requiresResponse = this._requiresDurableAck(command, waitForResponse, options);
@@ -1994,7 +2028,7 @@ class MQTTService extends EventEmitter {
                 queueId,
                 this._normalizeDeviceId(deviceId),
                 command,
-                JSON.stringify(payload || {}),
+                JSON.stringify(normalizedPayload),
                 messageId,
                 requiresResponse ? 1 : 0,
                 this._isReplaySafeCommand(command, options) ? 1 : 0,
@@ -2111,6 +2145,7 @@ class MQTTService extends EventEmitter {
 
     publishCommand(deviceId, command, payload = {}, waitForResponse = false, timeout = 30000, options = {}) {
         const normalizedDeviceId = String(deviceId || '').trim();
+        const normalizedPayload = normalizeMqttContractPayload(payload);
         if (!normalizedDeviceId) {
             const error = new Error('No active device selected');
             error.code = 'DEVICE_ID_REQUIRED';
@@ -2118,7 +2153,7 @@ class MQTTService extends EventEmitter {
         }
 
         if (this._isDurableCommand(command, options)) {
-            return this.enqueuePersistentDeviceCommand(normalizedDeviceId, command, payload, waitForResponse, timeout, options);
+            return this.enqueuePersistentDeviceCommand(normalizedDeviceId, command, normalizedPayload, waitForResponse, timeout, options);
         }
 
         if (!this.connected) {
@@ -2128,9 +2163,15 @@ class MQTTService extends EventEmitter {
         const topic = `device/${normalizedDeviceId}/command/${command}`;
         const messageId = options?.messageId || this._generateCommandMessageId(command);
         const compatibilityResponse = this._maybeHandleCompatibilityCommand(normalizedDeviceId, command, messageId, options);
-        const message = this._buildFirmwareCompatibleMessage(command, payload, messageId, options?.source || 'dashboard');
 
         const executePublish = async () => {
+            const message = this._buildFirmwareCompatibleMessage(
+                command,
+                { ...normalizedPayload, timeout },
+                messageId,
+                options?.source || 'dashboard'
+            );
+
             this.markDeviceBusy(normalizedDeviceId, command);
 
             if (compatibilityResponse) {
@@ -2276,7 +2317,8 @@ class MQTTService extends EventEmitter {
 
     // SMS Commands
     sendSms(deviceId, to, message) {
-        return this.publishCommand(deviceId, 'send-sms', { to, message }, true, 60000);
+        const resolved = resolveSmsCommand(message);
+        return this.publishCommand(deviceId, resolved.command, { to, message }, true, 60000);
     }
 
     // Call Commands

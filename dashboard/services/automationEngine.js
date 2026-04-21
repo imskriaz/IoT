@@ -2,6 +2,7 @@
 
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
+const { resolveSmsCommand } = require('../utils/smsLimits');
 const notificationService = require('./notificationService');
 
 class AutomationEngine {
@@ -408,10 +409,15 @@ class AutomationEngine {
                     });
                     break;
                 case 'action.send_sms':
-                    await this._publishCommand(context.deviceId, 'send-sms', {
-                        to: this._interpolate(cfg.to || '', context),
-                        message: this._interpolate(cfg.message || '', context)
-                    });
+                    {
+                        const to = this._interpolate(cfg.to || '', context);
+                        const message = this._interpolate(cfg.message || '', context);
+                        const resolved = resolveSmsCommand(message);
+                        await this._publishCommand(context.deviceId, resolved.command, {
+                            to,
+                            message
+                        });
+                    }
                     break;
                 case 'action.send_notification': {
                     const title = this._interpolate(cfg.title || 'Automation Alert', context);

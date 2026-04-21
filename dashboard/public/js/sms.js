@@ -96,6 +96,94 @@
         return `${requestUrl.pathname}${requestUrl.search}${requestUrl.hash}`;
     }
 
+    function analyzeSmsComposeText(text) {
+        if (window.smsComposeLimits?.analyze) {
+            return window.smsComposeLimits.analyze(text);
+        }
+
+        const normalized = String(text || '');
+        return {
+            text: normalized,
+            characters: normalized.length,
+            utf8Bytes: normalized.length,
+            parts: normalized.length > 160 ? Math.ceil(normalized.length / 153) : 1,
+            encoding: 'gsm7',
+            valid: normalized.length <= 1023,
+            overByteLimit: normalized.length > 1023,
+            overPartLimit: false
+        };
+    }
+
+    function clampSmsComposeText(text) {
+        if (window.smsComposeLimits?.clamp) {
+            return window.smsComposeLimits.clamp(text);
+        }
+        return String(text || '').slice(0, 1023);
+    }
+
+    function updateSmsComposeCounter(fieldId, options = {}) {
+        const field = typeof fieldId === 'string' ? document.getElementById(fieldId) : fieldId;
+        const countEl = document.getElementById(options.countId);
+        const byteEl = options.byteId ? document.getElementById(options.byteId) : null;
+        const partsEl = options.partsId ? document.getElementById(options.partsId) : null;
+
+        if (!field) {
+            return analyzeSmsComposeText('');
+        }
+
+        const clamped = clampSmsComposeText(field.value);
+        if (clamped !== field.value) {
+            field.value = clamped;
+        }
+
+        const analysis = analyzeSmsComposeText(field.value);
+        if (countEl) {
+            countEl.textContent = String(analysis.characters);
+            countEl.className = '';
+            if (analysis.utf8Bytes >= 0.8 * (window.smsComposeLimits?.SMS_MAX_UTF8_BYTES || 1023)) {
+                countEl.classList.add('text-warning');
+            }
+            if (analysis.parts > 1) {
+                countEl.classList.remove('text-warning');
+                countEl.classList.add('text-info');
+            }
+            if (!analysis.valid) {
+                countEl.classList.remove('text-info');
+                countEl.classList.add('text-danger');
+            }
+        }
+        if (byteEl) {
+            byteEl.textContent = String(analysis.utf8Bytes);
+        }
+        if (partsEl) {
+            const contractLabel = analysis.parts > 1 ? 'multipart' : 'single';
+            const singleLimit = analysis.singlePartLimit || (analysis.encoding === 'gsm7' ? 160 : 70);
+            partsEl.textContent = `(${contractLabel}: ${analysis.parts} part${analysis.parts === 1 ? '' : 's'}, ${analysis.encoding === 'gsm7' ? 'GSM-7' : 'Unicode'}, limit ${singleLimit})`;
+            partsEl.classList.toggle('text-info', analysis.parts > 1);
+            partsEl.classList.toggle('text-muted', analysis.parts <= 1);
+        }
+
+        return analysis;
+    }
+
+    function bindSmsComposeCounter(fieldId, options = {}) {
+        const field = document.getElementById(fieldId);
+        if (!field) {
+            return;
+        }
+
+        if (field.dataset.smsLimitBound !== '1') {
+            field.dataset.smsLimitBound = '1';
+            field.addEventListener('input', function () {
+                updateSmsComposeCounter(field, options);
+            });
+        }
+
+        updateSmsComposeCounter(field, options);
+    }
+
+    window.updateSmsComposeCounterById = updateSmsComposeCounter;
+
     function fetchSmsJson(url, options = {}) {
         const requestOptions = { ...options };
         const method = String(requestOptions.method || 'GET').toUpperCase();
@@ -2124,9 +2212,18 @@
         if (chatMessage && chatCount && chatMessage.dataset.charBound !== '1') {
             chatMessage.dataset.charBound = '1';
             chatMessage.addEventListener('input', function () {
-                chatCount.textContent = String(this.value.length);
+                updateSmsComposeCounter(this, {
+                    countId: 'smsChatCharCount',
+                    byteId: 'smsChatByteCount',
+                    partsId: 'smsChatParts'
+                });
                 this.style.height = 'auto';
                 this.style.height = `${Math.min(this.scrollHeight, 112)}px`;
+            });
+            updateSmsComposeCounter(chatMessage, {
+                countId: 'smsChatCharCount',
+                byteId: 'smsChatByteCount',
+                partsId: 'smsChatParts'
             });
         }
 
@@ -2327,15 +2424,11 @@
                 const form = document.getElementById('composeSmsForm');
                 if (form) form.reset();
                 updateRecipientMeta('modalTo');
-                const charCount = document.getElementById('modalCharCount');
-                if (charCount) {
-                    charCount.textContent = '0';
-                    charCount.className = '';
-                }
-                const smsParts = document.getElementById('smsParts');
-                if (smsParts) {
-                    smsParts.textContent = '(Single SMS only)';
-                }
+                updateSmsComposeCounter('modalMessage', {
+                    countId: 'modalCharCount',
+                    byteId: 'modalByteCount',
+                    partsId: 'smsParts'
+                });
             });
         }
 
@@ -2520,10 +2613,23 @@
     }
 
     function attachCharCounter() {
+        bindSmsComposeCounter('modalMessage', {
+            countId: 'modalCharCount',
+            byteId: 'modalByteCount',
+            partsId: 'smsParts'
+        });
+        bindSmsComposeCounter('schedMessage', {
+            countId: 'schedCharCount',
+            byteId: 'schedByteCount',
+            partsId: 'schedParts'
+        });
+        return;
+
         const messageInput = document.getElementById('modalMessage');
         const charCount = document.getElementById('modalCharCount');
         const smsParts = document.getElementById('smsParts');
         const singleSmsLimit = 160;
+        const multipartLimit = 1023;
 
         if (messageInput && charCount) {
             messageInput.addEventListener('input', function () {
@@ -2541,9 +2647,12 @@
                 }
 
                 if (smsParts) {
-                    smsParts.innerHTML = !isGsm
-                        ? '<span class="badge bg-secondary">Single SMS only (Unicode text)</span>'
-                        : '<span class="badge bg-secondary">Single SMS only</span>';
+                    const segmentSize = isGsm ? 153 : 67;
+                    const parts = count === 0 ? 1 : Math.ceil(count / segmentSize);
+                    const label = count <= singleSmsLimit
+                        ? `1 part${isGsm ? '' : ' (Unicode)'}`
+                        : `${parts} parts${isGsm ? '' : ' (Unicode)'}`;
+                    smsParts.innerHTML = `<span class="badge bg-secondary">${label}</span>`;
                 }
 
                 // Visual feedback
@@ -2551,11 +2660,29 @@
                 if (count > singleSmsLimit - 20) {
                     charCount.classList.add('text-warning');
                 }
-                if (count >= singleSmsLimit) {
+                if (count > singleSmsLimit) {
+                    charCount.classList.remove('text-warning');
+                    charCount.classList.add('text-info');
+                }
+                if (count >= multipartLimit) {
+                    charCount.classList.remove('text-info');
                     charCount.classList.add('text-danger');
                 }
             });
         }
+    }
+
+    function attachCharCounter() {
+        bindSmsComposeCounter('modalMessage', {
+            countId: 'modalCharCount',
+            byteId: 'modalByteCount',
+            partsId: 'smsParts'
+        });
+        bindSmsComposeCounter('schedMessage', {
+            countId: 'schedCharCount',
+            byteId: 'schedByteCount',
+            partsId: 'schedParts'
+        });
     }
 
     function handleChatSendSms(e) {
@@ -2566,6 +2693,7 @@
         const to = recipients[0] || '';
         const messageEl = document.getElementById('smsChatMessage');
         const message = String(messageEl?.value || '').trim();
+        const messageAnalysis = analyzeSmsComposeText(message);
         const button = document.getElementById('smsChatSendBtn') || e.submitter;
         const activeDeviceId = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
         const sendMode = getChatSendMode();
@@ -2586,6 +2714,10 @@
         }
         if (!activeDeviceId) {
             showToast('Select a device first.', 'warning');
+            return;
+        }
+        if (!messageAnalysis.valid) {
+            showToast(window.smsComposeLimits?.formatError?.(messageAnalysis) || 'SMS message exceeds the device limit.', 'warning');
             return;
         }
 
@@ -2685,6 +2817,7 @@
         const recipients = Array.isArray(phoneValidation.values) ? phoneValidation.values : [phoneValidation.value].filter(Boolean);
         const to = recipients[0] || '';
         const message = document.getElementById('modalMessage')?.value.trim();
+        const messageAnalysis = analyzeSmsComposeText(message);
         const button = this;
         const activeDeviceId = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
 
@@ -2701,6 +2834,10 @@
 
         if (!activeDeviceId) {
             showToast('Select a device first.', 'warning');
+            return;
+        }
+        if (!messageAnalysis.valid) {
+            showToast(window.smsComposeLimits?.formatError?.(messageAnalysis) || 'SMS message exceeds the device limit.', 'warning');
             return;
         }
 

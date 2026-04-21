@@ -3429,8 +3429,7 @@ describe('Dashboard quick routes', () => {
             'send-ussd',
             {
                 code: '*123#',
-                sim_slot: 1,
-                simSlot: 1
+                sim_slot: 1
             },
             false,
             60000,
@@ -3473,8 +3472,7 @@ describe('Dashboard quick routes', () => {
             'send-ussd',
             {
                 code: '*2#',
-                sim_slot: 0,
-                simSlot: 0
+                sim_slot: 0
             },
             false,
             60000,

@@ -8,18 +8,33 @@
 #include "esp_timer.h"
 #include "unified_runtime.h"
 
+#define MODEM_A7670_SMS_SINGLE_TEXT_LEN_BYTES   160U
+#define MODEM_A7670_SMS_SEGMENT_TEXT_LEN_BYTES  153U
+#define MODEM_A7670_SMS_UCS2_SINGLE_TEXT_LEN     70U
+#define MODEM_A7670_SMS_UCS2_SEGMENT_TEXT_LEN    67U
+#define MODEM_A7670_SMS_MAX_SEGMENTS             15U
+#define MODEM_A7670_SMS_READ_RESPONSE_LEN       768U
+#define MODEM_A7670_SMS_COMMAND_LEN             192U
+#define MODEM_A7670_SMS_UCS2_NUMBER_LEN        (UNIFIED_TEXT_SHORT_LEN * 4U + 1U)
+#define MODEM_A7670_SMS_UCS2_TEXT_LEN          (UNIFIED_SMS_TEXT_MAX_LEN * 4U + 1U)
 #define MODEM_A7670_USSD_CANCEL_URC_WAIT_MS      3000U
 #define MODEM_A7670_USSD_CANCEL_POLL_QUIET_MS     250U
 #define MODEM_A7670_USSD_CANCEL_IDLE_SLICE_MS     100U
 
+static bool modem_a7670_sms_decode_ucs2_hex(const char *input, char *output, size_t output_len);
+static bool modem_a7670_sms_next_utf8_char(const char *text, size_t *out_len);
+
 static bool modem_a7670_parse_sms_payload_from_response(const char *response, unified_sms_payload_t *out_payload) {
     const char *header = NULL;
-    const char *quote = NULL;
+    const char *status_start = NULL;
+    const char *status_end = NULL;
     const char *from_start = NULL;
     const char *from_end = NULL;
     const char *text_start = NULL;
     const char *text_end = NULL;
-    int quote_index = 0;
+    const char *terminator = NULL;
+    char raw_from[MODEM_A7670_SMS_UCS2_NUMBER_LEN] = {0};
+    char raw_text[MODEM_A7670_SMS_READ_RESPONSE_LEN] = {0};
 
     if (!response || !out_payload) {
         return false;
@@ -31,41 +46,752 @@ static bool modem_a7670_parse_sms_payload_from_response(const char *response, un
     }
 
     memset(out_payload, 0, sizeof(*out_payload));
-    quote = header;
-    while ((quote = strchr(quote, '"')) != NULL) {
-        ++quote_index;
-        if (quote_index == 2) {
-            from_start = quote + 1;
-            break;
-        }
-        ++quote;
+    status_start = strchr(header, '"');
+    if (!status_start) {
+        return false;
     }
+
+    status_end = strchr(status_start + 1, '"');
+    if (!status_end) {
+        return false;
+    }
+
+    from_start = strchr(status_end + 1, '"');
     if (!from_start) {
         return false;
     }
+    from_start += 1;
 
     from_end = strchr(from_start, '"');
     if (!from_end) {
         return false;
     }
 
-    snprintf(out_payload->from, sizeof(out_payload->from), "%.*s", (int)(from_end - from_start), from_start);
+    snprintf(raw_from, sizeof(raw_from), "%.*s", (int)(from_end - from_start), from_start);
+    if (!modem_a7670_sms_decode_ucs2_hex(raw_from, out_payload->from, sizeof(out_payload->from))) {
+        snprintf(out_payload->from, sizeof(out_payload->from), "%.*s", (int)sizeof(out_payload->from) - 1, raw_from);
+    }
 
     text_start = strstr(from_end, "\r\n");
     if (!text_start) {
         return false;
     }
     text_start += 2;
-    text_end = strstr(text_start, "\r\n");
-    if (!text_end) {
-        text_end = text_start + strlen(text_start);
+
+    terminator = strstr(text_start, "\r\n\r\nOK");
+    if (terminator) {
+        text_end = terminator;
+    } else {
+        terminator = strstr(text_start, "\r\nOK");
+        text_end = terminator ? terminator : (text_start + strlen(text_start));
     }
 
-    snprintf(out_payload->text, sizeof(out_payload->text), "%.*s", (int)(text_end - text_start), text_start);
+    snprintf(raw_text, sizeof(raw_text), "%.*s", (int)(text_end - text_start), text_start);
+    if (!modem_a7670_sms_decode_ucs2_hex(raw_text, out_payload->text, sizeof(out_payload->text))) {
+        snprintf(out_payload->text, sizeof(out_payload->text), "%.*s", (int)sizeof(out_payload->text) - 1, raw_text);
+    }
     snprintf(out_payload->detail, sizeof(out_payload->detail), "%s", "incoming_sms");
+    out_payload->sim_slot = 0U;
     out_payload->timestamp_ms = unified_time_now_ms();
     out_payload->outgoing = false;
     return true;
+}
+
+static uint8_t modem_a7670_sms_message_reference(void) {
+    return (uint8_t)((unified_time_now_ms() % 255U) + 1U);
+}
+
+static int modem_a7670_sms_hex_value(char value) {
+    if (value >= '0' && value <= '9') {
+        return value - '0';
+    }
+    if (value >= 'A' && value <= 'F') {
+        return value - 'A' + 10;
+    }
+    if (value >= 'a' && value <= 'f') {
+        return value - 'a' + 10;
+    }
+    return -1;
+}
+
+static bool modem_a7670_sms_decode_ucs2_hex(const char *input, char *output, size_t output_len) {
+    size_t read_index = 0U;
+    size_t write_index = 0U;
+
+    if (!input || !output || output_len == 0U) {
+        return false;
+    }
+
+    output[0] = '\0';
+    if (input[0] == '\0') {
+        return true;
+    }
+
+    while (input[read_index] != '\0') {
+        int nibble0 = 0;
+        int nibble1 = 0;
+        int nibble2 = 0;
+        int nibble3 = 0;
+        uint16_t codepoint = 0U;
+
+        if (input[read_index + 3U] == '\0') {
+            return false;
+        }
+
+        nibble0 = modem_a7670_sms_hex_value(input[read_index]);
+        nibble1 = modem_a7670_sms_hex_value(input[read_index + 1U]);
+        nibble2 = modem_a7670_sms_hex_value(input[read_index + 2U]);
+        nibble3 = modem_a7670_sms_hex_value(input[read_index + 3U]);
+        if (nibble0 < 0 || nibble1 < 0 || nibble2 < 0 || nibble3 < 0) {
+            return false;
+        }
+
+        codepoint = (uint16_t)((nibble0 << 12) | (nibble1 << 8) | (nibble2 << 4) | nibble3);
+        if (codepoint <= 0x7FU) {
+            if ((write_index + 1U) >= output_len) {
+                return false;
+            }
+            output[write_index++] = (char)codepoint;
+        } else if (codepoint <= 0x7FFU) {
+            if ((write_index + 2U) >= output_len) {
+                return false;
+            }
+            output[write_index++] = (char)(0xC0U | ((codepoint >> 6) & 0x1FU));
+            output[write_index++] = (char)(0x80U | (codepoint & 0x3FU));
+        } else {
+            if ((write_index + 3U) >= output_len) {
+                return false;
+            }
+            output[write_index++] = (char)(0xE0U | ((codepoint >> 12) & 0x0FU));
+            output[write_index++] = (char)(0x80U | ((codepoint >> 6) & 0x3FU));
+            output[write_index++] = (char)(0x80U | (codepoint & 0x3FU));
+        }
+
+        read_index += 4U;
+    }
+
+    output[write_index] = '\0';
+    return true;
+}
+
+static bool modem_a7670_sms_encode_utf8_to_ucs2_hex(const char *input, char *output, size_t output_len) {
+    static const char hex_chars[] = "0123456789ABCDEF";
+    size_t read_index = 0U;
+    size_t write_index = 0U;
+
+    if (!input || !output || output_len == 0U) {
+        return false;
+    }
+
+    output[0] = '\0';
+    while (input[read_index] != '\0') {
+        uint32_t codepoint = 0U;
+        unsigned char first = (unsigned char)input[read_index];
+
+        if (first <= 0x7FU) {
+            codepoint = first;
+            read_index += 1U;
+        } else if ((first & 0xE0U) == 0xC0U) {
+            unsigned char second = (unsigned char)input[read_index + 1U];
+            if ((second & 0xC0U) != 0x80U) {
+                return false;
+            }
+            codepoint = ((uint32_t)(first & 0x1FU) << 6) | (uint32_t)(second & 0x3FU);
+            read_index += 2U;
+        } else if ((first & 0xF0U) == 0xE0U) {
+            unsigned char second = (unsigned char)input[read_index + 1U];
+            unsigned char third = (unsigned char)input[read_index + 2U];
+            if ((second & 0xC0U) != 0x80U || (third & 0xC0U) != 0x80U) {
+                return false;
+            }
+            codepoint = ((uint32_t)(first & 0x0FU) << 12) |
+                        ((uint32_t)(second & 0x3FU) << 6) |
+                        (uint32_t)(third & 0x3FU);
+            read_index += 3U;
+        } else {
+            return false;
+        }
+
+        if (codepoint > 0xFFFFU || (write_index + 4U) >= output_len) {
+            return false;
+        }
+
+        output[write_index++] = hex_chars[(codepoint >> 12) & 0x0FU];
+        output[write_index++] = hex_chars[(codepoint >> 8) & 0x0FU];
+        output[write_index++] = hex_chars[(codepoint >> 4) & 0x0FU];
+        output[write_index++] = hex_chars[codepoint & 0x0FU];
+    }
+
+    output[write_index] = '\0';
+    return true;
+}
+
+static bool modem_a7670_sms_requires_ucs2(const char *text) {
+    if (!text) {
+        return false;
+    }
+
+    for (size_t i = 0U; text[i] != '\0'; ++i) {
+        if (((unsigned char)text[i]) > 0x7FU) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static esp_err_t modem_a7670_sms_set_charset_locked(
+    const char *charset,
+    char *response,
+    size_t response_len,
+    uint32_t timeout_ms
+) {
+    char command[32] = {0};
+
+    if (!charset || !response || response_len == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (snprintf(command, sizeof(command), "AT+CSCS=\"%s\"", charset) < 0) {
+        return ESP_FAIL;
+    }
+
+    return modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
+}
+
+static esp_err_t modem_a7670_sms_set_text_mode_params_locked(
+    uint8_t fo,
+    uint8_t vp,
+    uint8_t pid,
+    uint8_t dcs,
+    char *response,
+    size_t response_len,
+    uint32_t timeout_ms
+) {
+    char command[40] = {0};
+
+    if (!response || response_len == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (snprintf(command, sizeof(command), "AT+CSMP=%u,%u,%u,%u", fo, vp, pid, dcs) < 0) {
+        return ESP_FAIL;
+    }
+
+    return modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
+}
+
+static bool modem_a7670_sms_is_gsm7_extension_char(char c) {
+    switch (c) {
+        case '^':
+        case '{':
+        case '}':
+        case '\\':
+        case '[':
+        case '~':
+        case ']':
+        case '|':
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool modem_a7670_sms_can_use_gsm7_units(const char *text) {
+    if (!text) {
+        return false;
+    }
+
+    for (size_t i = 0U; text[i] != '\0'; ++i) {
+        if (((unsigned char)text[i]) > 0x7FU) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool modem_a7670_sms_next_utf8_char(const char *text, size_t *out_len) {
+    unsigned char first = 0U;
+
+    if (!text || !out_len || text[0] == '\0') {
+        return false;
+    }
+
+    first = (unsigned char)text[0];
+    if ((first & 0x80U) == 0U) {
+        *out_len = 1U;
+        return true;
+    }
+
+    if ((first & 0xE0U) == 0xC0U) {
+        const unsigned char second = (unsigned char)text[1];
+        if (second == 0U || (second & 0xC0U) != 0x80U) {
+            return false;
+        }
+        *out_len = 2U;
+        return true;
+    }
+
+    if ((first & 0xF0U) == 0xE0U) {
+        const unsigned char second = (unsigned char)text[1];
+        const unsigned char third = (unsigned char)text[2];
+        if (second == 0U || third == 0U || (second & 0xC0U) != 0x80U || (third & 0xC0U) != 0x80U) {
+            return false;
+        }
+        *out_len = 3U;
+        return true;
+    }
+
+    if ((first & 0xF8U) == 0xF0U) {
+        const unsigned char second = (unsigned char)text[1];
+        const unsigned char third = (unsigned char)text[2];
+        const unsigned char fourth = (unsigned char)text[3];
+        if (second == 0U || third == 0U || fourth == 0U ||
+            (second & 0xC0U) != 0x80U || (third & 0xC0U) != 0x80U || (fourth & 0xC0U) != 0x80U) {
+            return false;
+        }
+        *out_len = 4U;
+        return true;
+    }
+
+    return false;
+}
+
+static size_t modem_a7670_sms_segment_length(const char *text, size_t unit_limit) {
+    size_t used_units = 0U;
+    size_t length = 0U;
+
+    if (!text || unit_limit == 0U) {
+        return 0U;
+    }
+
+    while (text[length] != '\0') {
+        const size_t char_units = modem_a7670_sms_is_gsm7_extension_char(text[length]) ? 2U : 1U;
+
+        if ((used_units + char_units) > unit_limit) {
+            break;
+        }
+
+        used_units += char_units;
+        length++;
+    }
+
+    return length;
+}
+
+static size_t modem_a7670_sms_unicode_segment_length(const char *text, size_t char_limit) {
+    size_t used_chars = 0U;
+    size_t used_bytes = 0U;
+
+    if (!text || char_limit == 0U) {
+        return 0U;
+    }
+
+    while (text[used_bytes] != '\0' && used_chars < char_limit) {
+        size_t char_len = 0U;
+
+        if (!modem_a7670_sms_next_utf8_char(text + used_bytes, &char_len)) {
+            return 0U;
+        }
+
+        used_bytes += char_len;
+        used_chars++;
+    }
+
+    return used_bytes;
+}
+
+static size_t modem_a7670_sms_unicode_length(const char *text) {
+    size_t count = 0U;
+    size_t offset = 0U;
+
+    if (!text || text[0] == '\0') {
+        return 0U;
+    }
+
+    while (text[offset] != '\0') {
+        size_t char_len = 0U;
+
+        if (!modem_a7670_sms_next_utf8_char(text + offset, &char_len)) {
+            return 0U;
+        }
+
+        offset += char_len;
+        count++;
+    }
+
+    return count;
+}
+
+static size_t modem_a7670_sms_segment_count(const char *text) {
+    size_t total_segments = 0U;
+    const char *cursor = text;
+
+    if (!text || text[0] == '\0') {
+        return 0U;
+    }
+
+    if (!modem_a7670_sms_can_use_gsm7_units(text)) {
+        const size_t unicode_length = modem_a7670_sms_unicode_length(text);
+
+        if (unicode_length == 0U) {
+            return 0U;
+        }
+
+        if (unicode_length <= MODEM_A7670_SMS_UCS2_SINGLE_TEXT_LEN) {
+            return 1U;
+        }
+
+        while (*cursor != '\0') {
+            const size_t segment_len = modem_a7670_sms_unicode_segment_length(cursor, MODEM_A7670_SMS_UCS2_SEGMENT_TEXT_LEN);
+
+            if (segment_len == 0U) {
+                return 0U;
+            }
+
+            cursor += segment_len;
+            total_segments++;
+        }
+
+        return total_segments;
+    }
+
+    while (*cursor != '\0') {
+        const size_t segment_len = total_segments == 0U && modem_a7670_sms_segment_length(cursor, MODEM_A7670_SMS_SINGLE_TEXT_LEN_BYTES) == strlen(cursor)
+            ? modem_a7670_sms_segment_length(cursor, MODEM_A7670_SMS_SINGLE_TEXT_LEN_BYTES)
+            : modem_a7670_sms_segment_length(cursor, MODEM_A7670_SMS_SEGMENT_TEXT_LEN_BYTES);
+
+        if (segment_len == 0U) {
+            return 0U;
+        }
+
+        cursor += segment_len;
+        total_segments++;
+    }
+
+    return total_segments;
+}
+
+static bool modem_a7670_parse_sms_list_index(const char *response, int *out_index) {
+    const char *header = NULL;
+    int index = -1;
+
+    if (!response || !out_index) {
+        return false;
+    }
+
+    *out_index = -1;
+    header = strstr(response, "+CMGL:");
+    if (!header) {
+        return false;
+    }
+
+    if (sscanf(header, "+CMGL: %d", &index) != 1 || index < 0) {
+        return false;
+    }
+
+    *out_index = index;
+    return true;
+}
+
+static bool modem_a7670_parse_concat_indexes(
+    const char *response,
+    int *out_indexes,
+    size_t max_indexes,
+    size_t *out_count
+) {
+    const char *cursor = response;
+
+    if (!response || !out_indexes || max_indexes == 0U || !out_count) {
+        return false;
+    }
+
+    *out_count = 0U;
+    while ((cursor = strstr(cursor, "+CCONCINDEX:")) != NULL) {
+        const char *line_end = strpbrk(cursor, "\r\n");
+        const char *numbers = strchr(cursor, ':');
+        char line[128] = {0};
+        long segment_total = 0;
+        size_t parsed = 0U;
+        char *parse_end = NULL;
+        char *number_cursor = NULL;
+
+        if (!numbers) {
+            cursor += strlen("+CCONCINDEX:");
+            continue;
+        }
+        numbers += 1;
+
+        if (!line_end) {
+            line_end = cursor + strlen(cursor);
+        }
+        if ((size_t)(line_end - numbers) >= sizeof(line)) {
+            cursor = line_end;
+            continue;
+        }
+
+        memcpy(line, numbers, (size_t)(line_end - numbers));
+        line[line_end - numbers] = '\0';
+
+        number_cursor = line;
+        segment_total = strtol(number_cursor, &parse_end, 10);
+        if (parse_end == number_cursor) {
+            cursor = line_end;
+            continue;
+        }
+        if (segment_total <= 0L || (size_t)segment_total > max_indexes) {
+            cursor = line_end;
+            continue;
+        }
+
+        number_cursor = parse_end;
+        while (parsed < (size_t)segment_total) {
+            while (*number_cursor == ',' || *number_cursor == ' ') {
+                ++number_cursor;
+            }
+            if (*number_cursor == '\0') {
+                break;
+            }
+
+            out_indexes[parsed] = (int)strtol(number_cursor, &parse_end, 10);
+            if (parse_end == number_cursor) {
+                break;
+            }
+
+            parsed++;
+            number_cursor = parse_end;
+        }
+
+        if (parsed == (size_t)segment_total) {
+            *out_count = parsed;
+            return true;
+        }
+
+        return false;
+    }
+
+    return false;
+}
+
+static esp_err_t modem_a7670_delete_sms_locked(
+    int storage_index,
+    char *response,
+    size_t response_len,
+    uint32_t timeout_ms
+) {
+    char command[32] = {0};
+    int written = 0;
+
+    written = snprintf(command, sizeof(command), "AT+CMGD=%d,0", storage_index);
+    if (written <= 0 || (size_t)written >= sizeof(command)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    return modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
+}
+
+static esp_err_t modem_a7670_read_sms_locked(
+    int storage_index,
+    unified_sms_payload_t *out_payload,
+    char *response,
+    size_t response_len,
+    uint32_t timeout_ms,
+    bool delete_after
+) {
+    char command[32] = {0};
+    esp_err_t err = ESP_FAIL;
+    int written = 0;
+
+    if (storage_index < 0 || !out_payload || !response || response_len == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    written = snprintf(command, sizeof(command), "AT+CMGR=%d", storage_index);
+    if (written < 0 || (size_t)written >= sizeof(command)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
+    if (err == ESP_OK && !modem_a7670_parse_sms_payload_from_response(response, out_payload)) {
+        err = ESP_FAIL;
+    }
+    if (err == ESP_OK && delete_after) {
+        err = modem_a7670_delete_sms_locked(storage_index, response, response_len, timeout_ms);
+    }
+
+    return err;
+}
+
+static esp_err_t modem_a7670_consume_concat_sms_locked(
+    unified_sms_payload_t *out_payload,
+    char *response,
+    size_t response_len,
+    uint32_t timeout_ms
+) {
+    int indexes[MODEM_A7670_SMS_MAX_SEGMENTS] = {0};
+    size_t index_count = 0U;
+    unified_sms_payload_t segment = {0};
+    esp_err_t err = ESP_OK;
+
+    response[0] = '\0';
+    err = modem_a7670_send_command_locked("AT+CCONCINDEX", response, response_len, timeout_ms, false);
+    if (err != ESP_OK || !modem_a7670_parse_concat_indexes(response, indexes, MODEM_A7670_SMS_MAX_SEGMENTS, &index_count)) {
+        return err == ESP_OK ? ESP_ERR_NOT_FOUND : err;
+    }
+
+    memset(out_payload, 0, sizeof(*out_payload));
+    for (size_t i = 0U; i < index_count; ++i) {
+        memset(&segment, 0, sizeof(segment));
+        err = modem_a7670_read_sms_locked(indexes[i], &segment, response, response_len, timeout_ms, false);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        if (i == 0U) {
+            *out_payload = segment;
+            out_payload->text[0] = '\0';
+        }
+        if (strlcat(out_payload->text, segment.text, sizeof(out_payload->text)) >= sizeof(out_payload->text)) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        out_payload->sim_slot = 0U;
+        out_payload->timestamp_ms = segment.timestamp_ms;
+        out_payload->outgoing = false;
+        snprintf(out_payload->detail, sizeof(out_payload->detail), "%s", "incoming_sms_concat");
+    }
+
+    for (size_t i = 0U; i < index_count; ++i) {
+        err = modem_a7670_delete_sms_locked(indexes[i], response, response_len, timeout_ms);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t modem_a7670_send_sms_multipart_locked(
+    const char *number,
+    const char *text,
+    char *response,
+    size_t response_len,
+    uint32_t timeout_ms
+) {
+    const uint8_t ctrl_z = 0x1AU;
+    const bool use_gsm7_units = modem_a7670_sms_can_use_gsm7_units(text);
+    const size_t total_segments = modem_a7670_sms_segment_count(text);
+    const uint8_t message_reference = modem_a7670_sms_message_reference();
+    const char *segment_cursor = text;
+    char encoded_number[MODEM_A7670_SMS_UCS2_NUMBER_LEN] = {0};
+    esp_err_t err = ESP_OK;
+    const char *destination_number = number;
+    const bool use_ucs2 = modem_a7670_sms_requires_ucs2(text);
+
+    if (total_segments < 2U || total_segments > MODEM_A7670_SMS_MAX_SEGMENTS) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (use_ucs2) {
+        if (!modem_a7670_sms_encode_utf8_to_ucs2_hex(number, encoded_number, sizeof(encoded_number))) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        destination_number = encoded_number;
+    }
+
+    err = modem_a7670_sms_set_charset_locked(use_ucs2 ? "UCS2" : "IRA", response, response_len, timeout_ms);
+    if (err == ESP_OK) {
+        err = modem_a7670_sms_set_text_mode_params_locked(17U, 167U, 0U, use_ucs2 ? 8U : 0U, response, response_len, timeout_ms);
+    }
+    if (err == ESP_OK) {
+        err = modem_a7670_send_command_locked("AT+CMGF=1", response, response_len, timeout_ms, false);
+    }
+    for (size_t segment_index = 0U; err == ESP_OK && segment_index < total_segments; ++segment_index) {
+        const size_t segment_len = use_gsm7_units
+            ? modem_a7670_sms_segment_length(segment_cursor, MODEM_A7670_SMS_SEGMENT_TEXT_LEN_BYTES)
+            : modem_a7670_sms_unicode_segment_length(segment_cursor, MODEM_A7670_SMS_UCS2_SEGMENT_TEXT_LEN);
+        char command[MODEM_A7670_SMS_COMMAND_LEN] = {0};
+        char encoded_segment[MODEM_A7670_SMS_UCS2_TEXT_LEN] = {0};
+        const char *segment_text = segment_cursor;
+
+        if (segment_len == 0U) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        if (use_ucs2) {
+            char segment_buffer[UNIFIED_SMS_TEXT_MAX_LEN] = {0};
+
+            memcpy(segment_buffer, segment_cursor, segment_len);
+            segment_buffer[segment_len] = '\0';
+            if (!modem_a7670_sms_encode_utf8_to_ucs2_hex(segment_buffer, encoded_segment, sizeof(encoded_segment))) {
+                err = ESP_ERR_INVALID_ARG;
+                break;
+            }
+            segment_text = encoded_segment;
+        }
+
+        if (snprintf(
+                command,
+                sizeof(command),
+                "AT+CMGSEX=\"%s\",%u,%u,%u",
+                destination_number,
+                (unsigned int)message_reference,
+                (unsigned int)(segment_index + 1U),
+                (unsigned int)total_segments) < 0) {
+            return ESP_FAIL;
+        }
+
+        err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
+        if (err != ESP_OK) {
+            break;
+        }
+
+        response[0] = '\0';
+        if (uart_write_bytes((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT, segment_text, strlen(segment_text)) < 0 ||
+            uart_write_bytes((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT, (const char *)&ctrl_z, 1) < 0) {
+            err = ESP_FAIL;
+            break;
+        }
+
+        err = modem_a7670_read_response_locked(response, response_len, timeout_ms, false);
+        segment_cursor += segment_len;
+    }
+
+    if (use_ucs2) {
+        (void)modem_a7670_sms_set_text_mode_params_locked(17U, 167U, 0U, 0U, response, response_len, timeout_ms);
+        (void)modem_a7670_sms_set_charset_locked("IRA", response, response_len, timeout_ms);
+    }
+
+    return err;
+}
+
+esp_err_t modem_a7670_send_sms_multipart(
+    const char *number,
+    const char *text,
+    char *response,
+    size_t response_len,
+    uint32_t timeout_ms
+) {
+    esp_err_t err = ESP_FAIL;
+
+    if (!number || !text || !response || response_len == 0U || number[0] == '\0' || text[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_ready || !s_uart_control_ready || !s_lock) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (modem_a7670_uart_control_blocked_locked()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    err = modem_a7670_send_sms_multipart_locked(number, text, response, response_len, timeout_ms);
+
+    xSemaphoreGive(s_lock);
+    return err;
 }
 
 esp_err_t modem_a7670_send_sms(
@@ -75,9 +801,15 @@ esp_err_t modem_a7670_send_sms(
     size_t response_len,
     uint32_t timeout_ms
 ) {
-    char command[48] = {0};
+    char command[MODEM_A7670_SMS_COMMAND_LEN] = {0};
     esp_err_t err = ESP_FAIL;
     const uint8_t ctrl_z = 0x1AU;
+    const size_t total_segments = modem_a7670_sms_segment_count(text);
+    const bool use_ucs2 = modem_a7670_sms_requires_ucs2(text);
+    char encoded_number[MODEM_A7670_SMS_UCS2_NUMBER_LEN] = {0};
+    char encoded_text[MODEM_A7670_SMS_UCS2_TEXT_LEN] = {0};
+    const char *destination_number = number;
+    const char *message_text = text;
 
     if (!number || !text || !response || response_len == 0 || number[0] == '\0' || text[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
@@ -93,20 +825,44 @@ esp_err_t modem_a7670_send_sms(
         return ESP_ERR_TIMEOUT;
     }
 
-    err = modem_a7670_send_command_locked("AT+CMGF=1", response, response_len, timeout_ms, false);
-    if (err == ESP_OK) {
-        err = modem_a7670_prepare_command(command, sizeof(command), "AT+CMGS=\"", number, "\"");
+    if (use_ucs2) {
+        if (!modem_a7670_sms_encode_utf8_to_ucs2_hex(number, encoded_number, sizeof(encoded_number)) ||
+            !modem_a7670_sms_encode_utf8_to_ucs2_hex(text, encoded_text, sizeof(encoded_text))) {
+            xSemaphoreGive(s_lock);
+            return ESP_ERR_INVALID_ARG;
+        }
+        destination_number = encoded_number;
+        message_text = encoded_text;
     }
-    if (err == ESP_OK) {
-        err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
-    }
-    if (err == ESP_OK) {
-        response[0] = '\0';
-        if (uart_write_bytes((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT, text, strlen(text)) < 0 ||
-            uart_write_bytes((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT, (const char *)&ctrl_z, 1) < 0) {
-            err = ESP_FAIL;
-        } else {
-            err = modem_a7670_read_response_locked(response, response_len, timeout_ms, false);
+
+    if (total_segments > 1U) {
+        err = modem_a7670_send_sms_multipart_locked(number, text, response, response_len, timeout_ms);
+    } else {
+        err = modem_a7670_sms_set_charset_locked(use_ucs2 ? "UCS2" : "IRA", response, response_len, timeout_ms);
+        if (err == ESP_OK) {
+            err = modem_a7670_sms_set_text_mode_params_locked(17U, 167U, 0U, use_ucs2 ? 8U : 0U, response, response_len, timeout_ms);
+        }
+        if (err == ESP_OK) {
+            err = modem_a7670_send_command_locked("AT+CMGF=1", response, response_len, timeout_ms, false);
+        }
+        if (err == ESP_OK) {
+            err = modem_a7670_prepare_command(command, sizeof(command), "AT+CMGS=\"", destination_number, "\"");
+        }
+        if (err == ESP_OK) {
+            err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
+        }
+        if (err == ESP_OK) {
+            response[0] = '\0';
+            if (uart_write_bytes((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT, message_text, strlen(message_text)) < 0 ||
+                uart_write_bytes((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT, (const char *)&ctrl_z, 1) < 0) {
+                err = ESP_FAIL;
+            } else {
+                err = modem_a7670_read_response_locked(response, response_len, timeout_ms, false);
+            }
+        }
+        if (use_ucs2) {
+            (void)modem_a7670_sms_set_text_mode_params_locked(17U, 167U, 0U, 0U, response, response_len, timeout_ms);
+            (void)modem_a7670_sms_set_charset_locked("IRA", response, response_len, timeout_ms);
         }
     }
 
@@ -259,10 +1015,8 @@ esp_err_t modem_a7670_cancel_ussd(char *response, size_t response_len, uint32_t 
 }
 
 esp_err_t modem_a7670_read_sms(int storage_index, unified_sms_payload_t *out_payload, uint32_t timeout_ms) {
-    char response[256] = {0};
-    char command[32] = {0};
+    char response[MODEM_A7670_SMS_READ_RESPONSE_LEN] = {0};
     esp_err_t err = ESP_FAIL;
-    int written = 0;
 
     if (storage_index < 0 || !out_payload) {
         return ESP_ERR_INVALID_ARG;
@@ -278,25 +1032,55 @@ esp_err_t modem_a7670_read_sms(int storage_index, unified_sms_payload_t *out_pay
         return ESP_ERR_TIMEOUT;
     }
 
-    err = modem_a7670_send_command_locked("AT+CMGF=1", response, sizeof(response), timeout_ms, false);
+    err = modem_a7670_sms_set_charset_locked("UCS2", response, sizeof(response), timeout_ms);
     if (err == ESP_OK) {
-        written = snprintf(command, sizeof(command), "AT+CMGR=%d", storage_index);
-        if (written < 0 || (size_t)written >= sizeof(command)) {
-            err = ESP_ERR_INVALID_SIZE;
+        err = modem_a7670_send_command_locked("AT+CMGF=1", response, sizeof(response), timeout_ms, false);
+    }
+    if (err == ESP_OK) {
+        err = modem_a7670_read_sms_locked(storage_index, out_payload, response, sizeof(response), timeout_ms, true);
+    }
+    (void)modem_a7670_sms_set_charset_locked("IRA", response, sizeof(response), timeout_ms);
+
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
+esp_err_t modem_a7670_consume_pending_sms(unified_sms_payload_t *out_payload, uint32_t timeout_ms) {
+    char response[MODEM_A7670_SMS_READ_RESPONSE_LEN] = {0};
+    esp_err_t err = ESP_FAIL;
+    int sms_index = -1;
+
+    if (!out_payload) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_ready || !s_uart_control_ready || !s_lock) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (modem_a7670_uart_control_blocked_locked()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    err = modem_a7670_sms_set_charset_locked("UCS2", response, sizeof(response), timeout_ms);
+    if (err == ESP_OK) {
+        err = modem_a7670_send_command_locked("AT+CMGF=1", response, sizeof(response), timeout_ms, false);
+    }
+    if (err == ESP_OK) {
+        err = modem_a7670_consume_concat_sms_locked(out_payload, response, sizeof(response), timeout_ms);
+        if (err == ESP_ERR_NOT_FOUND) {
+            response[0] = '\0';
+            err = modem_a7670_send_command_locked("AT+CMGL=\"REC UNREAD\"", response, sizeof(response), timeout_ms, false);
+            if (err == ESP_OK && modem_a7670_parse_sms_list_index(response, &sms_index)) {
+                err = modem_a7670_read_sms_locked(sms_index, out_payload, response, sizeof(response), timeout_ms, true);
+            } else if (err == ESP_OK) {
+                err = ESP_ERR_NOT_FOUND;
+            }
         }
     }
-    if (err == ESP_OK) {
-        err = modem_a7670_send_command_locked(command, response, sizeof(response), timeout_ms, false);
-    }
-    if (err == ESP_OK && !modem_a7670_parse_sms_payload_from_response(response, out_payload)) {
-        err = ESP_FAIL;
-    }
-    if (err == ESP_OK) {
-        written = snprintf(command, sizeof(command), "AT+CMGD=%d,0", storage_index);
-        if (written > 0 && (size_t)written < sizeof(command)) {
-            modem_a7670_send_command_locked(command, response, sizeof(response), timeout_ms, false);
-        }
-    }
+    (void)modem_a7670_sms_set_charset_locked("IRA", response, sizeof(response), timeout_ms);
 
     xSemaphoreGive(s_lock);
     return err;

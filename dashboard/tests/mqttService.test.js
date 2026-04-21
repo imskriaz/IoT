@@ -97,7 +97,45 @@ describe('mqttService firmware compatibility', () => {
         expect(payload.number).toBe('+15551234567');
         expect(payload.text).toBe('hello from test');
         expect(payload.action_id).toMatch(/^sms_/);
+        expect(payload.timeout).toBe(5000);
         expect(payload.messageId).toBeUndefined();
+    });
+
+    test('publishCommand includes firmware-compatible multipart SMS fields', async () => {
+        await svc.publishCommand(
+            'device-1',
+            'send-sms-multipart',
+            { to: '+15551234567', message: 'x'.repeat(200) },
+            false,
+            5000,
+            { skipPersistentQueue: true }
+        );
+
+        expect(svc.client.publish).toHaveBeenCalledTimes(1);
+        expect(svc.client.publish.mock.calls[0][0]).toBe('device/device-1/command/send-sms-multipart');
+
+        const payload = JSON.parse(svc.client.publish.mock.calls[0][1]);
+        expect(payload.number).toBe('+15551234567');
+        expect(payload.text).toBe('x'.repeat(200));
+        expect(payload.command).toBe('send_sms_multipart');
+        expect(payload.action_id).toMatch(/^sms_/);
+        expect(payload.timeout).toBe(5000);
+        expect(payload.messageId).toBeUndefined();
+    });
+
+    test('publishCommand normalizes SIM slot to sim_slot only in MQTT payloads', async () => {
+        await svc.publishCommand(
+            'device-1',
+            'send-ussd',
+            { code: '*123#', simSlot: 1 },
+            false,
+            5000,
+            { skipPersistentQueue: true }
+        );
+
+        const payload = JSON.parse(svc.client.publish.mock.calls[0][1]);
+        expect(payload.sim_slot).toBe(1);
+        expect(payload.simSlot).toBeUndefined();
     });
 
     test('publishCommand keeps action correlation IDs within the firmware limit', async () => {

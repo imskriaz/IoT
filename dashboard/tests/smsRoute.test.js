@@ -111,6 +111,55 @@ describe('sms route queue-first delivery', () => {
         );
     });
 
+    test('accepts multipart SMS under the device limit and uses the multipart MQTT contract', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (String(sql).includes('INSERT INTO sms')) {
+                    return { lastID: 61, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('SELECT id FROM devices')) return { id: 'device-1' };
+                return null;
+            }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const multipartMessage = 'x'.repeat(900);
+
+        const res = await request(app)
+            .post('/api/sms/send')
+            .send({
+                to: '+8801555123456',
+                message: multipartMessage,
+                deviceId: 'device-1'
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            queued: true,
+            id: 61
+        }));
+        expect(global.mqttService.publishCommand).toHaveBeenCalledWith(
+            'device-1',
+            'send-sms-multipart',
+            expect.objectContaining({
+                to: '+8801555123456',
+                message: multipartMessage,
+                smsId: 61
+            }),
+            false,
+            60000,
+            expect.objectContaining({
+                messageId: expect.stringMatching(/^send-sms-multipart_/)
+            })
+        );
+    });
+
     test('send SMS stays MQTT-only even when a serial bridge exists', async () => {
         const db = {
             run: jest.fn(async (sql) => {
@@ -937,14 +986,14 @@ describe('sms route queue-first delivery', () => {
             .post('/api/sms/scheduled?deviceId=device-6')
             .send({
                 to: '01628301525',
-                message: 'x'.repeat(161),
+                message: 'x'.repeat(1024),
                 send_at: sendAt
             });
 
         expect(res.status).toBe(400);
         expect(res.body).toMatchObject({
             success: false,
-            message: 'Message required (max 160 chars)'
+            message: 'Message exceeds device SMS limit (max 1023 UTF-8 bytes)'
         });
         expect(db.run).not.toHaveBeenCalled();
     });

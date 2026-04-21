@@ -7,6 +7,7 @@ const { admin: adminMiddleware } = require('../middleware/auth');
 const { queueSmsForDelivery } = require('../services/smsQueue');
 const { formatPhoneNumber, isShortCode } = require('../utils/phoneNumber');
 const { resolveRequestSimScope } = require('../utils/simScope');
+const { validateSmsMessageSize } = require('../utils/smsLimits');
 
 function normalizeSmsRecipients(value) {
     const entries = (Array.isArray(value) ? value : [value])
@@ -50,8 +51,7 @@ router.get('/status', (req, res) => {
 // Send SMS via MQTT
 router.post('/send-sms', [
     body('deviceId').notEmpty().withMessage('Device ID required'),
-    body('message').notEmpty().withMessage('Message required')
-        .isLength({ max: 160 }).withMessage('Message must be less than 160 characters')
+    body('message').custom(validateSmsMessageSize)
 ], async (req, res) => {
     try {
         const errors = validationResult(req);

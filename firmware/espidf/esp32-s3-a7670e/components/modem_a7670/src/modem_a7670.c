@@ -172,7 +172,12 @@ static bool modem_a7670_response_has_success(const char *response) {
 }
 
 static bool modem_a7670_response_has_error(const char *response) {
-    return response && (strstr(response, "\r\nERROR\r\n") != NULL || strstr(response, "\nERROR\r\n") != NULL);
+    return response && (
+        strstr(response, "\r\nERROR\r\n") != NULL ||
+        strstr(response, "\nERROR\r\n") != NULL ||
+        strstr(response, "+CMS ERROR:") != NULL ||
+        strstr(response, "+CME ERROR:") != NULL
+    );
 }
 
 static bool modem_a7670_response_has_prompt(const char *response) {
@@ -559,6 +564,7 @@ static void modem_a7670_queue_ussd_payload_locked(bool session_active, const cha
 
     snprintf(payload.code, sizeof(payload.code), "%s", s_last_ussd_code);
     payload.session_active = session_active;
+    payload.sim_slot = 0U;
     payload.timestamp_ms = unified_time_now_ms();
     if (response) {
         snprintf(payload.response, sizeof(payload.response), "%s", response);

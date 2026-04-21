@@ -85,7 +85,8 @@ Recommended Android behavior:
 - publish all detected SIM slots in status
 - include slot index, subscription id, carrier/operator, number when available
 - mark preferred/default SMS, data, and voice subscriptions
-- honor requested `simSlot` or `simSubscriptionId` when sending SMS
+- honor requested `sim_slot` or `subscription_id` when sending SMS
+  Legacy aliases like `simSlot` can still be accepted for backward compatibility, but the MQTT contract should emit only `sim_slot`.
 
 ## Boundary
 

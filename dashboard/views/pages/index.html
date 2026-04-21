@@ -771,15 +771,17 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Message</label>
-                        <textarea class="form-control" name="message" rows="4" maxlength="160"
+                        <textarea class="form-control" name="message" rows="4"
                             placeholder="Type your message..." required></textarea>
                         <div class="d-flex justify-content-between mt-1">
                             <small class="text-muted">
                                 <i class="bi bi-info-circle me-1"></i>
-                                160 characters max
+                                Multipart SMS up to 1023 UTF-8 bytes and 15 parts
                             </small>
                             <small class="text-muted">
-                                <span id="charCount">0</span>/160
+                                <span id="charCount">0</span> chars
+                                <span class="ms-2"><span id="charBytes">0</span>/1023 bytes</span>
+                                <span class="ms-2" id="charParts">(1 part, GSM-7)</span>
                             </small>
                         </div>
                     </div>
@@ -928,11 +930,25 @@
     document.addEventListener('DOMContentLoaded', function () {
         const textarea = document.querySelector('#quickSmsForm textarea');
         const charCount = document.getElementById('charCount');
+        const charBytes = document.getElementById('charBytes');
+        const charParts = document.getElementById('charParts');
 
-        if (textarea && charCount) {
-            textarea.addEventListener('input', function () {
-                charCount.textContent = this.value.length;
-            });
+        if (textarea && charCount && window.smsComposeLimits) {
+            const updateCounter = function () {
+                const clamped = window.smsComposeLimits.clamp(textarea.value);
+                if (clamped !== textarea.value) {
+                    textarea.value = clamped;
+                }
+                const analysis = window.smsComposeLimits.analyze(textarea.value);
+                charCount.textContent = String(analysis.characters);
+                if (charBytes) charBytes.textContent = String(analysis.utf8Bytes);
+                if (charParts) {
+                    charParts.textContent = `(${analysis.parts} part${analysis.parts === 1 ? '' : 's'}, ${analysis.encoding === 'gsm7' ? 'GSM-7' : 'Unicode'})`;
+                }
+            };
+
+            textarea.addEventListener('input', updateCounter);
+            updateCounter();
         }
     });
 

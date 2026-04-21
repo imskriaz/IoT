@@ -107,7 +107,7 @@ describe('ussd API runtime dispatch', () => {
         expect(global.mqttService.publishCommand).toHaveBeenCalledWith(
             'device-b',
             'send-ussd',
-            { code: '*123#', sim_slot: 1, simSlot: 1 },
+            { code: '*123#', sim_slot: 1 },
             false,
             60000,
             {

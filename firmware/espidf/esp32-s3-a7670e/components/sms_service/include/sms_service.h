@@ -21,4 +21,5 @@ typedef struct {
 
 esp_err_t sms_service_init(void);
 unified_action_response_t sms_service_send(const char *number, const char *text, uint32_t timeout_ms);
+unified_action_response_t sms_service_send_multipart(const char *number, const char *text, uint32_t timeout_ms);
 void sms_service_get_status(sms_service_status_t *out_status);

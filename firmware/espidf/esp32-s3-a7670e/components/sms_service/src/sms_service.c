@@ -19,11 +19,24 @@
 #define SMS_SERVICE_FALLBACK_POLL_DIVISOR  12U
 #define SMS_SERVICE_FALLBACK_POLL_INTERVAL_MS \
     ((uint32_t)CONFIG_UNIFIED_TELEPHONY_POLL_INTERVAL_MS * SMS_SERVICE_FALLBACK_POLL_DIVISOR)
+#define SMS_SERVICE_SINGLE_SMS_TEXT_LEN_BYTES  160U
+#define SMS_SERVICE_MULTIPART_SEND_TIMEOUT_MS  60000U
 
 static sms_service_status_t s_status;
 static SemaphoreHandle_t s_lock;
 static bool s_ready;
 static TaskHandle_t s_task_handle;
+
+static uint32_t sms_service_effective_send_timeout_ms(const char *text, uint32_t timeout_ms, bool force_multipart) {
+    uint32_t effective_timeout_ms = timeout_ms > 0U ? timeout_ms : CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS;
+
+    if ((force_multipart || (text && strlen(text) > SMS_SERVICE_SINGLE_SMS_TEXT_LEN_BYTES)) &&
+        effective_timeout_ms < SMS_SERVICE_MULTIPART_SEND_TIMEOUT_MS) {
+        return SMS_SERVICE_MULTIPART_SEND_TIMEOUT_MS;
+    }
+
+    return effective_timeout_ms;
+}
 
 static bool sms_payload_equals(const unified_sms_payload_t *left, const unified_sms_payload_t *right) {
     return left && right &&
@@ -80,13 +93,14 @@ static void sms_service_update_cycle_status_locked(
 }
 
 static unified_action_response_t sms_service_build_response(
+    unified_action_command_t command,
     unified_action_result_t result,
     int32_t result_code,
     const char *detail
 ) {
     unified_action_response_t response = {
         .action = {
-            .command = UNIFIED_ACTION_CMD_SEND_SMS,
+            .command = command,
         },
         .result = result,
         .result_code = result_code,
@@ -96,26 +110,73 @@ static unified_action_response_t sms_service_build_response(
     return response;
 }
 
-static bool sms_service_parse_list_index(const char *response, int *out_index) {
-    const char *header = NULL;
-    int index = -1;
+static unified_action_response_t sms_service_send_with_transport(
+    const char *number,
+    const char *text,
+    uint32_t timeout_ms,
+    bool force_multipart
+) {
+    modem_a7670_status_t modem_status = {0};
+    unified_sms_payload_t outgoing = {0};
+    char modem_response[256] = {0};
+    esp_err_t err = ESP_FAIL;
+    const uint32_t effective_timeout_ms = sms_service_effective_send_timeout_ms(text, timeout_ms, force_multipart);
+    const unified_action_command_t command = force_multipart
+        ? UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART
+        : UNIFIED_ACTION_CMD_SEND_SMS;
+    const char *success_detail = force_multipart ? "sms_multipart_sent" : "sms_sent";
+    const char *timeout_detail = force_multipart ? "sms_multipart_timeout" : "sms_send_timeout";
+    const char *failed_detail = force_multipart ? "sms_multipart_failed" : "sms_send_failed";
 
-    if (!response || !out_index) {
-        return false;
+    if (!number || !text || number[0] == '\0' || text[0] == '\0') {
+        return sms_service_build_response(command, UNIFIED_ACTION_RESULT_REJECTED, ESP_ERR_INVALID_ARG, "invalid_sms_request");
     }
 
-    *out_index = -1;
-    header = strstr(response, "+CMGL:");
-    if (!header) {
-        return false;
+    modem_a7670_get_status(&modem_status);
+    if (sms_service_telephony_unavailable(&modem_status)) {
+        return sms_service_build_response(command, UNIFIED_ACTION_RESULT_REJECTED, ESP_ERR_NOT_SUPPORTED, "telephony_unavailable");
+    }
+    if (!modem_status.runtime.running || !modem_status.network_registered || !modem_status.sim_ready) {
+        return sms_service_build_response(command, UNIFIED_ACTION_RESULT_REJECTED, ESP_ERR_INVALID_STATE, "modem_not_ready");
     }
 
-    if (sscanf(header, "+CMGL: %d", &index) != 1 || index < 0) {
-        return false;
+    err = force_multipart
+        ? modem_a7670_send_sms_multipart(number, text, modem_response, sizeof(modem_response), effective_timeout_ms)
+        : modem_a7670_send_sms(number, text, modem_response, sizeof(modem_response), effective_timeout_ms);
+    snprintf(outgoing.from, sizeof(outgoing.from), "%s", number);
+    snprintf(outgoing.text, sizeof(outgoing.text), "%s", text);
+    snprintf(
+        outgoing.detail,
+        sizeof(outgoing.detail),
+        "%s",
+        err == ESP_OK ? success_detail : (err == ESP_ERR_TIMEOUT ? timeout_detail : failed_detail)
+    );
+    outgoing.sim_slot = 0U;
+    outgoing.timestamp_ms = unified_time_now_ms();
+    outgoing.outgoing = true;
+    (void)storage_mgr_append_sms(&outgoing);
+
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+        snprintf(s_status.last_destination, sizeof(s_status.last_destination), "%s", number);
+        s_status.last_outgoing = outgoing;
+        snprintf(s_status.last_detail, sizeof(s_status.last_detail), "%s", outgoing.detail);
+        if (err == ESP_OK) {
+            s_status.sent_count++;
+        } else {
+            s_status.failure_count++;
+        }
+        xSemaphoreGive(s_lock);
     }
 
-    *out_index = index;
-    return true;
+    if (err == ESP_OK) {
+        return sms_service_build_response(command, UNIFIED_ACTION_RESULT_COMPLETED, ESP_OK, success_detail);
+    }
+
+    if (err == ESP_ERR_TIMEOUT) {
+        return sms_service_build_response(command, UNIFIED_ACTION_RESULT_TIMEOUT, err, timeout_detail);
+    }
+
+    return sms_service_build_response(command, UNIFIED_ACTION_RESULT_FAILED, err, failed_detail);
 }
 
 static void sms_service_record_incoming_locked(const unified_sms_payload_t *payload, const char *detail) {
@@ -130,15 +191,22 @@ static void sms_service_record_incoming_locked(const unified_sms_payload_t *payl
 }
 
 static void sms_service_emit_incoming(const unified_sms_payload_t *payload, const char *detail) {
+    unified_sms_payload_t emitted = {0};
+
     if (!payload) {
         return;
     }
 
-    storage_mgr_append_sms(payload);
-    mqtt_mgr_publish_sms_incoming(payload);
+    emitted = *payload;
+    if (detail && detail[0] != '\0') {
+        unified_copy_cstr(emitted.detail, sizeof(emitted.detail), detail);
+    }
+
+    storage_mgr_append_sms(&emitted);
+    mqtt_mgr_publish_sms_incoming(&emitted);
 
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
-        sms_service_record_incoming_locked(payload, detail);
+        sms_service_record_incoming_locked(&emitted, detail);
         xSemaphoreGive(s_lock);
     }
 }
@@ -156,9 +224,7 @@ static void sms_service_handle_modem_sms_event(void) {
 static void sms_service_task(void *arg) {
     modem_a7670_status_t modem_status = {0};
     unified_sms_payload_t payload = {0};
-    char response[256] = {0};
     int sms_index = -1;
-    int fallback_sms_index = -1;
     bool handled_event = false;
     TickType_t wait_ticks = pdMS_TO_TICKS(CONFIG_UNIFIED_TELEPHONY_POLL_INTERVAL_MS);
     uint32_t now_ms = 0U;
@@ -203,13 +269,14 @@ static void sms_service_task(void *arg) {
             cycle_health_detail = "modem_not_ready";
         } else {
             while (modem_a7670_pop_sms_index(&sms_index)) {
-                if (modem_a7670_read_sms(sms_index, &payload, CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS) == ESP_OK) {
+                handled_event = true;
+            }
+
+            if (handled_event) {
+                while (modem_a7670_consume_pending_sms(&payload, CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS) == ESP_OK) {
                     handled_event = true;
                     sms_service_emit_incoming(&payload, "incoming_sms_urc");
                     cycle_detail = "incoming_sms";
-                } else {
-                    failure_count_delta++;
-                    cycle_detail = "sms_read_failed";
                 }
             }
 
@@ -217,16 +284,11 @@ static void sms_service_task(void *arg) {
                 (last_fallback_poll_ms == 0U ||
                  (now_ms - last_fallback_poll_ms) >= SMS_SERVICE_FALLBACK_POLL_INTERVAL_MS)) {
                 last_fallback_poll_ms = now_ms;
-                if (modem_a7670_command("AT+CMGF=1", response, sizeof(response), CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS) == ESP_OK &&
-                    modem_a7670_command("AT+CMGL=\"REC UNREAD\"", response, sizeof(response), CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS) == ESP_OK &&
-                    sms_service_parse_list_index(response, &fallback_sms_index)) {
-                    if (modem_a7670_read_sms(fallback_sms_index, &payload, CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS) == ESP_OK) {
+                if (modem_a7670_consume_pending_sms(&payload, CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS) == ESP_OK) {
+                    do {
                         sms_service_emit_incoming(&payload, "incoming_sms_fallback");
                         cycle_detail = "incoming_sms_fallback";
-                    } else {
-                        failure_count_delta++;
-                        cycle_detail = "sms_fallback_read_failed";
-                    }
+                    } while (modem_a7670_consume_pending_sms(&payload, CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS) == ESP_OK);
                 }
             }
 
@@ -288,57 +350,11 @@ esp_err_t sms_service_init(void) {
 }
 
 unified_action_response_t sms_service_send(const char *number, const char *text, uint32_t timeout_ms) {
-    modem_a7670_status_t modem_status = {0};
-    unified_sms_payload_t outgoing = {0};
-    char modem_response[256] = {0};
-    esp_err_t err = ESP_FAIL;
+    return sms_service_send_with_transport(number, text, timeout_ms, false);
+}
 
-    if (!number || !text || number[0] == '\0' || text[0] == '\0') {
-        return sms_service_build_response(UNIFIED_ACTION_RESULT_REJECTED, ESP_ERR_INVALID_ARG, "invalid_sms_request");
-    }
-
-    modem_a7670_get_status(&modem_status);
-    if (sms_service_telephony_unavailable(&modem_status)) {
-        return sms_service_build_response(UNIFIED_ACTION_RESULT_REJECTED, ESP_ERR_NOT_SUPPORTED, "telephony_unavailable");
-    }
-    if (!modem_status.runtime.running || !modem_status.network_registered || !modem_status.sim_ready) {
-        return sms_service_build_response(UNIFIED_ACTION_RESULT_REJECTED, ESP_ERR_INVALID_STATE, "modem_not_ready");
-    }
-
-    err = modem_a7670_send_sms(number, text, modem_response, sizeof(modem_response), timeout_ms);
-    snprintf(outgoing.from, sizeof(outgoing.from), "%s", number);
-    snprintf(outgoing.text, sizeof(outgoing.text), "%s", text);
-    snprintf(
-        outgoing.detail,
-        sizeof(outgoing.detail),
-        "%s",
-        err == ESP_OK ? "sms_sent" : (err == ESP_ERR_TIMEOUT ? "sms_send_timeout" : "sms_send_failed")
-    );
-    outgoing.timestamp_ms = unified_time_now_ms();
-    outgoing.outgoing = true;
-    (void)storage_mgr_append_sms(&outgoing);
-
-    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
-        snprintf(s_status.last_destination, sizeof(s_status.last_destination), "%s", number);
-        s_status.last_outgoing = outgoing;
-        snprintf(s_status.last_detail, sizeof(s_status.last_detail), "%s", outgoing.detail);
-        if (err == ESP_OK) {
-            s_status.sent_count++;
-        } else {
-            s_status.failure_count++;
-        }
-        xSemaphoreGive(s_lock);
-    }
-
-    if (err == ESP_OK) {
-        return sms_service_build_response(UNIFIED_ACTION_RESULT_COMPLETED, ESP_OK, "sms_sent");
-    }
-
-    if (err == ESP_ERR_TIMEOUT) {
-        return sms_service_build_response(UNIFIED_ACTION_RESULT_TIMEOUT, err, "sms_send_timeout");
-    }
-
-    return sms_service_build_response(UNIFIED_ACTION_RESULT_FAILED, err, "sms_send_failed");
+unified_action_response_t sms_service_send_multipart(const char *number, const char *text, uint32_t timeout_ms) {
+    return sms_service_send_with_transport(number, text, timeout_ms, true);
 }
 
 void sms_service_get_status(sms_service_status_t *out_status) {

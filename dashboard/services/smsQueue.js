@@ -3,9 +3,11 @@ const { formatPhoneNumber } = require('../utils/phoneNumber');
 const { attachSmsToConversation } = require('./smsConversations');
 const { assertSmsWithinPackageLimit } = require('./packageService');
 const { assertUserSmsWithinLimits } = require('./userAccessService');
+const { resolveSmsCommand } = require('../utils/smsLimits');
 
-function buildSmsCommandMessageId() {
-    return `send-sms_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+function buildSmsCommandMessageId(command = 'send-sms') {
+    const normalized = String(command || 'send-sms').trim().toLowerCase();
+    return `${normalized}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function normalizeQueuedSmsRowStatus(queueResult) {
@@ -80,7 +82,9 @@ async function queueSmsForDelivery({
     await assertSmsWithinPackageLimit(db, deviceId, 1);
     await assertUserSmsWithinLimits(db, userId, source, 1);
 
-    const messageId = buildSmsCommandMessageId();
+    const resolvedSmsCommand = resolveSmsCommand(message);
+    const smsCommand = resolvedSmsCommand.command;
+    const messageId = buildSmsCommandMessageId(smsCommand);
     let smsId = existingSmsId;
     const normalizedSimSlot = Number.isInteger(Number(simSlot)) ? Number(simSlot) : null;
 
@@ -152,13 +156,12 @@ async function queueSmsForDelivery({
     try {
         const queueResult = await mqttService.publishCommand(
             deviceId,
-            'send-sms',
+            smsCommand,
             {
                 to: formattedNumber,
                 message,
                 smsId,
-                sim_slot: normalizedSimSlot,
-                simSlot: normalizedSimSlot
+                sim_slot: normalizedSimSlot
             },
             false,
             60000,
@@ -183,6 +186,7 @@ async function queueSmsForDelivery({
             to: formattedNumber,
             conversationId,
             status: smsStatus,
+            command: smsCommand,
             simSlot: normalizedSimSlot,
             queueId: queueResult?.queueId || null,
             messageId

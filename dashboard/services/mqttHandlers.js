@@ -583,6 +583,128 @@ class MQTTHandlers {
         }
     }
 
+    _findRecentMatchingOutgoingSms(rows, incomingTimestamp, simSlot = null) {
+        const incomingMs = Date.parse(String(incomingTimestamp || ''));
+        const timeWindowMs = 15 * 60 * 1000;
+        const normalizedSimSlot = simSlot == null || simSlot === '' ? null : Number(simSlot);
+        const candidates = Array.isArray(rows) ? rows : [];
+        let best = null;
+
+        for (const row of candidates) {
+            const outgoingMs = Date.parse(String(row?.timestamp || ''));
+            const rowSimSlot = row?.sim_slot == null || row?.sim_slot === '' ? null : Number(row.sim_slot);
+
+            if (normalizedSimSlot !== null && rowSimSlot !== null && rowSimSlot !== normalizedSimSlot) {
+                continue;
+            }
+
+            if (Number.isFinite(incomingMs) && Number.isFinite(outgoingMs)) {
+                if (outgoingMs > incomingMs + 60 * 1000) {
+                    continue;
+                }
+                if (Math.abs(incomingMs - outgoingMs) > timeWindowMs) {
+                    continue;
+                }
+            }
+
+            if (!best) {
+                best = row;
+                continue;
+            }
+
+            const bestPriority = String(best.status || '').trim().toLowerCase();
+            const rowPriority = String(row.status || '').trim().toLowerCase();
+            if ((bestPriority !== 'failed' && bestPriority !== 'ambiguous') &&
+                (rowPriority === 'failed' || rowPriority === 'ambiguous')) {
+                best = row;
+                continue;
+            }
+
+            if (Number(row.id || 0) > Number(best.id || 0)) {
+                best = row;
+            }
+        }
+
+        return best;
+    }
+
+    async reconcileOutgoingSmsFromIncoming(deviceId, details = {}) {
+        const db = this.app?.locals?.db;
+        const normalizedDeviceId = String(deviceId || '').trim();
+        const normalizedFrom = formatPhoneNumber(details.from) || String(details.from || '').trim();
+        const message = String(details.message || '');
+        const incomingTimestamp = String(details.timestamp || '');
+        const simSlot = details.simSlot == null || details.simSlot === '' ? null : Number(details.simSlot);
+
+        if (!db || !normalizedDeviceId || !normalizedFrom || !message) {
+            return null;
+        }
+
+        const candidates = await db.all(
+            `SELECT id, external_id, status, timestamp, sim_slot
+             FROM sms
+             WHERE device_id = ?
+               AND type = 'outgoing'
+               AND to_number = ?
+               AND message = ?
+               AND status IN ('queued', 'sending', 'sent', 'failed', 'ambiguous')
+             ORDER BY id DESC
+             LIMIT 12`,
+            [normalizedDeviceId, normalizedFrom, message]
+        );
+        const match = this._findRecentMatchingOutgoingSms(candidates, incomingTimestamp, simSlot);
+        if (!match) {
+            return null;
+        }
+
+        await db.run(
+            `UPDATE sms
+             SET status = 'delivered',
+                 delivered_at = COALESCE(delivered_at, ?),
+                 error = NULL
+             WHERE id = ?`,
+            [incomingTimestamp || new Date().toISOString(), match.id]
+        );
+
+        if (match.external_id && typeof this.mqttService?._markPersistentQueueCompleted === 'function') {
+            const queueRow = await db.get(
+                `SELECT *
+                 FROM device_command_queue
+                 WHERE device_id = ?
+                   AND command IN ('send-sms', 'send-sms-multipart')
+                   AND message_id = ?
+                 ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC
+                 LIMIT 1`,
+                [normalizedDeviceId, match.external_id]
+            );
+
+            if (queueRow && String(queueRow.status || '').trim().toLowerCase() !== 'completed') {
+                await this.mqttService._markPersistentQueueCompleted(queueRow, {
+                    success: true,
+                    result: 'completed',
+                    detail: 'sms_delivered_via_incoming_match',
+                    evidence: 'incoming_sms_match',
+                    action_id: match.external_id,
+                    messageId: match.external_id,
+                    deviceId: normalizedDeviceId,
+                    to: normalizedFrom,
+                    timestamp: incomingTimestamp || new Date().toISOString()
+                });
+            }
+        }
+
+        this.toDevice(normalizedDeviceId, 'sms:delivered', {
+            deviceId: normalizedDeviceId,
+            id: match.id,
+            messageId: match.external_id || null,
+            to: normalizedFrom,
+            evidence: 'incoming_sms_match',
+            timestamp: incomingTimestamp || new Date().toISOString()
+        });
+
+        return match;
+    }
+
     initialize() {
         this.loadDeletedDevices();
         this.setupEventHandlers();
@@ -1005,7 +1127,7 @@ class MQTTHandlers {
             if (this.isDeletedDevice(deviceId)) return;
 
             const command = String(data?.command || '').trim().toLowerCase();
-            if (command !== 'send_sms' && command !== 'send-sms') {
+            if (command !== 'send_sms' && command !== 'send-sms' && command !== 'send_sms_multipart' && command !== 'send-sms-multipart') {
                 return;
             }
 
@@ -1091,6 +1213,13 @@ class MQTTHandlers {
                         from_number: decodedFrom,
                         to_number: data.to || data.to_number || null,
                         type: 'incoming'
+                    });
+
+                    await this.reconcileOutgoingSmsFromIncoming(deviceId, {
+                        from: decodedFrom,
+                        message: decodedMessage,
+                        timestamp: smsTimestamp,
+                        simSlot: simScope.simSlot
                     });
 
                     // Update in-memory unread count for this device.

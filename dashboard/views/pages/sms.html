@@ -237,9 +237,13 @@
                             <i class="bi bi-paperclip"></i>
                         </button>
                         <input type="file" class="d-none" id="smsAttachmentInput" accept="image/*,text/vcard,text/x-vcard,.vcf">
-                        <textarea class="form-control sms-chat-input" id="smsChatMessage" rows="1" maxlength="160" placeholder="Type SMS reply..."></textarea>
+                        <textarea class="form-control sms-chat-input" id="smsChatMessage" rows="1" placeholder="Type SMS reply..."></textarea>
                         <div class="d-flex align-items-center gap-2 flex-shrink-0 sms-chat-send-cluster">
-                            <span class="sms-chat-char-pill text-nowrap"><span id="smsChatCharCount">0</span><span class="sms-chat-char-limit">/160</span></span>
+                            <span class="sms-chat-char-pill text-nowrap">
+                                <span id="smsChatCharCount">0</span><span class="sms-chat-char-limit"> chars</span>
+                                <span class="ms-2" id="smsChatByteCount">0/1023 bytes</span>
+                            </span>
+                            <span class="small text-muted text-nowrap" id="smsChatParts">(single: 1 part, GSM-7, limit 160)</span>
                             <input type="hidden" id="smsChatSendMode" value="instant">
                             <div class="btn-group sms-send-group">
                                 <button type="submit" class="btn btn-primary rounded-start-pill sms-send-primary" id="smsChatSendBtn" title="Send SMS">
@@ -288,8 +292,15 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Message</label>
-                    <textarea class="form-control" id="schedMessage" rows="3" maxlength="160" placeholder="Your message…"></textarea>
-                    <div class="form-text">Scheduled SMS uses the same device send path and supports up to 160 characters.</div>
+                    <textarea class="form-control" id="schedMessage" rows="3" placeholder="Your message…"></textarea>
+                    <div class="form-text d-flex flex-wrap justify-content-between gap-2">
+                        <span>Scheduled SMS uses the same device send path and supports multipart SMS up to 1023 UTF-8 bytes and 15 parts.</span>
+                        <span class="text-nowrap">
+                            <span id="schedCharCount">0</span> chars
+                            <span class="ms-2"><span id="schedByteCount">0</span>/1023 bytes</span>
+                            <span class="ms-2" id="schedParts">(1 part, GSM-7)</span>
+                        </span>
+                    </div>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Send At</label>
@@ -717,11 +728,16 @@ function updateScheduledRecipientMeta() {
 async function createScheduledSms() {
     const recipients = Array.from(new Set(splitScheduledRecipients(document.getElementById('schedTo')?.value || '')));
     const message = document.getElementById('schedMessage')?.value.trim();
+    const messageAnalysis = window.smsComposeLimits?.analyze ? window.smsComposeLimits.analyze(message) : null;
     const sendAt = document.getElementById('schedSendAt')?.value;
     const button = document.getElementById('schedCreateBtn');
     const spinner = button?.querySelector('.spinner-border');
     if (!message || !sendAt) { showToast('All fields required', 'warning'); return; }
     if (!recipients.length) { showToast('Enter at least one recipient', 'warning'); return; }
+    if (messageAnalysis && !messageAnalysis.valid) {
+        showToast(window.smsComposeLimits?.formatError?.(messageAnalysis) || 'SMS message exceeds the device limit.', 'warning');
+        return;
+    }
     const scheduledDate = new Date(sendAt);
     if (!Number.isFinite(scheduledDate.getTime()) || scheduledDate <= new Date()) {
         showToast('Choose a future time for scheduled SMS.', 'warning');
@@ -748,6 +764,7 @@ async function createScheduledSms() {
             const schedTo = document.getElementById('schedTo');
             if (schedTo) schedTo.value = '';
             document.getElementById('schedMessage').value = '';
+            window.updateSmsComposeCounterById?.('schedMessage', { countId: 'schedCharCount', byteId: 'schedByteCount', partsId: 'schedParts' });
             updateScheduledRecipientMeta();
             loadScheduledSms();
         } else {
@@ -872,16 +889,17 @@ document.addEventListener('DOMContentLoaded', function() {
                     </div>
                     <div class="mb-3">
                         <label class="form-label fw-bold">Message</label>
-                        <textarea class="form-control" id="modalMessage" name="message" rows="4" 
-                                  maxlength="160" placeholder="Type your message here..." required></textarea>
+                        <textarea class="form-control" id="modalMessage" name="message" rows="4"
+                                  placeholder="Type your message here..." required></textarea>
                         <div class="d-flex justify-content-between mt-2">
                             <small class="text-muted">
                                 <i class="bi bi-info-circle me-1"></i>
-                                SMS character limit: 160
+                                Dashboard auto-switches to multipart when the message exceeds one SMS part
                             </small>
                             <span class="badge bg-light text-dark">
-                                <span id="modalCharCount">0</span>/160
-                                <span id="smsParts" class="ms-2 text-muted">(Single SMS only)</span>
+                                <span id="modalCharCount">0</span> chars
+                                <span class="ms-2"><span id="modalByteCount">0</span>/1023 bytes</span>
+                                <span id="smsParts" class="ms-2 text-muted">(single: 1 part, GSM-7, limit 160)</span>
                             </span>
                         </div>
                     </div>

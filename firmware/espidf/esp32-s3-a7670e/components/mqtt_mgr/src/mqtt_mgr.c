@@ -498,6 +498,7 @@ static esp_err_t mqtt_mgr_subscribe_modem_command_topics_locked(void) {
         "command/status-watch",
         "command/get-status",
         "command/send-sms",
+        "command/send-sms-multipart",
         "command/send-ussd",
         "command/cancel-ussd",
         "command/restart-modem",
@@ -1552,8 +1553,9 @@ void mqtt_mgr_set_status_listener(mqtt_mgr_status_listener_t listener) {
 
 esp_err_t mqtt_mgr_publish_sms_incoming(const unified_sms_payload_t *payload) {
     char from[64] = {0};
-    char text[384] = {0};
-    char json[512] = {0};
+    char text[1024] = {0};
+    char detail[64] = {0};
+    char json[1280] = {0};
 
     if (!payload) {
         return ESP_ERR_INVALID_ARG;
@@ -1561,12 +1563,15 @@ esp_err_t mqtt_mgr_publish_sms_incoming(const unified_sms_payload_t *payload) {
 
     mqtt_mgr_copy_json_string(from, sizeof(from), payload->from);
     mqtt_mgr_copy_json_string(text, sizeof(text), payload->text);
+    mqtt_mgr_copy_json_string(detail, sizeof(detail), payload->detail);
     snprintf(
         json,
         sizeof(json),
-        "{\"type\":\"sms_incoming\",\"from\":\"%s\",\"text\":\"%s\",\"timestamp\":%" PRIu32 "}",
+        "{\"type\":\"sms_incoming\",\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp\":%" PRIu32 "}",
         from,
         text,
+        detail,
+        (unsigned)payload->sim_slot,
         payload->timestamp_ms
     );
     return mqtt_mgr_publish_text("sms/incoming", json);
@@ -1586,9 +1591,10 @@ esp_err_t mqtt_mgr_publish_call_event(const unified_call_payload_t *payload) {
     snprintf(
         json,
         sizeof(json),
-        "{\"type\":\"call_event\",\"number\":\"%s\",\"state\":\"%s\",\"timestamp\":%" PRIu32 "}",
+        "{\"type\":\"call_event\",\"number\":\"%s\",\"state\":\"%s\",\"sim_slot\":%u,\"timestamp\":%" PRIu32 "}",
         number,
         state,
+        (unsigned)payload->sim_slot,
         payload->timestamp_ms
     );
     return mqtt_mgr_publish_text("call/events", json);
@@ -1608,10 +1614,11 @@ esp_err_t mqtt_mgr_publish_ussd_result(const unified_ussd_payload_t *payload) {
     snprintf(
         json,
         sizeof(json),
-        "{\"type\":\"ussd_result\",\"code\":\"%s\",\"response\":\"%s\",\"session_active\":%s,\"timestamp\":%" PRIu32 "}",
+        "{\"type\":\"ussd_result\",\"code\":\"%s\",\"response\":\"%s\",\"session_active\":%s,\"sim_slot\":%u,\"timestamp\":%" PRIu32 "}",
         code,
         response,
         payload->session_active ? "true" : "false",
+        (unsigned)payload->sim_slot,
         payload->timestamp_ms
     );
     return mqtt_mgr_publish_text("ussd/result", json);

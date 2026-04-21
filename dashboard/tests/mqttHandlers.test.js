@@ -490,6 +490,79 @@ describe('MQTTHandlers SMS storage', () => {
             })
         );
     });
+
+    test('reconciles a timed-out outgoing SMS when matching incoming loopback evidence arrives', async () => {
+        const { mqttService, db, room } = buildSmsSubject();
+        mqttService._markPersistentQueueCompleted = jest.fn().mockResolvedValue(undefined);
+
+        db.get.mockImplementation(async (sql, params) => {
+            const query = String(sql);
+            if (query.includes('SELECT id FROM devices')) {
+                return { id: 'test-device-1' };
+            }
+            if (query.includes('FROM device_command_queue')) {
+                return {
+                    id: 'queue-1',
+                    device_id: 'test-device-1',
+                    command: 'send-sms',
+                    status: 'failed',
+                    message_id: 'send-sms_123',
+                    payload: JSON.stringify({
+                        to: '+8801555123456',
+                        message: 'loopback token'
+                    })
+                };
+            }
+            return null;
+        });
+        db.all.mockImplementation(async (sql) => {
+            const query = String(sql);
+            if (query.includes("FROM sms") && query.includes("type = 'outgoing'")) {
+                return [{
+                    id: 42,
+                    external_id: 'send-sms_123',
+                    status: 'failed',
+                    timestamp: '2026-04-21T11:54:18.298Z',
+                    sim_slot: 0
+                }];
+            }
+            return [];
+        });
+
+        mqttService.emit('sms:incoming', 'test-device-1', {
+            from: '+8801555123456',
+            message: 'loopback token',
+            timestamp: '2026-04-21T11:55:42.392Z',
+            sim_slot: 0
+        });
+
+        await flushAsync();
+
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining("SET status = 'delivered'"),
+            ['2026-04-21T11:55:42.392Z', 42]
+        );
+        expect(mqttService._markPersistentQueueCompleted).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'queue-1',
+                message_id: 'send-sms_123'
+            }),
+            expect.objectContaining({
+                success: true,
+                detail: 'sms_delivered_via_incoming_match',
+                messageId: 'send-sms_123'
+            })
+        );
+        expect(room.emit).toHaveBeenCalledWith(
+            'sms:delivered',
+            expect.objectContaining({
+                deviceId: 'test-device-1',
+                id: 42,
+                messageId: 'send-sms_123',
+                evidence: 'incoming_sms_match'
+            })
+        );
+    });
 });
 
 describe('MQTTHandlers Wi-Fi history persistence', () => {

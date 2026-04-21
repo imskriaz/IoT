@@ -945,7 +945,7 @@ router.post('/api/quick/balance', async (req, res) => {
         if (global.mqttService && global.mqttService.connected) {
             global.mqttService.publishCommand(deviceId, 'send-ussd', {
                 code: balanceCode,
-                ...(simScope.simSlot !== null ? { sim_slot: simScope.simSlot, simSlot: simScope.simSlot } : {})
+                ...(simScope.simSlot !== null ? { sim_slot: simScope.simSlot } : {})
             }, false, 60000, {
                 source: 'dashboard:quick-ussd',
                 domain: 'telephony',
@@ -1005,7 +1005,7 @@ router.post('/api/quick/sim-number', async (req, res) => {
         if (global.mqttService && global.mqttService.connected) {
             global.mqttService.publishCommand(deviceId, 'send-ussd', {
                 code: ownNumberCode,
-                ...(simScope.simSlot !== null ? { sim_slot: simScope.simSlot, simSlot: simScope.simSlot } : {})
+                ...(simScope.simSlot !== null ? { sim_slot: simScope.simSlot } : {})
             }, false, 60000, {
                 source: 'dashboard:quick-ussd',
                 domain: 'telephony',
