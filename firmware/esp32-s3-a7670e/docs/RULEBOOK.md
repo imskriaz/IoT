@@ -172,6 +172,8 @@ Keep these responsibilities on the device:
 
 - SMS send, read, and delete belong to the device.
 - SMS scheduling, retries, templates, export, bulk import, thread assembly, and unread summaries belong to the dashboard.
+- SMS encoding analysis, Unicode/Bangla part counting, and single-vs-multipart command selection belong to the dashboard whenever the dashboard already has the full message text.
+- Do not add firmware-side preprocessing for SMS logic that the dashboard can determine safely before dispatch. Keep firmware focused on modem-safe execution and vendor-specific constraints.
 - The device should publish compact incoming/outgoing result events.
 - The dashboard should persist SMS history and derive UI state from that data.
 - The SMS path must remain single-executor on the device so modem text-mode operations do not collide.

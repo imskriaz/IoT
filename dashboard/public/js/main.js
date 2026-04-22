@@ -44,6 +44,26 @@ function deviceOnline() {
     return inferStatusOnline(latestDeviceStatus);
 }
 
+function deviceHttpOnline(status = latestDeviceStatus) {
+    if (!status || !matchesActiveDeviceStatus(status)) {
+        return false;
+    }
+
+    const activePath = String(status?.activePath || status?.active_path || '').trim().toLowerCase();
+    const transportMode = String(
+        status?.transport?.mode
+        || status?.transport_mode
+        || status?.bridge_transport
+        || ''
+    ).trim().toLowerCase();
+
+    if (activePath !== 'http' && transportMode !== 'http') {
+        return false;
+    }
+
+    return inferStatusOnline(status);
+}
+
 function hasActiveDeviceContext() {
     return Boolean(window.getActiveDeviceId ? window.getActiveDeviceId() : '');
 }
@@ -3462,6 +3482,9 @@ window.getActiveDeviceSimSlot = function () {
 };
 window.getActiveDeviceSimContext = function () {
     return resolveActiveDeviceSimContext();
+};
+window.deviceHttpOnline = function () {
+    return deviceHttpOnline(latestDeviceStatus);
 };
 window.switchActiveSim = function (slotIndex) {
     const activeDeviceId = getStatusActiveDeviceId();

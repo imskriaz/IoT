@@ -683,20 +683,12 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
     const size_t total_segments = modem_a7670_sms_segment_count(text);
     const uint8_t message_reference = modem_a7670_sms_message_reference();
     const char *segment_cursor = text;
-    char encoded_number[MODEM_A7670_SMS_UCS2_NUMBER_LEN] = {0};
     esp_err_t err = ESP_OK;
     const char *destination_number = number;
     const bool use_ucs2 = modem_a7670_sms_requires_ucs2(text);
 
     if (total_segments < 2U || total_segments > MODEM_A7670_SMS_MAX_SEGMENTS) {
         return ESP_ERR_INVALID_SIZE;
-    }
-
-    if (use_ucs2) {
-        if (!modem_a7670_sms_encode_utf8_to_ucs2_hex(number, encoded_number, sizeof(encoded_number))) {
-            return ESP_ERR_INVALID_ARG;
-        }
-        destination_number = encoded_number;
     }
 
     err = modem_a7670_sms_set_charset_locked(use_ucs2 ? "UCS2" : "IRA", response, response_len, timeout_ms);
@@ -806,7 +798,6 @@ esp_err_t modem_a7670_send_sms(
     const uint8_t ctrl_z = 0x1AU;
     const size_t total_segments = modem_a7670_sms_segment_count(text);
     const bool use_ucs2 = modem_a7670_sms_requires_ucs2(text);
-    char encoded_number[MODEM_A7670_SMS_UCS2_NUMBER_LEN] = {0};
     char encoded_text[MODEM_A7670_SMS_UCS2_TEXT_LEN] = {0};
     const char *destination_number = number;
     const char *message_text = text;
@@ -826,12 +817,13 @@ esp_err_t modem_a7670_send_sms(
     }
 
     if (use_ucs2) {
-        if (!modem_a7670_sms_encode_utf8_to_ucs2_hex(number, encoded_number, sizeof(encoded_number)) ||
-            !modem_a7670_sms_encode_utf8_to_ucs2_hex(text, encoded_text, sizeof(encoded_text))) {
+        /* SIMCom text-mode UCS2 requires the message body as UCS2 hex, but the
+         * destination phone number remains the normal dial string. Encoding the
+         * number into UCS2 breaks non-ASCII sends such as Bangla SMS. */
+        if (!modem_a7670_sms_encode_utf8_to_ucs2_hex(text, encoded_text, sizeof(encoded_text))) {
             xSemaphoreGive(s_lock);
             return ESP_ERR_INVALID_ARG;
         }
-        destination_number = encoded_number;
         message_text = encoded_text;
     }
 

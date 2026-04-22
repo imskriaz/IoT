@@ -66,6 +66,7 @@ The table below uses the preferred runtime lane for each feature.
 
 - Use `MQTT` for control, status, SMS, Wi-Fi, USSD, call state, GPS events, NFC/RFID, and GPIO actions.
 - Keep plain text SMS on `MQTT`; use `HTTP` only when messaging needs attachment/media transfer.
+- Keep SMS orchestration on the dashboard: Unicode/Bangla analysis, multipart selection, scheduling, templates, import/export, and thread logic should stay off the ESP32 whenever hardware-local execution is not required.
 - Use browser `WebSocket` for live dashboard updates, GPS map refresh, and call/intercom signaling to the UI.
 - Use `HTTP` only for heavier transfers such as OTA binaries, file manager payloads, camera capture, and future media streams.
 

@@ -503,7 +503,18 @@ describe('MQTTHandlers SMS storage', () => {
 
         expect(db.run).toHaveBeenCalledWith(
             expect.stringContaining('INSERT OR IGNORE INTO sms'),
-            ['+8801555123456', null, 'hello from modem', 'test-device-1', '2026-04-03T10:00:00.000Z', null]
+            [
+                '+8801555123456',
+                null,
+                'hello from modem',
+                'incoming',
+                'received',
+                'test-device-1',
+                '2026-04-03T10:00:00.000Z',
+                0,
+                'android-mqtt',
+                null
+            ]
         );
         expect(smsCache.increment).toHaveBeenCalledWith('test-device-1');
         expect(room.emit).toHaveBeenCalledWith(

@@ -173,12 +173,18 @@
                 </div>
                 <div class="d-flex align-items-center gap-2">
                     <span class="badge bg-light text-dark border" id="smsChatCount">0 messages</span>
-                    <a href="/sms" class="btn btn-sm btn-outline-secondary" id="smsThreadLinkBtn">
-                        <i class="bi bi-link-45deg me-1"></i><span class="d-none d-md-inline">Thread URL</span>
-                    </a>
                     <button type="button" class="btn btn-sm btn-outline-success" id="smsChatCallBtn" disabled>
                         <i class="bi bi-telephone me-1"></i><span class="d-none d-md-inline">Call</span>
                     </button>
+                    <div class="dropdown">
+                        <button type="button" class="btn btn-sm btn-outline-secondary rounded-circle sms-header-icon-btn" id="smsChatThreadMenuBtn" data-bs-toggle="dropdown" aria-expanded="false" title="Thread actions" aria-label="Thread actions" disabled>
+                            <i class="bi bi-three-dots"></i>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><button type="button" class="dropdown-item" data-thread-menu-action="mark-read"><i class="bi bi-envelope-open me-2"></i>Mark Read</button></li>
+                            <li><button type="button" class="dropdown-item text-danger" data-thread-menu-action="delete-thread"><i class="bi bi-trash me-2"></i>Delete Thread</button></li>
+                        </ul>
+                    </div>
                 </div>
             </div>
             <div class="card-body bg-light-subtle sms-chat-body">
@@ -218,7 +224,7 @@
                     </div>
                     <div class="sms-chat-summary-row">
                         <div class="small text-muted text-truncate" id="smsChatRecipientMeta"></div>
-                        <small class="text-muted sms-chat-send-mode-meta text-end" id="smsChatSendModeMeta">Instant sends through MQTT runtime.</small>
+                        <small class="text-muted sms-chat-send-mode-meta text-end" id="smsChatSendModeMeta">0 chars | 1 part</small>
                     </div>
                     <div id="smsAttachmentPreview" class="sms-attach-preview d-none"></div>
                     <div class="d-none d-flex flex-wrap align-items-center justify-content-between gap-2 sms-chat-mode-row" id="smsChatModeRow">
@@ -240,17 +246,19 @@
                         </div>
                     </div>
                     <form id="smsChatForm" class="sms-chat-form d-flex align-items-end gap-2">
-                        <button type="button" class="btn btn-light border rounded-circle sms-icon-btn" id="smsAttachBtn" title="Attach image or contact card">
-                            <i class="bi bi-paperclip"></i>
-                        </button>
-                        <input type="file" class="d-none" id="smsAttachmentInput" accept="image/*,text/vcard,text/x-vcard,.vcf">
+                        <div class="sms-chat-attachment-slot" data-sms-http-required="true" data-sms-http-display="flex">
+                            <button type="button" class="btn btn-light border rounded-circle sms-icon-btn" id="smsAttachBtn" title="Attach image or contact card">
+                                <i class="bi bi-paperclip"></i>
+                            </button>
+                            <input type="file" class="d-none" id="smsAttachmentInput" accept="image/*,text/vcard,text/x-vcard,.vcf">
+                        </div>
                         <textarea class="form-control sms-chat-input" id="smsChatMessage" rows="1" placeholder="Type SMS reply..."></textarea>
-                        <div class="d-flex align-items-center gap-2 flex-shrink-0 sms-chat-send-cluster">
-                            <span class="sms-chat-char-pill text-nowrap">
+                        <div class="sms-chat-send-cluster d-flex align-items-center gap-2 flex-shrink-0">
+                            <span class="sms-chat-char-pill text-nowrap d-none">
                                 <span id="smsChatCharCount">0</span><span class="sms-chat-char-limit"> chars</span>
                                 <span class="ms-2" id="smsChatByteCount">0/1023 bytes</span>
                             </span>
-                            <span class="small text-muted text-nowrap" id="smsChatParts">(single: 1 part, GSM-7, limit 160)</span>
+                            <span class="small text-muted text-nowrap d-none" id="smsChatParts">(single: 1 part, GSM-7, limit 160)</span>
                             <input type="hidden" id="smsChatSendMode" value="instant">
                             <div class="btn-group sms-send-group">
                                 <button type="submit" class="btn btn-primary rounded-start-pill sms-send-primary" id="smsChatSendBtn" title="Send SMS">
@@ -275,7 +283,10 @@
                             </div>
                         </div>
                     </form>
-                    <div class="sms-chat-help">Instant uses MQTT runtime. Scheduled SMS stays dashboard-owned until dispatch. Attachments preview only until MMS transport is enabled.</div>
+                    <div class="sms-chat-help">
+                        Instant uses MQTT runtime. Scheduled SMS stays dashboard-owned until dispatch.
+                        <span data-sms-http-required="true" data-sms-http-display="inline">Attachments preview only until MMS transport is enabled.</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -286,51 +297,19 @@
 <div class="modal fade" id="scheduleModal" tabindex="-1">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
-            <div class="modal-header">
+            <div class="modal-header flex-wrap gap-2">
                 <h5 class="modal-title"><i class="bi bi-clock me-2"></i>Schedule Planner</h5>
+                <div class="d-flex flex-wrap gap-2 ms-auto">
+                    <button type="button" class="btn btn-sm btn-primary" onclick="openSmsScheduleEntryModal('single')">
+                        <i class="bi bi-plus-circle me-1"></i>Single Message
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="openSmsScheduleEntryModal('upload')">
+                        <i class="bi bi-upload me-1"></i>Upload
+                    </button>
+                </div>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <div class="mb-3">
-                    <label class="form-label">Recipient</label>
-                    <input type="tel" class="form-control" id="schedTo" data-intl-tel-input placeholder="Choose country or type number">
-                    <div class="sms-recipient-pills d-none mt-2" id="schedRecipientPills" aria-live="polite"></div>
-                    <div class="form-text mt-1" id="schedRecipientMeta">Single or multiple numbers: separate with comma, semicolon, or new line.</div>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Message</label>
-                    <textarea class="form-control" id="schedMessage" rows="3" placeholder="Your message…"></textarea>
-                    <div class="form-text d-flex flex-wrap justify-content-between gap-2">
-                        <span>Scheduled SMS uses the same device send path and supports multipart SMS up to 1023 UTF-8 bytes and 15 parts.</span>
-                        <span class="text-nowrap">
-                            <span id="schedCharCount">0</span> chars
-                            <span class="ms-2"><span id="schedByteCount">0</span>/1023 bytes</span>
-                            <span class="ms-2" id="schedParts">(1 part, GSM-7)</span>
-                        </span>
-                    </div>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Send At</label>
-                    <input type="datetime-local" class="form-control" id="schedSendAt">
-                </div>
-                <div class="border rounded mb-3 p-3 bg-light-subtle">
-                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
-                        <div>
-                            <h6 class="fw-semibold mb-1"><i class="bi bi-file-earmark-spreadsheet me-1"></i>Bulk Excel Template</h6>
-                            <div class="small text-muted">Upload CSV exported from Excel with columns: phone, message, send_at, sim_slot.</div>
-                        </div>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="downloadSmsScheduleTemplate()">
-                            <i class="bi bi-download me-1"></i>Template
-                        </button>
-                    </div>
-                    <div class="input-group input-group-sm">
-                        <input type="file" class="form-control" id="schedImportFile" accept=".csv,.tsv,text/csv,text/plain">
-                        <button type="button" class="btn btn-outline-primary" id="schedImportBtn" onclick="importScheduledSmsTemplate()">
-                            <span class="spinner-border spinner-border-sm d-none" role="status"></span>
-                            <i class="bi bi-upload me-1"></i>Upload
-                        </button>
-                    </div>
-                </div>
                 <div class="border rounded">
                     <div class="d-flex justify-content-between align-items-center px-3 py-2 border-bottom bg-light">
                         <h6 class="fw-semibold mb-0">Scheduled Messages</h6>
@@ -343,12 +322,81 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="scheduleSingleModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-chat-left-text me-2"></i>Single Scheduled Message</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">Recipient</label>
+                    <input type="tel" class="form-control" id="schedSingleTo" data-intl-tel-input placeholder="Choose country or type number">
+                    <div class="sms-recipient-pills d-none mt-2" id="schedSingleRecipientPills" aria-live="polite"></div>
+                    <div class="form-text mt-1" id="schedSingleRecipientMeta">Single or multiple numbers: separate with comma, semicolon, or new line.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Message</label>
+                    <textarea class="form-control" id="schedSingleMessage" rows="3" placeholder="Your message..."></textarea>
+                    <div class="form-text d-flex flex-wrap justify-content-between gap-2">
+                        <span>Scheduled SMS uses the same device send path and supports multipart SMS up to 1023 UTF-8 bytes and 15 parts.</span>
+                        <span class="text-nowrap">
+                            <span id="schedSingleCharCount">0</span> chars
+                            <span class="ms-2"><span id="schedSingleByteCount">0</span>/1023 bytes</span>
+                            <span class="ms-2" id="schedSingleParts">(1 part, GSM-7)</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="mb-0">
+                    <label class="form-label">Send At</label>
+                    <input type="datetime-local" class="form-control" id="schedSingleSendAt">
+                </div>
+            </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="schedCreateBtn" onclick="createScheduledSms()">
+                <button type="button" class="btn btn-primary" id="schedSingleCreateBtn" onclick="createScheduledSms()">
                     <span class="spinner-border spinner-border-sm d-none" role="status"></span>
                     <i class="bi bi-clock me-1"></i>Schedule
                 </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="scheduleUploadModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-file-earmark-spreadsheet me-2"></i>Upload Scheduled Messages</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="border rounded p-3 bg-light-subtle">
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+                        <div>
+                            <h6 class="fw-semibold mb-1">Bulk Excel Template</h6>
+                            <div class="small text-muted">Upload CSV exported from Excel with columns: phone, message, send_at, sim_slot.</div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="downloadSmsScheduleTemplate()">
+                            <i class="bi bi-download me-1"></i>Template
+                        </button>
+                    </div>
+                    <div class="input-group">
+                        <input type="file" class="form-control" id="schedImportFile" accept=".csv,.tsv,text/csv,text/plain">
+                        <button type="button" class="btn btn-outline-primary" id="schedImportBtn" onclick="importScheduledSmsTemplate()">
+                            <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                            <i class="bi bi-upload me-1"></i>Upload
+                        </button>
+                    </div>
+                    <div class="small text-muted mt-3" id="schedImportSimSlotGuide">
+                        sim_slot uses modem slot indexes: 0 = SIM 1, 1 = SIM 2.
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -374,20 +422,45 @@
                         <div class="small text-muted" id="smsThreadCount">0 messages</div>
                     </div>
                     <div class="btn-group btn-group-sm">
-                        <a href="/sms" class="btn btn-outline-secondary" id="smsThreadModalLinkBtn">
-                            <i class="bi bi-link-45deg me-1"></i>URL
-                        </a>
                         <button type="button" class="btn btn-outline-success" id="smsThreadCallBtn">
                             <i class="bi bi-telephone me-1"></i>Call
                         </button>
                         <button type="button" class="btn btn-outline-primary" id="smsThreadReplyBtn">
                             <i class="bi bi-reply me-1"></i>Reply
                         </button>
+                        <div class="dropdown">
+                            <button type="button" class="btn btn-outline-secondary" id="smsThreadMenuBtn" data-bs-toggle="dropdown" aria-expanded="false" title="Thread actions" aria-label="Thread actions" disabled>
+                                <i class="bi bi-three-dots"></i>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li><button type="button" class="dropdown-item" data-thread-menu-action="mark-read"><i class="bi bi-envelope-open me-2"></i>Mark Read</button></li>
+                                <li><button type="button" class="dropdown-item text-danger" data-thread-menu-action="delete-thread"><i class="bi bi-trash me-2"></i>Delete Thread</button></li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
                 <div id="smsThreadMessages" class="d-flex flex-column gap-2">
                     <div class="text-muted text-center py-4">Select a message to open its conversation.</div>
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="smsMessageDetailsModal" tabindex="-1" aria-labelledby="smsMessageDetailsTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <h5 class="modal-title" id="smsMessageDetailsTitle">
+                        <i class="bi bi-info-circle me-2"></i>Message Details
+                    </h5>
+                    <small class="text-muted" id="smsMessageDetailsMeta">Full SMS metadata</small>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="smsMessageDetailsBody">
+                <div class="text-muted">No message selected.</div>
             </div>
         </div>
     </div>
@@ -442,6 +515,90 @@ function smsPageActiveSimContext() {
         deviceId: smsPageActiveDeviceId(),
         simSlot: typeof window.getActiveDeviceSimSlot === 'function' ? window.getActiveDeviceSimSlot() : null
     };
+}
+
+function getSmsPageCachedDeviceStatus() {
+    const deviceId = smsPageActiveDeviceId();
+    if (!deviceId) return null;
+    try {
+        const key = typeof window.getLastDeviceStatusCacheKey === 'function'
+            ? window.getLastDeviceStatusCacheKey(deviceId)
+            : `lastDeviceStatus:${deviceId}`;
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function getSmsPageSimSlotGuideLines() {
+    const status = getSmsPageCachedDeviceStatus();
+    const rawSlots = Array.isArray(status?.simSlots)
+        ? status.simSlots
+        : (Array.isArray(status?.sim_slots)
+            ? status.sim_slots
+            : (Array.isArray(status?.sim?.slots)
+                ? status.sim.slots
+                : (Array.isArray(status?.status?.sim?.slots) ? status.status.sim.slots : [])));
+
+    const slots = rawSlots
+        .map((slot, index) => {
+            if (!slot || typeof slot !== 'object') return null;
+            const slotIndex = Number.parseInt(String(
+                slot.slotIndex
+                ?? slot.slot_index
+                ?? slot.simSlot
+                ?? slot.sim_slot
+                ?? index
+            ), 10);
+            const number = String(
+                slot.number
+                ?? slot.subscriberNumber
+                ?? slot.subscriber_number
+                ?? slot.msisdn
+                ?? slot.phoneNumber
+                ?? slot.phone_number
+                ?? ''
+            ).trim();
+            const carrier = String(
+                slot.operatorName
+                ?? slot.operator
+                ?? slot.carrierName
+                ?? slot.carrier_name
+                ?? slot.displayName
+                ?? slot.display_name
+                ?? ''
+            ).trim();
+            return {
+                slotIndex: Number.isFinite(slotIndex) && slotIndex >= 0 ? slotIndex : index,
+                number,
+                carrier
+            };
+        })
+        .filter(Boolean)
+        .sort((left, right) => left.slotIndex - right.slotIndex);
+
+    if (!slots.length) {
+        return ['0 = SIM 1', '1 = SIM 2'];
+    }
+
+    return slots.map((slot) => {
+        const parts = [`${slot.slotIndex} = SIM ${slot.slotIndex + 1}`];
+        if (slot.number) {
+            parts.push(slot.number);
+        }
+        if (slot.carrier) {
+            parts.push(slot.carrier);
+        }
+        return parts.join(' | ');
+    });
+}
+
+function renderScheduleImportSimSlotGuide() {
+    const guide = document.getElementById('schedImportSimSlotGuide');
+    if (!guide) return;
+    const lines = getSmsPageSimSlotGuideLines();
+    guide.textContent = `sim_slot guide: ${lines.join(' ; ')}`;
 }
 
 function isSmsPageDeviceSnapshotCurrent(deviceId) {
@@ -727,10 +884,17 @@ function splitScheduledRecipients(value) {
         .filter(Boolean);
 }
 
+function openSmsScheduleEntryModal(mode) {
+    const modalId = mode === 'upload' ? 'scheduleUploadModal' : 'scheduleSingleModal';
+    const modalEl = document.getElementById(modalId);
+    if (!modalEl) return;
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+}
+
 function updateScheduledRecipientMeta() {
-    const input = document.getElementById('schedTo');
-    const meta = document.getElementById('schedRecipientMeta');
-    const pills = document.getElementById('schedRecipientPills');
+    const input = document.getElementById('schedSingleTo');
+    const meta = document.getElementById('schedSingleRecipientMeta');
+    const pills = document.getElementById('schedSingleRecipientPills');
     if (!input || !meta) return;
     const recipients = Array.from(new Set(splitScheduledRecipients(input.value)));
     const count = recipients.length;
@@ -751,11 +915,11 @@ function updateScheduledRecipientMeta() {
 }
 
 async function createScheduledSms() {
-    const recipients = Array.from(new Set(splitScheduledRecipients(document.getElementById('schedTo')?.value || '')));
-    const message = document.getElementById('schedMessage')?.value.trim();
+    const recipients = Array.from(new Set(splitScheduledRecipients(document.getElementById('schedSingleTo')?.value || '')));
+    const message = document.getElementById('schedSingleMessage')?.value.trim();
     const messageAnalysis = window.smsComposeLimits?.analyze ? window.smsComposeLimits.analyze(message) : null;
-    const sendAt = document.getElementById('schedSendAt')?.value;
-    const button = document.getElementById('schedCreateBtn');
+    const sendAt = document.getElementById('schedSingleSendAt')?.value;
+    const button = document.getElementById('schedSingleCreateBtn');
     const spinner = button?.querySelector('.spinner-border');
     if (!message || !sendAt) { showToast('All fields required', 'warning'); return; }
     if (!recipients.length) { showToast('Enter at least one recipient', 'warning'); return; }
@@ -784,12 +948,15 @@ async function createScheduledSms() {
         const data = await res.json();
         if (data.success) {
             showToast(data.count > 1 ? `${data.count} SMS scheduled` : 'SMS scheduled', 'success');
-            bootstrap.Modal.getInstance(document.getElementById('scheduleModal'))?.hide();
-            window.PhoneInputs?.setValue?.('schedTo', '');
-            const schedTo = document.getElementById('schedTo');
+            bootstrap.Modal.getInstance(document.getElementById('scheduleSingleModal'))?.hide();
+            window.PhoneInputs?.setValue?.('schedSingleTo', '');
+            const schedTo = document.getElementById('schedSingleTo');
             if (schedTo) schedTo.value = '';
-            document.getElementById('schedMessage').value = '';
-            window.updateSmsComposeCounterById?.('schedMessage', { countId: 'schedCharCount', byteId: 'schedByteCount', partsId: 'schedParts' });
+            const schedMessage = document.getElementById('schedSingleMessage');
+            if (schedMessage) schedMessage.value = '';
+            const schedSendAt = document.getElementById('schedSingleSendAt');
+            if (schedSendAt) schedSendAt.value = '';
+            window.updateSmsComposeCounterById?.('schedSingleMessage', { countId: 'schedSingleCharCount', byteId: 'schedSingleByteCount', partsId: 'schedSingleParts' });
             updateScheduledRecipientMeta();
             loadScheduledSms();
         } else {
@@ -842,6 +1009,7 @@ async function importScheduledSmsTemplate() {
             const skipped = Array.isArray(data.errors) && data.errors.length ? ` (${data.errors.length} skipped)` : '';
             showToast(`${data.count || 0} SMS scheduled from template${skipped}`, 'success');
             input.value = '';
+            bootstrap.Modal.getInstance(document.getElementById('scheduleUploadModal'))?.hide();
             loadScheduledSms();
         } else {
             showToast(data.message || 'Failed to import template', 'danger');
@@ -869,7 +1037,12 @@ document.addEventListener('DOMContentLoaded', function() {
     if (schedModal) {
         schedModal.addEventListener('show.bs.modal', () => {
             loadScheduledSms();
-            const dt = document.getElementById('schedSendAt');
+        });
+    }
+    const schedSingleModal = document.getElementById('scheduleSingleModal');
+    if (schedSingleModal) {
+        schedSingleModal.addEventListener('show.bs.modal', () => {
+            const dt = document.getElementById('schedSingleSendAt');
             if (dt && !dt.value) {
                 const d = new Date(Date.now() + 3600000);
                 dt.value = d.toISOString().slice(0, 16);
@@ -877,10 +1050,16 @@ document.addEventListener('DOMContentLoaded', function() {
             updateScheduledRecipientMeta();
         });
     }
-    document.getElementById('schedTo')?.addEventListener('input', updateScheduledRecipientMeta);
-    document.getElementById('schedRecipientPills')?.addEventListener('click', function (event) {
+    const schedUploadModal = document.getElementById('scheduleUploadModal');
+    if (schedUploadModal) {
+        schedUploadModal.addEventListener('show.bs.modal', () => {
+            renderScheduleImportSimSlotGuide();
+        });
+    }
+    document.getElementById('schedSingleTo')?.addEventListener('input', updateScheduledRecipientMeta);
+    document.getElementById('schedSingleRecipientPills')?.addEventListener('click', function (event) {
         const button = event.target.closest('.sms-recipient-pill-remove-inline[data-recipient-value]');
-        const input = document.getElementById('schedTo');
+        const input = document.getElementById('schedSingleTo');
         if (!button || !input) return;
         const removeValue = String(button.dataset.recipientValue || '').trim();
         input.value = splitScheduledRecipients(input.value).filter(item => item !== removeValue).join(', ');
@@ -1345,15 +1524,17 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .sms-chat-form {
-    display: grid !important;
-    grid-template-columns: 2.15rem minmax(0, 1fr) auto;
-    align-items: end !important;
-    column-gap: 0.4rem !important;
+    display: flex !important;
+    align-items: flex-end !important;
+    gap: 0.4rem !important;
     width: 100%;
+    flex-wrap: nowrap;
 }
 
-.sms-chat-form > .d-flex {
+.sms-chat-attachment-slot {
+    display: flex;
     align-items: center !important;
+    flex: 0 0 auto;
 }
 
 .sms-recipient-editor {
@@ -1500,6 +1681,9 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .sms-chat-input {
+    flex: 1 1 16rem;
+    width: auto;
+    min-width: 0;
     min-height: 2.15rem;
     max-height: 5rem;
     resize: none;
@@ -1520,7 +1704,12 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .sms-chat-send-cluster {
+    display: flex;
+    align-items: center;
     gap: 0.35rem !important;
+    flex: 0 0 auto;
+    align-self: flex-end;
+    margin-left: auto;
 }
 
 .sms-chat-char-pill {
@@ -1608,14 +1797,6 @@ document.addEventListener('DOMContentLoaded', function() {
     justify-content: flex-end;
 }
 
-.sms-message-source-badge {
-    font-size: 0.69rem;
-    letter-spacing: 0.01em;
-    max-width: 8rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
 .sms-message-info {
     border: 0;
     background: transparent;
@@ -1625,6 +1806,17 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .sms-message-info:hover {
+    color: var(--bs-primary);
+}
+
+.sms-message-menu-toggle,
+.sms-thread-menu-toggle {
+    color: var(--bs-secondary-color);
+    line-height: 1;
+}
+
+.sms-message-menu-toggle:hover,
+.sms-thread-menu-toggle:hover {
     color: var(--bs-primary);
 }
 
@@ -1738,6 +1930,7 @@ document.addEventListener('DOMContentLoaded', function() {
 .conversation-item {
     border-left: 3px solid transparent;
     padding: 0.55rem 0.7rem;
+    cursor: pointer;
 }
 
 .conversation-item-top {
@@ -1951,12 +2144,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
 @media (max-width: 575.98px) {
     .sms-chat-form {
-        grid-template-columns: 2.1rem minmax(0, 1fr);
+        flex-wrap: wrap;
         row-gap: 0.34rem;
     }
 
     .sms-chat-form > .sms-chat-send-cluster {
-        grid-column: 1 / -1;
+        width: 100%;
         justify-content: space-between;
     }
 

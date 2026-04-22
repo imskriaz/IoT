@@ -300,6 +300,30 @@ describe('mqttService firmware compatibility', () => {
         );
     });
 
+    test('sms/incoming preserves a valid device-provided timestamp and records receipt time separately', () => {
+        const incomingHandler = jest.fn();
+        svc.on('sms:incoming', incomingHandler);
+
+        svc.handleMessage(
+            'device/device-1/sms/incoming',
+            Buffer.from(JSON.stringify({
+                from: '+15550002222',
+                text: 'firmware text field',
+                timestamp: '2026-04-22T09:45:00.000Z'
+            }))
+        );
+
+        expect(incomingHandler).toHaveBeenCalledWith(
+            'device-1',
+            expect.objectContaining({
+                from: '+15550002222',
+                message: 'firmware text field',
+                timestamp: '2026-04-22T09:45:00.000Z',
+                receivedAt: expect.any(String)
+            })
+        );
+    });
+
     test('get-status compatibility re-emits the last known status snapshot', async () => {
         const statusHandler = jest.fn();
         svc.on('status', statusHandler);

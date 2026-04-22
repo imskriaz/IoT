@@ -53,6 +53,45 @@
         };
     }
 
+    function getSmsActiveCapabilities() {
+        const activeDeviceId = getSmsActiveDeviceId();
+        if (!activeDeviceId) return {};
+        try {
+            const raw = localStorage.getItem(`deviceCaps_${activeDeviceId}`);
+            return raw ? (JSON.parse(raw) || {}) : {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    function getSmsTransportMode() {
+        const caps = getSmsActiveCapabilities();
+        return String(caps.transport_mode || caps.transportMode || '').trim().toLowerCase() === 'http'
+            ? 'http'
+            : 'mqtt';
+    }
+
+    function isSmsHttpUiAvailable() {
+        if (getSmsTransportMode() !== 'http') {
+            return false;
+        }
+        return typeof window.deviceHttpOnline === 'function'
+            ? Boolean(window.deviceHttpOnline())
+            : false;
+    }
+
+    function syncSmsHttpRequiredUi() {
+        const showHttpUi = isSmsHttpUiAvailable();
+        document.querySelectorAll('[data-sms-http-required="true"]').forEach(function (el) {
+            const restoreDisplay = String(el.dataset.smsHttpDisplay || '').trim();
+            el.style.display = showHttpUi ? restoreDisplay : 'none';
+        });
+
+        if (!showHttpUi) {
+            resetSmsAttachment();
+        }
+    }
+
     function isSmsDeviceSnapshotCurrent(deviceId) {
         return String(deviceId || '') === getSmsActiveDeviceId();
     }
@@ -494,8 +533,10 @@
         attachChatRecipientControls();
         attachChatSendModeControls();
         updateSmsExportLink();
+        syncSmsHttpRequiredUi();
         prefillComposeFromQuery();
         attachDeviceChangeHandler();
+        attachSmsHttpUiStateHandlers();
         updateThreadPermalink('');
         window.addEventListener('popstate', handleThreadPopState);
 
@@ -513,6 +554,7 @@
             window.SMS_INIT.deviceId = getSmsActiveDeviceId();
         }
         updateSmsExportLink();
+        syncSmsHttpRequiredUi();
         if (resetThread) {
             clearThreadSelection({ historyMode: 'replace' });
         } else {
@@ -536,6 +578,23 @@
                 window.SMS_INIT.deviceId = getSmsActiveDeviceId();
             }
             handleSmsScopeChange({ resetThread: true });
+        });
+    }
+
+    function attachSmsHttpUiStateHandlers() {
+        if (!window.socket?.on || window.__smsHttpUiStateBound === '1') {
+            return;
+        }
+        window.__smsHttpUiStateBound = '1';
+
+        window.socket.on('device:status', function (status) {
+            if (!matchesSmsScope(status)) return;
+            syncSmsHttpRequiredUi();
+        });
+
+        window.socket.on('device:capabilities', function (payload) {
+            if (!matchesSmsScope(payload)) return;
+            syncSmsHttpRequiredUi();
         });
     }
 
@@ -729,11 +788,29 @@
         updateChatSendModeUi();
     }
 
+    function updateChatComposeMeta(analysis = null) {
+        const meta = document.getElementById('smsChatSendModeMeta');
+        if (!meta) return;
+
+        const resolvedAnalysis = analysis || analyzeSmsComposeText(document.getElementById('smsChatMessage')?.value || '');
+        const scheduled = getChatSendMode() === 'scheduled';
+        const row = document.getElementById('smsChatModeRow');
+        const popupOpen = scheduled && (!row || row.dataset.popupOpen !== '0');
+        const parts = [];
+
+        if (scheduled) {
+            parts.push(popupOpen ? 'Set time' : 'Scheduled');
+        }
+
+        parts.push(`${resolvedAnalysis.characters} chars`);
+        parts.push(`${resolvedAnalysis.parts} part${resolvedAnalysis.parts === 1 ? '' : 's'}`);
+        meta.textContent = parts.join(' | ');
+    }
+
     function updateChatSendModeUi() {
         const row = document.getElementById('smsChatModeRow');
         const wrap = document.getElementById('smsChatScheduleWrap');
         const input = document.getElementById('smsChatScheduleAt');
-        const meta = document.getElementById('smsChatSendModeMeta');
         const badge = document.getElementById('smsChatSendModeBadge');
         const sendBtn = document.getElementById('smsChatSendBtn');
         const sendModeItems = document.querySelectorAll('[data-chat-send-mode]');
@@ -750,11 +827,7 @@
                 ? '<i class="bi bi-clock-fill me-1"></i>Scheduled'
                 : '<i class="bi bi-lightning-charge-fill me-1"></i>Instant';
         }
-        if (meta) {
-            meta.textContent = scheduled
-                ? (popupOpen ? 'Confirm the scheduled time or close this popup.' : 'Scheduled send is set.')
-                : 'Instant sends through MQTT runtime.';
-        }
+        updateChatComposeMeta();
         if (sendBtn) {
             sendBtn.setAttribute('title', scheduled ? 'Schedule SMS' : 'Send SMS');
             sendBtn.innerHTML = `
@@ -1004,61 +1077,89 @@
         };
     }
 
-    function buildSmsInfoTitle(sms) {
-        const sourceMeta = getSmsSourceMeta(sms);
-        const parts = [
-            sourceMeta.description,
-            `Status: ${String(sms?.status || 'unknown').trim() || 'unknown'}`,
-            `Time: ${formatTs(sms?.timestamp)}`
-        ];
-        if (sms?.sent_by) {
-            parts.push(`User: ${sms.sent_by}`);
+    function formatSmsSimSlotLabel(value) {
+        const slot = Number.parseInt(String(value ?? '').trim(), 10);
+        if (!Number.isFinite(slot) || slot < 0) {
+            return '';
         }
-        if (sms?.error) {
-            parts.push(`Error: ${sms.error}`);
-        }
-        if (sms?.external_id) {
-            parts.push(`External ID: ${sms.external_id}`);
-        }
-        return parts.join('\n');
+        return `SIM ${slot + 1} (slot ${slot})`;
     }
 
-    function buildSmsDetailChips(sms) {
-        const chips = [];
+    function buildSmsDetailRows(sms) {
         const sourceMeta = getSmsSourceMeta(sms);
-        chips.push({
-            label: sourceMeta.label,
-            title: sourceMeta.description,
-            className: sourceMeta.className
-        });
+        const outgoing = String(sms?.type || '').trim().toLowerCase() === 'outgoing';
+        const rows = [
+            ['Direction', outgoing ? 'Outgoing' : 'Incoming'],
+            ['Source', sourceMeta.label],
+            ['Source Detail', sourceMeta.description],
+            ['Status', String(sms?.status || 'unknown').trim() || 'unknown'],
+            ['Time', formatTs(sms?.timestamp)],
+            ['From', String(sms?.display_from || sms?.from_number || '').trim()],
+            ['To', String(sms?.display_to || sms?.to_number || '').trim()],
+            ['Device', getSmsActiveDeviceId()],
+            ['SIM Slot', formatSmsSimSlotLabel(sms?.sim_slot ?? sms?.simSlot)],
+            ['Dashboard User', String(sms?.sent_by || '').trim()],
+            ['External ID', String(sms?.external_id || '').trim()],
+            ['Read', outgoing ? '' : (sms?.read ? 'Yes' : 'No')]
+        ];
 
-        if (sms?.sent_by) {
-            chips.push({
-                label: `By ${sms.sent_by}`,
-                title: `Dashboard user: ${sms.sent_by}`,
-                className: 'bg-light text-dark border'
-            });
+        if (sms?.id !== undefined && sms?.id !== null && sms?.id !== '') {
+            rows.push(['Message ID', String(sms.id)]);
         }
-
-        if (sms?.external_id) {
-            chips.push({
-                label: 'ID',
-                title: `External ID: ${sms.external_id}`,
-                className: 'bg-light text-dark border'
-            });
-        }
-
         if (sms?.error) {
-            chips.push({
-                label: 'Error',
-                title: String(sms.error),
-                className: 'bg-danger-subtle text-danger-emphasis border border-danger-subtle'
-            });
+            rows.push(['Error', String(sms.error)]);
         }
 
-        return chips.map(function (chip) {
-            return `<span class="badge sms-message-source-badge ${chip.className}" title="${esc(chip.title)}">${esc(chip.label)}</span>`;
-        }).join('');
+        return rows.filter(function (row) {
+            return String(row[1] || '').trim() !== '';
+        });
+    }
+
+    function openSmsMessageDetails(messageOrId) {
+        const sms = typeof messageOrId === 'object' && messageOrId
+            ? messageOrId
+            : threadState.messages.find(function (item) {
+                return Number(item?.id) === Number(messageOrId);
+            });
+        if (!sms) return;
+
+        const titleEl = document.getElementById('smsMessageDetailsTitle');
+        const metaEl = document.getElementById('smsMessageDetailsMeta');
+        const bodyEl = document.getElementById('smsMessageDetailsBody');
+        const modalEl = document.getElementById('smsMessageDetailsModal');
+        if (!titleEl || !metaEl || !bodyEl || !modalEl) return;
+
+        const sourceMeta = getSmsSourceMeta(sms);
+        const preview = summarizeMessagePreview(sms?.message || '') || 'Message details';
+        const rows = buildSmsDetailRows(sms);
+
+        titleEl.innerHTML = `<i class="bi bi-info-circle me-2"></i>${esc(preview)}`;
+        metaEl.textContent = `${sourceMeta.label} | ${formatTs(sms?.timestamp)}`;
+        bodyEl.innerHTML = `
+            <div class="row g-3">
+                <div class="col-12 col-lg-7">
+                    <div class="border rounded p-3 h-100">
+                        <div class="small text-uppercase text-muted fw-semibold mb-2">Message</div>
+                        ${renderMessageContent(sms)}
+                    </div>
+                </div>
+                <div class="col-12 col-lg-5">
+                    <div class="border rounded p-3 h-100">
+                        <div class="small text-uppercase text-muted fw-semibold mb-2">Details</div>
+                        <div class="d-flex flex-column gap-2">
+                            ${rows.map(function (row) {
+                                return `
+                                    <div>
+                                        <div class="small text-muted">${esc(row[0])}</div>
+                                        <div class="fw-semibold text-break">${esc(row[1])}</div>
+                                    </div>`;
+                            }).join('')}
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
     }
 
     function parseJsonPayload(text) {
@@ -1269,15 +1370,7 @@
     }
 
     function updateThreadPermalink(number, conversationId = threadState.conversationId, title = threadState.title) {
-        const target = buildThreadPageUrl(number, conversationId, title);
-        ['smsThreadLinkBtn', 'smsThreadModalLinkBtn'].forEach(function (id) {
-            const link = document.getElementById(id);
-            if (!link) return;
-            link.setAttribute('href', target);
-            const enabled = !!(number || conversationId);
-            link.classList.toggle('disabled', !enabled);
-            link.setAttribute('aria-disabled', enabled ? 'false' : 'true');
-        });
+        return buildThreadPageUrl(number, conversationId, title);
     }
 
     function syncConversationSelection(number, conversationId = threadState.conversationId) {
@@ -1544,20 +1637,31 @@
             const speaker = outgoing ? 'You' : (sms.display_from || sms.from_number || number || 'Unknown');
             const meta = [formatTs(sms.timestamp)];
             if (!outgoing && !sms.read) meta.push('Unread');
-            const infoTitle = buildSmsInfoTitle(sms);
-            const detailChips = buildSmsDetailChips(sms);
 
             return `
                 <div class="d-flex ${outgoing ? 'justify-content-end' : 'justify-content-start'}">
-                    <div class="card shadow-sm sms-bubble ${outgoing ? 'sms-bubble-out' : 'sms-bubble-in'}">
+                    <div class="card shadow-sm sms-bubble ${outgoing ? 'sms-bubble-out' : 'sms-bubble-in'}" data-thread-sms-id="${Number(sms.id) || ''}">
                         <div class="card-body py-2 px-3">
                             <div class="sms-message-header mb-1">
                                 <div class="small fw-semibold ${outgoing ? 'text-primary-emphasis' : 'text-secondary'}">${esc(speaker)}</div>
                                 <div class="sms-message-header-meta">
-                                    ${detailChips}
-                                    <button type="button" class="sms-message-info" title="${esc(infoTitle)}" aria-label="Message details">
+                                    <button type="button" class="sms-message-info" data-thread-message-info="${Number(sms.id) || ''}" aria-label="Message details">
                                         <i class="bi bi-info-circle"></i>
                                     </button>
+                                    <div class="dropdown">
+                                        <button type="button"
+                                                class="btn btn-sm btn-link p-0 text-decoration-none sms-message-menu-toggle"
+                                                data-bs-toggle="dropdown"
+                                                data-thread-message-menu="1"
+                                                aria-expanded="false"
+                                                aria-label="Message menu">
+                                            <i class="bi bi-three-dots-vertical"></i>
+                                        </button>
+                                        <ul class="dropdown-menu dropdown-menu-end">
+                                            ${!outgoing && !sms.read ? `<li><button type="button" class="dropdown-item" data-thread-message-action="mark-read" data-sms-id="${Number(sms.id) || ''}"><i class="bi bi-envelope-open me-2"></i>Mark Read</button></li>` : ''}
+                                            <li><button type="button" class="dropdown-item text-danger" data-thread-message-action="delete-message" data-sms-id="${Number(sms.id) || ''}"><i class="bi bi-trash me-2"></i>Delete</button></li>
+                                        </ul>
+                                    </div>
                                 </div>
                             </div>
                             ${renderMessageContent(sms)}
@@ -1596,6 +1700,7 @@
         const target = getThreadActionNumber(number);
         const callBtn = document.getElementById('smsChatCallBtn') || document.getElementById('smsThreadCallBtn');
         const replyBtn = document.getElementById('smsThreadReplyBtn');
+        const menuButtons = ['smsChatThreadMenuBtn', 'smsThreadMenuBtn'];
         const chatTo = document.getElementById('smsChatTo');
 
         if (callBtn) {
@@ -1606,6 +1711,13 @@
             replyBtn.disabled = !target;
             replyBtn.dataset.number = target;
         }
+        menuButtons.forEach(function (id) {
+            const button = document.getElementById(id);
+            if (!button) return;
+            button.disabled = !target;
+            button.dataset.number = target;
+            button.dataset.conversationId = threadState.conversationId || '';
+        });
         if (chatTo && target) {
             setPhoneFieldValue('smsChatTo', target);
         }
@@ -1637,6 +1749,114 @@
             .catch(function (error) {
                 console.error('Error marking conversation as read:', error);
             });
+    }
+
+    function getThreadMessageIds(messages) {
+        return (Array.isArray(messages) ? messages : [])
+            .map(function (sms) { return Number(sms?.id); })
+            .filter(function (id) { return Number.isInteger(id) && id > 0; });
+    }
+
+    function fetchThreadMessagesSnapshot(number, conversationId = null) {
+        const target = getThreadActionNumber(number);
+        const resolvedConversationId = Math.max(0, Number(conversationId) || 0) || null;
+        if (!target && !resolvedConversationId) {
+            return Promise.resolve([]);
+        }
+        const threadUrl = resolvedConversationId
+            ? `/api/sms/thread?conversationId=${resolvedConversationId}&limit=500`
+            : `/api/sms/thread?number=${encodeURIComponent(target)}&limit=500`;
+        return fetchSmsJson(threadUrl).then(function (data) {
+            if (!data?.success) {
+                throw new Error(data?.message || 'Failed to load conversation');
+            }
+            return Array.isArray(data.data) ? data.data : [];
+        });
+    }
+
+    async function deleteSmsIds(ids, options = {}) {
+        const smsIds = Array.from(new Set((Array.isArray(ids) ? ids : [])
+            .map(function (id) { return Number(id); })
+            .filter(function (id) { return Number.isInteger(id) && id > 0; })));
+        if (!smsIds.length) {
+            showToast('No messages found to delete.', 'warning');
+            return false;
+        }
+
+        let approved = false;
+        const count = smsIds.length;
+        const confirmMessage = count === 1
+            ? 'Delete this message?'
+            : `Delete ${count} messages from this thread?`;
+        if (typeof window.appConfirm === 'function') {
+            approved = await window.appConfirm({
+                title: count === 1 ? 'Delete Message' : 'Delete Thread',
+                message: confirmMessage,
+                confirmText: count === 1 ? 'Delete' : 'Delete All',
+                confirmClass: 'btn btn-danger'
+            });
+        } else {
+            approved = confirm(confirmMessage);
+        }
+        if (!approved) return false;
+
+        const endpoint = count === 1 ? `/api/sms/${smsIds[0]}` : '/api/sms/bulk-delete';
+        const requestOptions = count === 1
+            ? {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' }
+            }
+            : {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: smsIds, deviceId: getSmsActiveDeviceId() })
+            };
+
+        const data = await fetchSmsJson(endpoint, requestOptions);
+        if (!data?.success) {
+            showToast(data?.message || 'Failed to delete SMS', 'danger');
+            return false;
+        }
+
+        if (count === 1) {
+            threadState.messages = threadState.messages.filter(function (sms) {
+                return Number(sms?.id) !== smsIds[0];
+            });
+            showToast('SMS deleted successfully', 'success');
+        } else {
+            threadState.messages = [];
+            showToast(`Deleted ${count} messages`, 'success');
+            clearThreadSelection({ historyMode: 'replace' });
+        }
+
+        updateUnreadBadge(data.unreadCount);
+        refreshSmsPageData();
+        return true;
+    }
+
+    async function runThreadAction(action, options = {}) {
+        const number = getThreadActionNumber(options.number || threadState.number);
+        const conversationId = Math.max(0, Number(options.conversationId || threadState.conversationId) || 0) || null;
+        if (!number && !conversationId) {
+            showToast('Open a thread first.', 'warning');
+            return;
+        }
+
+        const messages = options.messages || (
+            threadState.number === number && threadState.conversationId === conversationId
+                ? threadState.messages
+                : await fetchThreadMessagesSnapshot(number, conversationId)
+        );
+
+        if (action === 'mark-read') {
+            await markThreadMessagesRead(messages);
+            showToast('Thread marked as read', 'success');
+            return;
+        }
+
+        if (action === 'delete-thread') {
+            await deleteSmsIds(getThreadMessageIds(messages));
+        }
     }
 
     function loadSmsThread(number, options = {}) {
@@ -1753,7 +1973,7 @@
                 ? `<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle mt-1">Scheduled ${thread.scheduledCount || 1}</span>`
                 : '';
             return `
-                <button type="button" class="list-group-item list-group-item-action conversation-item ${active ? 'active' : ''}"
+                <div role="button" tabindex="0" class="list-group-item list-group-item-action conversation-item ${active ? 'active' : ''}"
                         data-thread-number="${esc(thread.number)}"
                         data-thread-conversation-id="${thread.conversationId || ''}"
                         data-thread-title="${esc(thread.title || thread.number)}">
@@ -1764,7 +1984,26 @@
                                 ${esc(previewText)}
                             </div>
                         </div>
-                        <div class="text-end flex-shrink-0 conversation-item-time ${active ? 'text-white-50' : 'text-muted'}">${esc(formatTs(thread.nextScheduledAt || thread.lastTimestamp))}</div>
+                        <div class="d-flex align-items-start gap-2 flex-shrink-0">
+                            <div class="text-end conversation-item-time ${active ? 'text-white-50' : 'text-muted'}">${esc(formatTs(thread.nextScheduledAt || thread.lastTimestamp))}</div>
+                            <div class="dropdown">
+                                <button type="button"
+                                        class="btn btn-sm btn-link p-0 text-decoration-none sms-thread-menu-toggle ${active ? 'text-white-50' : 'text-muted'}"
+                                        data-bs-toggle="dropdown"
+                                        data-thread-menu-toggle="1"
+                                        data-thread-number="${esc(thread.number)}"
+                                        data-thread-conversation-id="${thread.conversationId || ''}"
+                                        data-thread-title="${esc(thread.title || thread.number)}"
+                                        aria-expanded="false"
+                                        aria-label="Thread menu">
+                                    <i class="bi bi-three-dots-vertical"></i>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><button type="button" class="dropdown-item" data-thread-item-action="mark-read" data-thread-number="${esc(thread.number)}" data-thread-conversation-id="${thread.conversationId || ''}" data-thread-title="${esc(thread.title || thread.number)}"><i class="bi bi-envelope-open me-2"></i>Mark Read</button></li>
+                                    <li><button type="button" class="dropdown-item text-danger" data-thread-item-action="delete-thread" data-thread-number="${esc(thread.number)}" data-thread-conversation-id="${thread.conversationId || ''}" data-thread-title="${esc(thread.title || thread.number)}"><i class="bi bi-trash me-2"></i>Delete Thread</button></li>
+                                </ul>
+                            </div>
+                        </div>
                     </div>
                     <div class="conversation-item-footer">
                         <div class="conversation-item-badges">
@@ -1774,7 +2013,7 @@
                         </div>
                         <div class="small ${active ? 'text-white-50' : 'text-muted'} conversation-item-total">${thread.total || 0} msg</div>
                     </div>
-                </button>`;
+                </div>`;
         }).join('');
 
         const selectedThreadExists = conversations.some((thread) => {
@@ -2208,6 +2447,23 @@
                     return;
                 }
 
+                const threadAction = event.target.closest('[data-thread-item-action]');
+                if (threadAction) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    runThreadAction(String(threadAction.dataset.threadItemAction || '').trim(), {
+                        number: String(threadAction.dataset.threadNumber || '').trim(),
+                        conversationId: Math.max(0, Number(threadAction.dataset.threadConversationId) || 0) || null
+                    });
+                    return;
+                }
+
+                const threadMenuToggle = event.target.closest('[data-thread-menu-toggle]');
+                if (threadMenuToggle) {
+                    event.stopPropagation();
+                    return;
+                }
+
                 const item = event.target.closest('.conversation-item[data-thread-number]');
                 if (!item) return;
                 const number = String(item.dataset.threadNumber || '').trim();
@@ -2223,6 +2479,14 @@
                     showModal: false,
                     historyMode: 'push'
                 });
+            });
+            conversationList.addEventListener('keydown', function (event) {
+                const item = event.target.closest('.conversation-item[data-thread-number]');
+                if (!item) return;
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                if (event.target.closest('[data-thread-menu-toggle], [data-thread-item-action]')) return;
+                event.preventDefault();
+                item.click();
             });
         }
 
@@ -2248,6 +2512,62 @@
             });
         }
 
+        document.querySelectorAll('[data-thread-menu-action]').forEach(function (button) {
+            if (!button || button.dataset.threadActionBound === '1') return;
+            button.dataset.threadActionBound = '1';
+            button.addEventListener('click', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                runThreadAction(String(this.dataset.threadMenuAction || '').trim());
+            });
+        });
+
+        const threadContainers = ['smsChatMessages', 'smsThreadMessages'];
+        threadContainers.forEach(function (id) {
+            const container = document.getElementById(id);
+            if (!container || container.dataset.threadMenuBound === '1') return;
+            container.dataset.threadMenuBound = '1';
+            container.addEventListener('click', function (event) {
+                const messageInfo = event.target.closest('[data-thread-message-info]');
+                if (messageInfo) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openSmsMessageDetails(Number(messageInfo.dataset.threadMessageInfo || 0));
+                    return;
+                }
+
+                const messageAction = event.target.closest('[data-thread-message-action]');
+                if (messageAction) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const smsId = Number(messageAction.dataset.smsId || 0);
+                    const message = threadState.messages.find(function (sms) { return Number(sms?.id) === smsId; });
+                    if (!message) return;
+                    if (String(messageAction.dataset.threadMessageAction || '').trim() === 'mark-read') {
+                        markThreadMessagesRead([message]).then(function () {
+                            showToast('Message marked as read', 'success');
+                        });
+                        return;
+                    }
+                    if (String(messageAction.dataset.threadMessageAction || '').trim() === 'delete-message') {
+                        deleteSmsIds([smsId]).then(function (deleted) {
+                            if (!deleted) return;
+                            renderThreadMessages(threadState.messages, threadState.number, threadState.title);
+                            if (!threadState.messages.length) {
+                                clearThreadSelection({ historyMode: 'replace' });
+                            }
+                        });
+                        return;
+                    }
+                }
+
+                const messageToggle = event.target.closest('[data-thread-message-menu]');
+                if (messageToggle) {
+                    event.stopPropagation();
+                }
+            });
+        });
+
         const modalEl = document.getElementById('smsThreadModal');
         if (modalEl && modalEl.dataset.threadModalBound !== '1') {
             modalEl.dataset.threadModalBound = '1';
@@ -2263,19 +2583,21 @@
         if (chatMessage && chatCount && chatMessage.dataset.charBound !== '1') {
             chatMessage.dataset.charBound = '1';
             chatMessage.addEventListener('input', function () {
-                updateSmsComposeCounter(this, {
+                const analysis = updateSmsComposeCounter(this, {
                     countId: 'smsChatCharCount',
                     byteId: 'smsChatByteCount',
                     partsId: 'smsChatParts'
                 });
+                updateChatComposeMeta(analysis);
                 this.style.height = 'auto';
                 this.style.height = `${Math.min(this.scrollHeight, 112)}px`;
             });
-            updateSmsComposeCounter(chatMessage, {
+            const analysis = updateSmsComposeCounter(chatMessage, {
                 countId: 'smsChatCharCount',
                 byteId: 'smsChatByteCount',
                 partsId: 'smsChatParts'
             });
+            updateChatComposeMeta(analysis);
         }
 
         const chatForm = document.getElementById('smsChatForm');
@@ -2663,16 +2985,16 @@
         renderFilteredContacts(filtered);
     }
 
-    function attachCharCounter() {
+    /* Legacy char counter path kept here temporarily after the scheduled composer refactor.
         bindSmsComposeCounter('modalMessage', {
             countId: 'modalCharCount',
             byteId: 'modalByteCount',
             partsId: 'smsParts'
         });
-        bindSmsComposeCounter('schedMessage', {
-            countId: 'schedCharCount',
-            byteId: 'schedByteCount',
-            partsId: 'schedParts'
+        bindSmsComposeCounter('schedSingleMessage', {
+            countId: 'schedSingleCharCount',
+            byteId: 'schedSingleByteCount',
+            partsId: 'schedSingleParts'
         });
         return;
 
@@ -2723,16 +3045,17 @@
         }
     }
 
+    */
     function attachCharCounter() {
         bindSmsComposeCounter('modalMessage', {
             countId: 'modalCharCount',
             byteId: 'modalByteCount',
             partsId: 'smsParts'
         });
-        bindSmsComposeCounter('schedMessage', {
-            countId: 'schedCharCount',
-            byteId: 'schedByteCount',
-            partsId: 'schedParts'
+        bindSmsComposeCounter('schedSingleMessage', {
+            countId: 'schedSingleCharCount',
+            byteId: 'schedSingleByteCount',
+            partsId: 'schedSingleParts'
         });
     }
 

@@ -91,6 +91,27 @@ function sanitizeMqttError(error) {
         .substring(0, 180);
 }
 
+function normalizeIncomingEventTimestamp(value, fallbackIso) {
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) {
+            const parsed = new Date(trimmed);
+            if (Number.isFinite(parsed.getTime()) && parsed.getFullYear() >= 2020) {
+                return parsed.toISOString();
+            }
+        }
+    }
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        const parsed = new Date(value);
+        if (Number.isFinite(parsed.getTime()) && parsed.getFullYear() >= 2020) {
+            return parsed.toISOString();
+        }
+    }
+
+    return fallbackIso;
+}
+
 const DURABLE_COMMANDS = new Set([
     'send-sms',
     'send-sms-multipart',
@@ -751,9 +772,11 @@ class MQTTService extends EventEmitter {
                 const actionDerivedStatus = this._buildStatusFromActionResult(deviceId, data);
                 const primaryStatusData = actionDerivedStatus || data;
 
+                const receivedAt = new Date().toISOString();
                 data.deviceId = deviceId;
                 data.topic = topic;
-                data.timestamp = new Date().toISOString();
+                data.receivedAt = receivedAt;
+                data.timestamp = normalizeIncomingEventTimestamp(data.timestamp, receivedAt);
 
                 const isPrimaryStatus = (topicParts.length === 3 && topicParts[2] === 'status') ||
                     Boolean(actionDerivedStatus) ||
@@ -763,13 +786,13 @@ class MQTTService extends EventEmitter {
                 // Update device last seen
                 this.deviceStatus.set(deviceId, {
                     ...existingStatus,
-                    lastSeen: data.timestamp,
+                    lastSeen: receivedAt,
                     online: true,
                     lastStatus: isPrimaryStatus ? { ...primaryStatusData } : existingStatus.lastStatus
                 });
 
                 // Always emit a heartbeat for any message from device
-                this.emit('heartbeat', deviceId, { timestamp: data.timestamp });
+                this.emit('heartbeat', deviceId, { timestamp: receivedAt });
 
                 // Only treat device/{id}/status as the primary status snapshot.
                 if (isPrimaryStatus) {

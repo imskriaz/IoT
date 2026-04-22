@@ -7,6 +7,28 @@ const {
 } = require('../utils/smsLimits');
 
 describe('smsLimits', () => {
+    test('classifies Bangla text as Unicode and keeps single-part limits at 70 chars', () => {
+        const text = 'বাংলা মেসেজ পরীক্ষা';
+        const analysis = analyzeSmsText(text);
+
+        expect(analysis.encoding).toBe('unicode');
+        expect(analysis.characters).toBe(Array.from(text).length);
+        expect(analysis.singlePartLimit).toBe(70);
+        expect(analysis.parts).toBe(1);
+        expect(analysis.overByteLimit).toBe(false);
+        expect(analysis.overPartLimit).toBe(false);
+    });
+
+    test('counts Bangla multipart messages using Unicode segment sizes', () => {
+        const text = 'বাংলা'.repeat(80);
+        const analysis = analyzeSmsText(text);
+
+        expect(analysis.encoding).toBe('unicode');
+        expect(analysis.parts).toBeGreaterThan(1);
+        expect(analysis.multiPartLimit).toBe(67);
+        expect(analysis.overPartLimit).toBe(false);
+    });
+
     test('accepts large GSM multipart messages up to the transport byte cap', () => {
         const analysis = analyzeSmsText('x'.repeat(1023));
 

@@ -93,6 +93,33 @@
         };
     }
 
+    function getCallsActiveCapabilities() {
+        const activeDeviceId = getCallsActiveDeviceId();
+        if (!activeDeviceId) return {};
+        try {
+            const raw = localStorage.getItem(`deviceCaps_${activeDeviceId}`);
+            return raw ? (JSON.parse(raw) || {}) : {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    function getCallsTransportMode() {
+        const caps = getCallsActiveCapabilities();
+        return String(caps.transport_mode || caps.transportMode || '').trim().toLowerCase() === 'http'
+            ? 'http'
+            : 'mqtt';
+    }
+
+    function syncCallsHttpRequiredUi() {
+        const showHttpUi = getCallsTransportMode() === 'http'
+            && typeof window.deviceHttpOnline === 'function'
+            && Boolean(window.deviceHttpOnline());
+        document.querySelectorAll('[data-calls-http-required="true"]').forEach(function (el) {
+            el.classList.toggle('d-none', !showHttpUi);
+        });
+    }
+
     function matchesCallsScope(payload = {}) {
         const activeContext = getCallsActiveSimContext();
         const payloadDeviceId = String(payload?.deviceId || payload?.device_id || '').trim();
@@ -189,6 +216,7 @@
         initCallTabsWithUrls();
         attachDeviceChangeHandler();
         updateCallsExportHref();
+        syncCallsHttpRequiredUi();
         prefillDialerFromQuery();
     }
 
@@ -203,6 +231,7 @@
             loadCallStats();
             updateCallsExportHref();
             checkCallStatus();
+            syncCallsHttpRequiredUi();
         });
         window.addEventListener('device:sim-changed', function () {
             currentPage = 1;
@@ -214,6 +243,7 @@
             loadCallStats();
             updateCallsExportHref();
             checkCallStatus();
+            syncCallsHttpRequiredUi();
         });
     }
 
@@ -227,22 +257,19 @@
         isDeviceConnected = Boolean(connected);
 
         if (elements.deviceOfflineWarning) {
-            if (!isDeviceConnected) {
-                elements.deviceOfflineWarning.classList.remove('d-none');
-                elements.deviceOfflineWarning.classList.add('d-flex');
-            } else {
-                elements.deviceOfflineWarning.classList.add('d-none');
-                elements.deviceOfflineWarning.classList.remove('d-flex');
-            }
+            elements.deviceOfflineWarning.classList.add('d-none');
+            elements.deviceOfflineWarning.classList.remove('d-flex');
         }
 
         if (elements.dialerOfflineWarning) {
-            elements.dialerOfflineWarning.classList.toggle('d-none', isDeviceConnected);
+            elements.dialerOfflineWarning.classList.add('d-none');
         }
 
         if (elements.makeCall) {
             elements.makeCall.disabled = !isDeviceConnected;
         }
+
+        syncCallsHttpRequiredUi();
     }
 
     function checkDeviceConnection() {
@@ -1160,6 +1187,11 @@
             if (typeof status?.online !== 'undefined') {
                 applyDeviceConnectionState(Boolean(status.online));
             }
+        });
+
+        window.socket.on('device:capabilities', function (payload) {
+            if (!payload || !matchesCallsScope(payload)) return;
+            syncCallsHttpRequiredUi();
         });
     }
 

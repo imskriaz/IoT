@@ -160,6 +160,104 @@ describe('sms route queue-first delivery', () => {
         );
     });
 
+    test('accepts Bangla SMS and keeps the single-part MQTT contract when it fits Unicode limits', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (String(sql).includes('INSERT INTO sms')) {
+                    return { lastID: 71, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('SELECT id FROM devices')) return { id: 'device-1' };
+                return null;
+            }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const banglaMessage = 'বাংলা টেস্ট মেসেজ';
+
+        const res = await request(app)
+            .post('/api/sms/send')
+            .send({
+                to: '+8801555123456',
+                message: banglaMessage,
+                deviceId: 'device-1'
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            queued: true,
+            id: 71
+        }));
+        expect(global.mqttService.publishCommand).toHaveBeenCalledWith(
+            'device-1',
+            'send-sms',
+            expect.objectContaining({
+                to: '+8801555123456',
+                message: banglaMessage,
+                smsId: 71
+            }),
+            false,
+            60000,
+            expect.objectContaining({
+                messageId: expect.stringMatching(/^send-sms_/)
+            })
+        );
+    });
+
+    test('accepts Bangla multipart SMS and uses the multipart MQTT contract', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (String(sql).includes('INSERT INTO sms')) {
+                    return { lastID: 72, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('SELECT id FROM devices')) return { id: 'device-1' };
+                return null;
+            }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const banglaMultipartMessage = 'অ'.repeat(80);
+
+        const res = await request(app)
+            .post('/api/sms/send')
+            .send({
+                to: '+8801555123456',
+                message: banglaMultipartMessage,
+                deviceId: 'device-1'
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            queued: true,
+            id: 72
+        }));
+        expect(global.mqttService.publishCommand).toHaveBeenCalledWith(
+            'device-1',
+            'send-sms-multipart',
+            expect.objectContaining({
+                to: '+8801555123456',
+                message: banglaMultipartMessage,
+                smsId: 72
+            }),
+            false,
+            60000,
+            expect.objectContaining({
+                messageId: expect.stringMatching(/^send-sms-multipart_/)
+            })
+        );
+    });
+
     test('send SMS stays MQTT-only even when a serial bridge exists', async () => {
         const db = {
             run: jest.fn(async (sql) => {

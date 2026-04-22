@@ -238,6 +238,8 @@ Use this document before adding or redesigning any runtime feature.
 - one delete path
 - no duplicate inbox creation from fallback scans
 - no dashboard feature may imply multipart support unless firmware contract truly supports it
+- when the dashboard already has the full SMS body, Unicode/Bangla analysis and multipart selection should be decided there instead of adding extra preprocessing load to firmware
+- keep firmware SMS logic limited to modem execution details, serialization, and vendor-required constraints
 
 ## Config And Provisioning Strategy
 
