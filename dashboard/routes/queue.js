@@ -20,7 +20,7 @@ const INTERACTIVE_TELEPHONY_COMMANDS = [
 
 const ACTIVE_STATUSES = ['dispatching'];
 const OPEN_STATUSES = ['pending', 'dispatching', 'waiting_response', 'failed', 'ambiguous'];
-const CLEARABLE_BULK_STATUSES = ['pending', 'waiting_response', 'failed', 'ambiguous'];
+const CLEARABLE_BULK_STATUSES = ['pending', 'waiting_response', 'failed', 'ambiguous', 'completed'];
 
 function normalizeDeviceId(value) {
     return String(value || '').trim();

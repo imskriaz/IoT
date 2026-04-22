@@ -383,8 +383,8 @@
     };
 
     window.clearQueueScope = async function (scope) {
-        const label = scope === 'call' ? 'legacy telephony leftovers' : 'device queue';
-        const ok = await askQueueConfirm(`Clear clearable ${label} items for the active device?`, {
+        const label = scope === 'call' ? 'legacy telephony leftovers' : 'device queue data';
+        const ok = await askQueueConfirm(`Clear all ${label} for the active device? Active in-flight work will be kept.`, {
             title: 'Clear Queue',
             confirmText: 'Clear',
             confirmClass: 'btn btn-danger'

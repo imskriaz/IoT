@@ -93,6 +93,7 @@ The table below uses the preferred runtime lane for each feature.
 - Use `.\.toolchain\build-firmware.ps1` to build the ESP32 firmware.
 - Use `.\.toolchain\flash-firmware.ps1 -Port COM5` to flash it.
 - Dashboard status validation uses `firmware/esp32-s3-a7670e/espidf/verify-status-payload.js`.
+- For firmware behavior, the vendor bundle under `firmware/esp32-s3-a7670e/docs/vendor/` is the source of truth.
 
 ## More Detail
 

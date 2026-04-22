@@ -51,6 +51,7 @@ This is the single active ESP-IDF firmware lane for the Waveshare ESP32-S3-A7670
 - firmware should process only hardware-local work and should stay selective
 - device-side execution must be queue-driven and race-aware
 - resource-heavy work should be delegated to the dashboard whenever safe
+- vendor docs under `firmware/esp32-s3-a7670e/docs/vendor/` are the firmware source of truth for modem AT behavior, board wiring, and hardware limits
 
 ## Build Status
 
