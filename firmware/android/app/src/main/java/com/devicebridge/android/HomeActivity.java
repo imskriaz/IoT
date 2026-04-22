@@ -15,6 +15,7 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
@@ -24,6 +25,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.provider.CallLog;
 import android.provider.Settings;
 import android.provider.ContactsContract;
 import android.telephony.SubscriptionInfo;
@@ -76,6 +78,12 @@ import java.util.Set;
 
 public class HomeActivity extends Activity {
     private static final String EXTRA_SETUP_TOKEN = "setup_token";
+    private static final String EXTRA_START_TAB = "start_tab";
+    private static final int TAB_HOME = 0;
+    private static final int TAB_SMS = 1;
+    private static final int TAB_CONTACTS = 2;
+    private static final int TAB_PHONE = 3;
+    private static final int[] TAB_NAV_ORDER = new int[]{TAB_HOME, TAB_SMS, TAB_PHONE, TAB_CONTACTS};
     private static final int REQ_QR_SCAN = 4811;
     private static final int REQ_CALL_PERMISSIONS = 4812;
     private static final int REQ_QR_PERMISSIONS = 4813;
@@ -142,6 +150,22 @@ public class HomeActivity extends Activity {
         }
     }
 
+    private static final class RecentCallItem {
+        final String name;
+        final String number;
+        final int type;
+        final long date;
+        final long durationSeconds;
+
+        RecentCallItem(String name, String number, int type, long date, long durationSeconds) {
+            this.name = name == null ? "" : name;
+            this.number = number == null ? "" : number;
+            this.type = type;
+            this.date = date;
+            this.durationSeconds = durationSeconds;
+        }
+    }
+
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable refreshRunnable = new Runnable() {
         @Override
@@ -200,6 +224,7 @@ public class HomeActivity extends Activity {
     private String newSmsContactQuery = "";
     private String newSmsRecipientName = "";
     private String newSmsRecipientNumber = "";
+    private final List<ContactInfo> newSmsRecipients = new ArrayList<>();
     private String smsTemplateImportTargetNumber = "";
     private int selectedTabIndex = 0;
     private int selectedSmsSimSlot = -1;
@@ -208,6 +233,7 @@ public class HomeActivity extends Activity {
     private float touchStartX;
     private float touchStartY;
     private long touchStartAt;
+    private boolean touchStartedInHorizontalScroll;
     private boolean showSetupSurface;
     private boolean connectingFromSetup;
     private boolean busy;
@@ -215,6 +241,7 @@ public class HomeActivity extends Activity {
     private boolean smsSending;
     private boolean smsBulkMode;
     private boolean composingNewSms;
+    private boolean newSmsContactSearchFocused;
     private boolean reopenNewConversationAfterContactsPermission;
     private boolean checkedPendingSetupCode;
     private boolean batteryPromptShown;
@@ -228,6 +255,7 @@ public class HomeActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         capturePendingSetupToken(getIntent());
+        applyRequestedTab(getIntent());
         loadState(false);
         consumePendingSetupCodeIfNeeded(false);
         rebuild();
@@ -238,6 +266,7 @@ public class HomeActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         capturePendingSetupToken(intent);
+        applyRequestedTab(intent);
         consumePendingSetupCodeIfNeeded(true);
     }
 
@@ -314,9 +343,9 @@ public class HomeActivity extends Activity {
             rebuild();
             return;
         }
-        if (selectedTabIndex != 0) {
+        if (selectedTabIndex != TAB_HOME) {
             lastBackPressMs = 0L;
-            selectTab(0);
+            selectTab(TAB_HOME);
             return;
         }
         long now = System.currentTimeMillis();
@@ -335,19 +364,47 @@ public class HomeActivity extends Activity {
                 touchStartX = event.getX();
                 touchStartY = event.getY();
                 touchStartAt = System.currentTimeMillis();
+                touchStartedInHorizontalScroll = isTouchInsideHorizontalScroll(getWindow().getDecorView(), (int) event.getRawX(), (int) event.getRawY());
             } else if (event.getAction() == MotionEvent.ACTION_UP) {
-                if (handleHorizontalSwipe(event.getX() - touchStartX, event.getY() - touchStartY, System.currentTimeMillis() - touchStartAt)) {
+                if (!touchStartedInHorizontalScroll && handleHorizontalSwipe(event.getX() - touchStartX, event.getY() - touchStartY, System.currentTimeMillis() - touchStartAt)) {
                     return true;
                 }
+                touchStartedInHorizontalScroll = false;
+            } else if (event.getAction() == MotionEvent.ACTION_CANCEL) {
+                touchStartedInHorizontalScroll = false;
             }
         }
         return super.dispatchTouchEvent(event);
+    }
+
+    private boolean isTouchInsideHorizontalScroll(View view, int rawX, int rawY) {
+        if (view == null || view.getVisibility() != View.VISIBLE) {
+            return false;
+        }
+        Rect bounds = new Rect();
+        if (!view.getGlobalVisibleRect(bounds) || !bounds.contains(rawX, rawY)) {
+            return false;
+        }
+        if (view instanceof HorizontalScrollView) {
+            return true;
+        }
+        if (!(view instanceof ViewGroup)) {
+            return false;
+        }
+        ViewGroup group = (ViewGroup) view;
+        for (int i = group.getChildCount() - 1; i >= 0; i -= 1) {
+            if (isTouchInsideHorizontalScroll(group.getChildAt(i), rawX, rawY)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         loadState(true);
+        boolean shouldSyncDeviceHistory = false;
         if (requestCode == REQ_QR_PERMISSIONS && BridgePermissionHelper.hasQrFeature(this)) {
             startQrScan();
             return;
@@ -355,17 +412,30 @@ public class HomeActivity extends Activity {
         if (requestCode == REQ_SMS_INBOX_PERMISSIONS && BridgePermissionHelper.hasSmsInboxFeature(this)) {
             loadSmsThreads();
             selectedTabIndex = 1;
+            shouldSyncDeviceHistory = true;
+        }
+        if (requestCode == REQ_CALL_PERMISSIONS && BridgePermissionHelper.hasCallFeature(this)) {
+            shouldSyncDeviceHistory = true;
         }
         if (requestCode == REQ_CONTACTS_PERMISSION && hasContactsPermission()) {
             smsContactCache.clear();
             if (reopenNewConversationAfterContactsPermission) {
                 reopenNewConversationAfterContactsPermission = false;
                 composingNewSms = true;
+                if (shouldSyncDeviceHistory) {
+                    MqttBridgeService.requestSilentBulkSync(this);
+                }
                 rebuild();
                 return;
             }
+            if (shouldSyncDeviceHistory) {
+                MqttBridgeService.requestSilentBulkSync(this);
+            }
             rebuild();
             return;
+        }
+        if (shouldSyncDeviceHistory) {
+            MqttBridgeService.requestSilentBulkSync(this);
         }
         rebuild();
     }
@@ -376,9 +446,9 @@ public class HomeActivity extends Activity {
         }
         processDueLocalSmsQueue();
         state = buildNativeState();
-        if (selectedTabIndex == 1 && selectedSmsThread == null) {
+        if (selectedTabIndex == TAB_SMS && selectedSmsThread == null) {
             loadSmsThreads();
-        } else if (selectedTabIndex == 1 && selectedSmsThread != null) {
+        } else if (selectedTabIndex == TAB_SMS && selectedSmsThread != null) {
             loadSmsMessages(stringValue(selectedSmsThread.get("threadKey")));
         }
         if (rebuildAfter) {
@@ -403,8 +473,7 @@ public class HomeActivity extends Activity {
     }
 
     private void rebuild() {
-        boolean needsOnboarding = boolValue(state.get("needsOnboarding"));
-        if (needsOnboarding || showSetupSurface) {
+        if (showSetupSurface) {
             setContentView(buildSetupScreen());
         } else {
             setContentView(buildMainScreen());
@@ -462,7 +531,7 @@ public class HomeActivity extends Activity {
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setBackgroundColor(color("#f2f5fa"));
 
-        if (selectedTabIndex == 0) {
+        if (selectedTabIndex == TAB_HOME) {
             LinearLayout topWrap = rootLayout(12, 8, 12, 0);
             topWrap.addView(pinnedTopBar(), fullWidth(8));
             shell.addView(topWrap);
@@ -476,14 +545,26 @@ public class HomeActivity extends Activity {
                     0,
                     1f
             ));
-        } else {
+        } else if (selectedTabIndex == TAB_SMS) {
             shell.addView(smsWorkspace(), new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     0,
                     1f
             ));
+        } else if (selectedTabIndex == TAB_CONTACTS) {
+            shell.addView(contactsWorkspace(), new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+            ));
+        } else {
+            shell.addView(phoneWorkspace(), new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+            ));
         }
-        if (!(selectedTabIndex == 1 && (selectedSmsThread != null || composingNewSms))) {
+        if (!(selectedTabIndex == TAB_SMS && (selectedSmsThread != null || composingNewSms))) {
             shell.addView(bottomNavigation(), new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
@@ -716,6 +797,11 @@ public class HomeActivity extends Activity {
         strip.setPadding(dp(6), dp(4), dp(6), dp(4));
         strip.setBackground(roundRect("#f8fafc", "#e2e8f0", 16));
         boolean running = bridgeRunning();
+        boolean needsOnboarding = boolValue(state.get("needsOnboarding"));
+        if (needsOnboarding) {
+            strip.addView(darkAction("Scan QR", R.drawable.ic_db_qr, this::openQrScannerFlow), wrapRight(10));
+            strip.addView(darkAction("Paste code", R.drawable.ic_db_key, this::showPasteCodeDialog), wrapRight(10));
+        }
         strip.addView(darkAction(running ? "Stop" : "Start", running ? R.drawable.ic_db_pause : R.drawable.ic_db_play, () -> {
             if (running) {
                 runBridgeAction("stopBridge");
@@ -802,8 +888,8 @@ public class HomeActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         boolean inThread = selectedSmsThread != null || composingNewSms;
-        root.setPadding(inThread ? 0 : dp(12), inThread ? 0 : dp(10), inThread ? 0 : dp(12), inThread ? 0 : dp(10));
-        root.setBackgroundColor(color(inThread ? "#ffffff" : "#f8fafc"));
+        root.setPadding(inThread ? 0 : dp(12), inThread ? 0 : dp(8), inThread ? 0 : dp(12), inThread ? 0 : dp(10));
+        root.setBackgroundColor(color(inThread ? "#ffffff" : "#f2f2f7"));
         if (!boolValue(state.get("smsInboxReady"))) {
             root.addView(smsHeader("SMS", "Threaded inbox and compose", "Grant inbox", R.drawable.ic_db_sms, this::requestSmsInboxAccess), fullWidth(14));
             root.addView(smsPermissionCard(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
@@ -812,7 +898,9 @@ public class HomeActivity extends Activity {
         } else if (selectedSmsThread == null) {
             root.addView(smsListHeader(), fullWidth(12));
             root.addView(smsSearchField(), fullWidth(12));
-            root.addView(smsBulkActions(), fullWidth(8));
+            if (smsBulkMode) {
+                root.addView(smsBulkActions(), fullWidth(8));
+            }
             root.addView(smsThreadList(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         } else {
             root.addView(smsConversation(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
@@ -839,19 +927,18 @@ public class HomeActivity extends Activity {
     }
 
     private View smsListHeader() {
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(16), dp(14), dp(12), dp(14));
-        header.setBackground(roundRect("#ffffff", "#e2e8f0", 24));
-        LinearLayout copy = new LinearLayout(this);
-        copy.setOrientation(LinearLayout.VERTICAL);
-        copy.addView(text("Messages", 22, "#0f172a", true));
-        copy.addView(text("Threaded conversations", 12, "#64748b", false));
-        header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        header.addView(labelIconButton("New chat", R.drawable.ic_db_add, "#0b5ed7", "#ffffff", this::openNewConversationScreen), wrapRight(6));
-        header.addView(iconAction(R.drawable.ic_db_more_vert, "#f8fafc", "#0f172a", this::showSmsListMenu), fixed(42, 42, 0));
-        return header;
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackgroundColor(color("#f2f2f7"));
+
+        LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = text("Messages", 32, "#111111", true);
+        top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        top.addView(iconAction(R.drawable.ic_db_add, "#0a84ff", "#ffffff", this::openNewConversationScreen), fixed(38, 38, 0));
+        shell.addView(top, fullWidth(4));
+
+        return shell;
     }
 
     private View smsPermissionCard() {
@@ -876,13 +963,15 @@ public class HomeActivity extends Activity {
         shell.setOrientation(LinearLayout.HORIZONTAL);
         shell.setGravity(Gravity.CENTER_VERTICAL);
         shell.setPadding(dp(12), 0, dp(12), 0);
-        shell.setBackground(roundRect("#ffffff", "#e2e8f0", 24));
-        shell.addView(tintedIcon(R.drawable.ic_db_search, "#64748b", 20), fixed(20, 20, 10));
+        shell.setBackground(roundRect("#e9e9eb", "#e9e9eb", 14));
+        shell.addView(tintedIcon(R.drawable.ic_db_search, "#8e8e93", 18), fixed(18, 18, 8));
         EditText search = input("Search conversations");
         search.setText(smsSearchQuery);
         search.setSingleLine(true);
         search.setBackgroundColor(Color.TRANSPARENT);
         search.setPadding(0, 0, 0, 0);
+        search.setHintTextColor(color("#8e8e93"));
+        search.setTextColor(color("#111111"));
         search.setOnEditorActionListener((v, actionId, event) -> {
             smsSearchQuery = v.getText().toString();
             rebuild();
@@ -894,7 +983,7 @@ public class HomeActivity extends Activity {
                 rebuild();
             }
         });
-        shell.addView(search, new LinearLayout.LayoutParams(0, dp(50), 1f));
+        shell.addView(search, new LinearLayout.LayoutParams(0, dp(42), 1f));
         return shell;
     }
 
@@ -922,7 +1011,7 @@ public class HomeActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(8), dp(6), dp(8), dp(6));
-        row.setBackground(roundRect("#ffffff", "#e2e8f0", 22));
+        row.setBackground(roundRect("#ffffff", "#e5e5ea", 18));
         int unread = 0;
         for (Map<String, Object> thread : smsThreads) {
             unread += intValue(thread.get("unreadCount"));
@@ -932,19 +1021,19 @@ public class HomeActivity extends Activity {
                 : smsThreads.size() + " chats" + (unread > 0 ? " - " + unread + " unread" : "");
         row.addView(text(summary, 12, "#475569", true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         if (!smsBulkMode) {
-            row.addView(labelIconButton("Select", R.drawable.ic_db_tune, "#f8fafc", "#0f172a", () -> {
+            row.addView(labelIconButton("Select", R.drawable.ic_db_tune, "#ffffff", "#0a84ff", () -> {
                 smsBulkMode = true;
                 selectedSmsThreadKeys.clear();
                 rebuild();
             }));
             return row;
         }
-        row.addView(labelIconButton("Cancel", R.drawable.ic_db_close, "#f8fafc", "#0f172a", () -> {
+        row.addView(labelIconButton("Cancel", R.drawable.ic_db_close, "#ffffff", "#0a84ff", () -> {
             smsBulkMode = false;
             selectedSmsThreadKeys.clear();
             rebuild();
         }), wrapRight(6));
-        row.addView(labelIconButton(allVisibleSmsSelected() ? "Clear" : "All", R.drawable.ic_db_sms, "#eef6ff", "#0b5ed7", () -> {
+        row.addView(labelIconButton(allVisibleSmsSelected() ? "Clear" : "All", R.drawable.ic_db_sms, "#ffffff", "#0a84ff", () -> {
             if (allVisibleSmsSelected()) {
                 selectedSmsThreadKeys.clear();
             } else {
@@ -952,8 +1041,8 @@ public class HomeActivity extends Activity {
             }
             rebuild();
         }), wrapRight(6));
-        row.addView(labelIconButton("Read", R.drawable.ic_db_clean, "#ecfdf5", "#166534", this::markSelectedSmsThreadsRead), wrapRight(6));
-        row.addView(labelIconButton("Delete", R.drawable.ic_db_restart, "#fef2f2", "#dc2626", this::confirmDeleteSelectedSmsThreads));
+        row.addView(labelIconButton("Read", R.drawable.ic_db_clean, "#ffffff", "#34c759", this::markSelectedSmsThreadsRead), wrapRight(6));
+        row.addView(labelIconButton("Delete", R.drawable.ic_db_restart, "#ffffff", "#ff3b30", this::confirmDeleteSelectedSmsThreads));
         return row;
     }
 
@@ -962,11 +1051,19 @@ public class HomeActivity extends Activity {
         String threadKey = threadKey(thread);
         boolean selected = selectedSmsThreadKeys.contains(threadKey);
         boolean unreadThread = intValue(thread.get("unreadCount")) > 0;
+        boolean systemThread = isSystemSmsThread(thread);
+        String displayName = systemThread ? systemThreadTrueTitle(thread, contact) : contact.name;
+        String previewText = systemThread
+                ? systemThreadListSubtitle()
+                : stringValue(thread.get("preview"), "No message body");
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(10), dp(10), dp(10), dp(10));
-        row.setBackground(roundRect(selected ? "#eff6ff" : "#ffffff", selected ? "#bfdbfe" : "#ffffff", 0));
+        row.setPadding(dp(4), dp(8), dp(4), dp(8));
+        row.setBackgroundColor(color(selected ? "#eef5ff" : "#ffffff"));
         row.setClickable(true);
         row.setFocusable(true);
         row.setOnClickListener(v -> runGuarded("thread:" + threadKey, () -> {
@@ -993,25 +1090,32 @@ public class HomeActivity extends Activity {
             rebuild();
             return true;
         });
-        row.addView(avatar, fixed(50, 50, 12));
+        if (systemThread && !selected) {
+            avatar = smsAvatar("SM", unreadThread);
+        }
+        row.addView(avatar, fixed(40, 40, 10));
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
         LinearLayout titleRow = new LinearLayout(this);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
-        titleRow.addView(singleLineText(contact.name, 15, "#0f172a", true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        titleRow.addView(text(formatSmsTimestamp(thread.get("timestamp")), 11, "#64748b", false));
-        copy.addView(titleRow, fullWidth(5));
-        copy.addView(singleLineText(stringValue(thread.get("preview"), "No message body"), 12, "#475569", false));
+        titleRow.addView(singleLineText(displayName, 15, "#111111", true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        titleRow.addView(text(formatSmsTimestamp(thread.get("timestamp")), 11, "#8e8e93", false));
+        copy.addView(titleRow, fullWidth(2));
+        copy.addView(singleLineText(previewText, 12, "#636366", false));
         row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         int unread = intValue(thread.get("unreadCount"));
         if (unread > 0) {
-            row.addView(pill(String.valueOf(unread), "#0b5ed7", "#ffffff"));
+            row.addView(pill(String.valueOf(unread), "#0a84ff", "#ffffff"));
         }
         int queued = BridgeSmsLocalQueue.countForAddress(this, stringValue(thread.get("address")));
         if (queued > 0) {
             row.addView(pill("Q" + queued, "#fef3c7", "#92400e"), wrapLeft(6));
         }
-        return row;
+        group.addView(row);
+        View divider = new View(this);
+        divider.setBackgroundColor(color("#e5e5ea"));
+        group.addView(divider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+        return group;
     }
 
     private View smsConversation() {
@@ -1086,7 +1190,7 @@ public class HomeActivity extends Activity {
         notice.setGravity(Gravity.CENTER);
         notice.setPadding(dp(16), dp(8), dp(16), dp(10));
         notice.setBackground(roundRect("#ffffff", "#ffffff", 0));
-        TextView title = text(systemThreadTitle(selectedSmsThread, contactForThread(selectedSmsThread)), 13, "#475569", true);
+        TextView title = text(systemThreadTrueTitle(selectedSmsThread, contactForThread(selectedSmsThread)), 13, "#475569", true);
         title.setGravity(Gravity.CENTER);
         notice.addView(title);
         TextView detail = singleLineText("No reply available for alerts and sender IDs.", 11, "#64748b", false);
@@ -1100,7 +1204,7 @@ public class HomeActivity extends Activity {
         FrameLayout button = new FrameLayout(this);
         button.setMinimumWidth(dp(42));
         button.setMinimumHeight(dp(42));
-        button.setBackground(roundRect(smsSending ? "#cbd5e1" : "#0b5ed7", "#0b5ed7", 999));
+        button.setBackground(roundRect(smsSending ? "#cbd5e1" : "#0a84ff", smsSending ? "#cbd5e1" : "#0a84ff", 999));
         button.setClickable(true);
         button.setFocusable(true);
         button.setOnClickListener(v -> runGuarded("sms-send", sendAction));
@@ -1110,7 +1214,7 @@ public class HomeActivity extends Activity {
             return true;
         });
         button.addView(tintedIcon(R.drawable.ic_db_send, "#ffffff", 18), new FrameLayout.LayoutParams(dp(18), dp(18), Gravity.CENTER));
-        TextView badge = text(smsSimBadgeLabel(), 7, "#0b5ed7", true);
+        TextView badge = text(smsSimBadgeLabel(), 7, "#0a84ff", true);
         badge.setGravity(Gravity.CENTER);
         badge.setPadding(dp(3), 0, dp(3), 0);
         badge.setBackground(roundRect("#ffffff", "#bfdbfe", 999));
@@ -1183,28 +1287,28 @@ public class HomeActivity extends Activity {
         LinearLayout bubble = new LinearLayout(this);
         bubble.setOrientation(LinearLayout.VERTICAL);
         bubble.setPadding(dp(14), dp(10), dp(14), dp(10));
-        String fill = dashboard ? "#e0f2fe" : outgoing ? "#d3e3fd" : "#f1f3f4";
-        String stroke = dashboard ? "#38bdf8" : fill;
+        String fill = dashboard ? "#e5f3ff" : outgoing ? "#0a84ff" : "#e9e9eb";
+        String stroke = fill;
         bubble.setBackground(roundRect(fill, stroke, 22));
         bubble.setOnLongClickListener(v -> {
             showSmsMessageActions(message);
             return true;
         });
-        bubble.addView(text(stringValue(message.get("body"), ""), 14, "#0f172a", false));
+        bubble.addView(text(stringValue(message.get("body"), ""), 15, outgoing ? "#ffffff" : "#111111", false));
         LinearLayout meta = new LinearLayout(this);
         meta.setGravity(Gravity.CENTER_VERTICAL | (outgoing ? Gravity.END : Gravity.START));
-        TextView time = text(formatSmsTimestamp(message.get("timestamp")), 10, "#64748b", false);
+        TextView time = text(formatSmsTimestamp(message.get("timestamp")), 10, outgoing ? "#dbeafe" : "#8e8e93", false);
         meta.addView(time);
         String badge = messageSourceBadge(source);
         if (!badge.isEmpty()) {
-            TextView badgeView = text(badge, 9, dashboard ? "#0369a1" : "#475569", true);
+            TextView badgeView = text(badge, 9, dashboard ? "#0369a1" : outgoing ? "#dbeafe" : "#636366", true);
             badgeView.setGravity(Gravity.CENTER);
             badgeView.setPadding(dp(5), dp(2), dp(5), dp(2));
-            badgeView.setBackground(roundRect(dashboard ? "#bae6fd" : "#e2e8f0", dashboard ? "#7dd3fc" : "#cbd5e1", 999));
+            badgeView.setBackground(roundRect(dashboard ? "#bae6fd" : outgoing ? "#3b9cff" : "#d1d1d6", dashboard ? "#7dd3fc" : outgoing ? "#3b9cff" : "#d1d1d6", 999));
             meta.addView(badgeView, wrapLeft(6));
         }
         bubble.addView(meta);
-        outer.addView(bubble, new LinearLayout.LayoutParams((int) (getResources().getDisplayMetrics().widthPixels * 0.74f), ViewGroup.LayoutParams.WRAP_CONTENT));
+        outer.addView(bubble, new LinearLayout.LayoutParams((int) (getResources().getDisplayMetrics().widthPixels * 0.78f), ViewGroup.LayoutParams.WRAP_CONTENT));
         return outer;
     }
 
@@ -1214,9 +1318,9 @@ public class HomeActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(8), dp(8), dp(12), dp(8));
+        header.setPadding(dp(8), dp(10), dp(12), dp(10));
         header.setBackgroundColor(color("#ffffff"));
-        header.addView(iconAction(R.drawable.ic_db_back, "#f8fafc", "#0f172a", () -> {
+        header.addView(iconAction(R.drawable.ic_db_back, "#ffffff", "#0a84ff", () -> {
             selectedSmsThread = null;
             smsMessages = new ArrayList<>();
             smsConversationScrollY = 0;
@@ -1228,66 +1332,93 @@ public class HomeActivity extends Activity {
         header.addView(avatar, fixed(42, 42, 10));
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
-        copy.addView(singleLineText(systemThread ? systemThreadTitle(selectedSmsThread, contact) : contact.name.isEmpty() ? "Conversation" : contact.name, 17, "#0f172a", true));
-        copy.addView(singleLineText(systemThread ? "No reply available" : contact.number.isEmpty() ? "SMS thread" : contact.number, 12, "#64748b", false));
+        copy.addView(singleLineText(systemThread ? systemThreadTrueTitle(selectedSmsThread, contact) : contact.name.isEmpty() ? "Conversation" : contact.name, 17, "#111111", true));
+        copy.addView(singleLineText(systemThread ? "No reply available" : contact.number.isEmpty() ? "Text Message" : contact.number, 12, "#8e8e93", false));
         header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         int queued = BridgeSmsLocalQueue.countForAddress(this, contact.number);
         if (queued > 0) {
             header.addView(pill("Queued " + queued, "#fef3c7", "#92400e"), wrapRight(8));
         }
-        header.addView(iconAction(R.drawable.ic_db_more_vert, "#f8fafc", "#0f172a", this::showSmsThreadMenu), fixed(42, 42, 0));
+        if (!systemThread && !safe(contact.number).trim().isEmpty()) {
+            header.addView(iconAction(R.drawable.ic_db_call, "#ffffff", "#34c759", () -> showDialerSheet(contact.number, contact.name)), fixed(42, 42, 6));
+        }
+        header.addView(iconAction(R.drawable.ic_db_more_vert, "#ffffff", "#0a84ff", this::showSmsThreadMenu), fixed(42, 42, 0));
         return header;
     }
 
     private View newConversationScreen() {
         LinearLayout screen = new LinearLayout(this);
         screen.setOrientation(LinearLayout.VERTICAL);
-        screen.setBackgroundColor(color("#ffffff"));
+        screen.setBackgroundColor(color("#f2f2f7"));
 
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(8), dp(8), dp(12), dp(8));
-        header.addView(iconAction(R.drawable.ic_db_back, "#f8fafc", "#0f172a", () -> {
+        header.setPadding(dp(8), dp(10), dp(12), dp(8));
+        header.addView(chipButton("Cancel", "#f2f2f7", "#0a84ff"), wrapRight(8));
+        ((Button) header.getChildAt(0)).setOnClickListener(v -> runGuarded("new-message-cancel", () -> {
             composingNewSms = false;
             clearNewSmsDraft();
             rebuild();
-        }), fixed(42, 42, 8));
+        }));
         LinearLayout title = new LinearLayout(this);
         title.setOrientation(LinearLayout.VERTICAL);
-        title.addView(text("New conversation", 18, "#0f172a", true));
-        title.addView(text("Choose contact, then send SMS", 12, "#64748b", false));
+        title.addView(text("New Message", 18, "#111111", true));
         header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        header.addView(iconAction(R.drawable.ic_db_person, "#ffffff", "#0a84ff", () -> {
+            if (!hasContactsPermission()) {
+                requestContactsPermission();
+                return;
+            }
+            showContactPickerSheet("Select recipient", (name, phone) -> {
+                addNewSmsRecipient(name, phone);
+                newSmsContactQuery = "";
+                newSmsContactSearchFocused = false;
+                rebuild();
+            });
+        }), fixed(38, 38, 0));
         screen.addView(header, fullWidth(0));
 
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(14), dp(8), dp(14), dp(12));
-        TextView selected = text(newSmsRecipientNumber.isEmpty() ? "To: search contacts or type number" : "To: " + firstNonEmptyValue(newSmsRecipientName, newSmsRecipientNumber), 13, "#0f172a", true);
-        selected.setPadding(dp(12), dp(8), dp(12), dp(8));
-        selected.setBackground(roundRect(newSmsRecipientNumber.isEmpty() ? "#f8fafc" : "#e0f2fe", newSmsRecipientNumber.isEmpty() ? "#e2e8f0" : "#7dd3fc", 999));
-        content.addView(selected, fullWidth(8));
+        content.addView(communicationActionRow(
+                communicationShortcut("Contacts", "", R.drawable.ic_db_person, "#34c759", () -> {
+                    if (!hasContactsPermission()) {
+                        requestContactsPermission();
+                        return;
+                    }
+                    showContactPickerSheet("Select recipient", (name, phone) -> {
+                        addNewSmsRecipient(name, phone);
+                        newSmsContactQuery = "";
+                        newSmsContactSearchFocused = false;
+                        rebuild();
+                    });
+                }),
+                communicationShortcut("Phone", "", R.drawable.ic_db_call, "#0a84ff", () -> showDialerSheet(primaryNewSmsRecipientNumber(newSmsContactQuery), primaryNewSmsRecipientLabel(newSmsContactQuery)))
+        ), fullWidth(8));
+        content.addView(newSmsRecipientsPanel(), fullWidth(8));
 
         EditText contactSearch = input("Name or phone number");
         contactSearch.setSingleLine(true);
         contactSearch.setText(newSmsContactQuery);
+        contactSearch.setBackground(roundRect("#e9e9eb", "#e9e9eb", 14));
+        contactSearch.setHintTextColor(color("#8e8e93"));
         content.addView(contactSearch, fullWidth(8));
 
         LinearLayout contactsBox = new LinearLayout(this);
         contactsBox.setOrientation(LinearLayout.VERTICAL);
         contactsBox.setPadding(dp(6), dp(6), dp(6), dp(6));
-        contactsBox.setBackground(roundRect("#f8fafc", "#e2e8f0", 18));
+        contactsBox.setBackground(roundRect("#ffffff", "#e5e5ea", 18));
         final ContactCallback[] chooseRef = new ContactCallback[1];
         ContactCallback choose = (name, phone) -> {
-            newSmsRecipientName = name;
-            newSmsRecipientNumber = phone;
-            selected.setText("To: " + firstNonEmptyValue(name, phone));
-            selected.setBackground(roundRect("#e0f2fe", "#7dd3fc", 999));
-            contactSearch.setText(firstNonEmptyValue(name, phone));
-            renderContactMatches(contactsBox, contactSearch.getText().toString(), chooseRef[0]);
+            addNewSmsRecipient(name, phone);
+            newSmsContactQuery = "";
+            newSmsContactSearchFocused = false;
+            rebuild();
         };
         chooseRef[0] = choose;
         if (hasContactsPermission()) {
-            renderContactMatches(contactsBox, newSmsContactQuery, choose);
+            renderNewSmsRecipientMatches(contactsBox, newSmsContactQuery, choose);
             contactSearch.addTextChangedListener(new TextWatcher() {
                 @Override
                 public void beforeTextChanged(CharSequence s, int start, int count, int after) {
@@ -1296,17 +1427,7 @@ public class HomeActivity extends Activity {
                 @Override
                 public void onTextChanged(CharSequence s, int start, int before, int count) {
                     newSmsContactQuery = s.toString();
-                    if (looksLikePhoneNumber(newSmsContactQuery)) {
-                        newSmsRecipientName = "";
-                        newSmsRecipientNumber = newSmsContactQuery.trim();
-                        selected.setText("To: " + newSmsRecipientNumber);
-                        selected.setBackground(roundRect("#e0f2fe", "#7dd3fc", 999));
-                    } else if (!newSmsRecipientName.equals(newSmsContactQuery)) {
-                        newSmsRecipientNumber = "";
-                        selected.setText("To: search contacts or type number");
-                        selected.setBackground(roundRect("#f8fafc", "#e2e8f0", 999));
-                    }
-                    renderContactMatches(contactsBox, newSmsContactQuery, choose);
+                    renderNewSmsRecipientMatches(contactsBox, newSmsContactQuery, choose);
                 }
 
                 @Override
@@ -1321,6 +1442,11 @@ public class HomeActivity extends Activity {
         }
         ScrollView contactsScroll = new ScrollView(this);
         contactsScroll.addView(contactsBox);
+        contactsScroll.setVisibility(newSmsContactSearchFocused ? View.VISIBLE : View.GONE);
+        contactSearch.setOnFocusChangeListener((v, hasFocus) -> {
+            newSmsContactSearchFocused = hasFocus;
+            contactsScroll.setVisibility(hasFocus ? View.VISIBLE : View.GONE);
+        });
         content.addView(contactsScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         screen.addView(content, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
@@ -1337,21 +1463,20 @@ public class HomeActivity extends Activity {
         message.setSingleLine(false);
         message.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         message.setBackgroundColor(Color.TRANSPARENT);
-        composerShell.addView(iconAction(R.drawable.ic_db_add, "#f8fafc", "#64748b", () -> {
-            newSmsRecipientNumber = resolveNewSmsRecipientNumber(contactSearch.getText().toString());
+        composerShell.addView(iconAction(R.drawable.ic_db_add, "#ffffff", "#8e8e93", () -> {
+            newSmsRecipientNumber = primaryNewSmsRecipientNumber(contactSearch.getText().toString());
             showSmsAttachmentSheet(message);
         }), fixed(38, 38, 8));
         LinearLayout inputWrap = new LinearLayout(this);
         inputWrap.setGravity(Gravity.CENTER_VERTICAL);
         inputWrap.setPadding(dp(10), 0, dp(8), 0);
-        inputWrap.setBackground(roundRect("#ffffff", "#dbe3ef", 18));
+        inputWrap.setBackground(roundRect("#ffffff", "#d1d1d6", 18));
         inputWrap.addView(message, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         inputWrap.addView(smsSendAction(() -> {
-            newSmsRecipientNumber = resolveNewSmsRecipientNumber(contactSearch.getText().toString());
+            newSmsRecipientNumber = primaryNewSmsRecipientNumber(contactSearch.getText().toString());
             return newSmsRecipientNumber;
         }, message, () -> {
-            newSmsRecipientNumber = resolveNewSmsRecipientNumber(contactSearch.getText().toString());
-            sendSmsFromComposer(message.getText().toString(), newSmsRecipientNumber);
+            sendSmsFromComposerToRecipients(message.getText().toString(), resolveNewSmsRecipients(contactSearch.getText().toString()));
         }), fixed(46, 46, 0));
         composerShell.addView(inputWrap, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         composerArea.addView(composerShell);
@@ -1373,6 +1498,165 @@ public class HomeActivity extends Activity {
         newSmsContactQuery = "";
         newSmsRecipientName = "";
         newSmsRecipientNumber = "";
+        newSmsContactSearchFocused = false;
+        newSmsRecipients.clear();
+    }
+
+    private void addNewSmsRecipient(String name, String number) {
+        String cleanNumber = safe(number).trim();
+        if (cleanNumber.isEmpty()) {
+            return;
+        }
+        String key = contactCacheKey(cleanNumber);
+        for (ContactInfo recipient : newSmsRecipients) {
+            if (key.equals(contactCacheKey(recipient.number))) {
+                return;
+            }
+        }
+        String cleanName = safe(name).trim();
+        String label = firstNonEmptyValue(cleanName, cleanNumber);
+        newSmsRecipients.add(new ContactInfo(label, cleanNumber, avatarLabel(label), true));
+        newSmsRecipientName = cleanName;
+        newSmsRecipientNumber = cleanNumber;
+    }
+
+    private void removeNewSmsRecipient(String number) {
+        String target = contactCacheKey(number);
+        for (int i = newSmsRecipients.size() - 1; i >= 0; i -= 1) {
+            if (target.equals(contactCacheKey(newSmsRecipients.get(i).number))) {
+                newSmsRecipients.remove(i);
+            }
+        }
+        if (newSmsRecipients.isEmpty()) {
+            newSmsRecipientName = "";
+            newSmsRecipientNumber = "";
+            return;
+        }
+        ContactInfo first = newSmsRecipients.get(0);
+        newSmsRecipientName = first.name;
+        newSmsRecipientNumber = first.number;
+    }
+
+    private View newSmsRecipientsPanel() {
+        if (newSmsRecipients.isEmpty()) {
+            TextView placeholder = text("To: search contacts or type number", 13, "#111111", true);
+            placeholder.setPadding(dp(12), dp(8), dp(12), dp(8));
+            placeholder.setBackground(roundRect("#ffffff", "#e5e5ea", 999));
+            return placeholder;
+        }
+        HorizontalScrollView scroll = new HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < newSmsRecipients.size(); i += 1) {
+            row.addView(newSmsRecipientPill(newSmsRecipients.get(i)), wrapRight(i == newSmsRecipients.size() - 1 ? 0 : 8));
+        }
+        scroll.addView(row);
+        return scroll;
+    }
+
+    private View newSmsRecipientPill(ContactInfo recipient) {
+        LinearLayout pill = new LinearLayout(this);
+        pill.setOrientation(LinearLayout.HORIZONTAL);
+        pill.setGravity(Gravity.CENTER_VERTICAL);
+        pill.setPadding(dp(6), dp(6), dp(10), dp(6));
+        pill.setBackground(roundRect("#e5f3ff", "#9fd0ff", 999));
+        pill.addView(smsAvatar(recipient.avatar, false), fixed(30, 30, 8));
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(singleLineText(recipient.number, 12, "#111111", true));
+        if (!recipient.name.equals(recipient.number)) {
+            copy.addView(singleLineText(recipient.name, 9, "#0a84ff", true));
+        }
+        pill.addView(copy, wrapRight(8));
+        FrameLayout remove = new FrameLayout(this);
+        remove.setMinimumWidth(dp(22));
+        remove.setMinimumHeight(dp(22));
+        remove.setBackground(roundRect("#ffffff", "#bfdbfe", 999));
+        remove.setClickable(true);
+        remove.setFocusable(true);
+        remove.setOnClickListener(v -> runGuarded("new-sms-remove:" + recipient.number, () -> {
+            removeNewSmsRecipient(recipient.number);
+            rebuild();
+        }));
+        remove.addView(tintedIcon(R.drawable.ic_db_close, "#0a84ff", 12), new FrameLayout.LayoutParams(dp(12), dp(12), Gravity.CENTER));
+        pill.addView(remove);
+        return pill;
+    }
+
+    private void renderNewSmsRecipientMatches(LinearLayout target, String query, ContactCallback callback) {
+        target.removeAllViews();
+        if (!hasContactsPermission()) {
+            target.addView(contactPermissionRow(this::requestContactsPermission));
+            return;
+        }
+        if (looksLikePhoneNumber(query)) {
+            String typedNumber = safe(query).trim();
+            if (!alreadySelectedNewSmsRecipient(typedNumber)) {
+                target.addView(contactRow("Add " + typedNumber, "Use this number as another recipient.", (name, number) -> callback.onContact("", typedNumber)), fullWidth(4));
+            }
+        }
+        List<Map<String, String>> contacts = findContacts(query, 120);
+        for (Map<String, String> contact : contacts) {
+            String name = safe(contact.get("name"));
+            String number = safe(contact.get("number"));
+            if (alreadySelectedNewSmsRecipient(number)) {
+                continue;
+            }
+            target.addView(contactRow(name, number, (contactName, contactNumber) -> callback.onContact(name, number)), fullWidth(4));
+        }
+        if (target.getChildCount() == 0) {
+            TextView empty = text("No contacts found", 12, "#64748b", false);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(8), dp(16), dp(8), dp(16));
+            target.addView(empty);
+        }
+    }
+
+    private boolean alreadySelectedNewSmsRecipient(String number) {
+        String target = contactCacheKey(number);
+        for (ContactInfo recipient : newSmsRecipients) {
+            if (target.equals(contactCacheKey(recipient.number))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<ContactInfo> resolveNewSmsRecipients(String typedValue) {
+        List<ContactInfo> recipients = new ArrayList<>(newSmsRecipients);
+        if (!recipients.isEmpty()) {
+            return recipients;
+        }
+        String typed = safe(typedValue).trim();
+        if (looksLikePhoneNumber(typed)) {
+            recipients.add(new ContactInfo(typed, typed, avatarLabel(typed), true));
+            return recipients;
+        }
+        if (!safe(newSmsRecipientNumber).trim().isEmpty()) {
+            recipients.add(new ContactInfo(firstNonEmptyValue(newSmsRecipientName, newSmsRecipientNumber), newSmsRecipientNumber, avatarLabel(firstNonEmptyValue(newSmsRecipientName, newSmsRecipientNumber)), true));
+            return recipients;
+        }
+        List<Map<String, String>> matches = findContacts(typed, 1);
+        if (!matches.isEmpty()) {
+            String name = safe(matches.get(0).get("name"));
+            String number = safe(matches.get(0).get("number")).trim();
+            recipients.add(new ContactInfo(firstNonEmptyValue(name, number), number, avatarLabel(firstNonEmptyValue(name, number)), true));
+        }
+        return recipients;
+    }
+
+    private String primaryNewSmsRecipientNumber(String typedValue) {
+        List<ContactInfo> recipients = resolveNewSmsRecipients(typedValue);
+        return recipients.isEmpty() ? "" : safe(recipients.get(0).number).trim();
+    }
+
+    private String primaryNewSmsRecipientLabel(String typedValue) {
+        List<ContactInfo> recipients = resolveNewSmsRecipients(typedValue);
+        if (recipients.isEmpty()) {
+            return "";
+        }
+        return firstNonEmptyValue(recipients.get(0).name, recipients.get(0).number);
     }
 
     private void showSmsThreadMenu() {
@@ -1528,7 +1812,7 @@ public class HomeActivity extends Activity {
         header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         header.addView(iconAction(R.drawable.ic_db_close, "#f8fafc", "#0f172a", dialog::dismiss));
         sheet.addView(header, fullWidth(12));
-        sheet.addView(auditLine("Added", "Bottom-scroll thread, sender info, message long-press menu, dashboard/API badges, system-thread no-reply state, full-screen compose, SIM selector, local queue, CSV schedule import."));
+        sheet.addView(auditLine("Available", "Bottom-scroll thread, sender info, message long-press menu, dashboard/API badges, system-thread no-reply state, full-screen compose, SIM selector, local queue, CSV schedule import."));
         sheet.addView(auditLine("Still Missing", "Conversation search, archive, block/report spam, notification mute, reactions, media/gallery attachments, RCS typing/read receipts."));
         sheet.addView(auditLine("Android Limit", "Deleting and marking provider SMS can be blocked unless this app is the default SMS app."));
         showFixedBottomSheetDialog(dialog, sheet);
@@ -1560,9 +1844,9 @@ public class HomeActivity extends Activity {
     }
 
     private View smsAvatar(String label, boolean unread) {
-        TextView avatar = text(label, 18, "#0f172a", true);
+        TextView avatar = text(label, 17, unread ? "#0a84ff" : "#636366", true);
         avatar.setGravity(Gravity.CENTER);
-        avatar.setBackground(roundRect(unread ? "#dbeafe" : "#f1f5f9", unread ? "#bfdbfe" : "#f1f5f9", 999));
+        avatar.setBackground(roundRect(unread ? "#e5f3ff" : "#ededf0", unread ? "#b9dcff" : "#ededf0", 999));
         return avatar;
     }
 
@@ -1577,8 +1861,10 @@ public class HomeActivity extends Activity {
         nav.setGravity(Gravity.CENTER_VERTICAL);
         nav.setPadding(dp(8), dp(2), dp(8), dp(2));
         nav.setBackground(roundRect("#ffffff", "#ffffff", 0));
-        nav.addView(navItem("Home", R.drawable.ic_db_home, selectedTabIndex == 0, () -> selectTab(0)), weighted(8));
-        nav.addView(navItem("SMS", R.drawable.ic_db_sms, selectedTabIndex == 1, () -> selectTab(1)), weighted(0));
+        nav.addView(navItem("Home", R.drawable.ic_db_home, selectedTabIndex == TAB_HOME, () -> selectTab(TAB_HOME)), weighted(8));
+        nav.addView(navItem("Message", R.drawable.ic_db_sms, selectedTabIndex == TAB_SMS, () -> selectTab(TAB_SMS)), weighted(8));
+        nav.addView(navItem("Calls", R.drawable.ic_db_call, selectedTabIndex == TAB_PHONE, () -> selectTab(TAB_PHONE)), weighted(8));
+        nav.addView(navItem("Contacts", R.drawable.ic_db_person, selectedTabIndex == TAB_CONTACTS, () -> selectTab(TAB_CONTACTS)), weighted(0));
         return nav;
     }
 
@@ -1599,6 +1885,777 @@ public class HomeActivity extends Activity {
         item.setFocusable(true);
         item.setOnClickListener(v -> runGuarded("nav:" + label, action));
         return item;
+    }
+
+    private View contactsWorkspace() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(color("#f2f2f7"));
+
+        LinearLayout root = rootLayout(12, 8, 12, 12);
+        root.setBackgroundColor(color("#f2f2f7"));
+        scroll.addView(root);
+
+        root.addView(contactsListHeader(), fullWidth(12));
+
+        LinearLayout searchShell = new LinearLayout(this);
+        searchShell.setOrientation(LinearLayout.HORIZONTAL);
+        searchShell.setGravity(Gravity.CENTER_VERTICAL);
+        searchShell.setPadding(dp(12), 0, dp(12), 0);
+        searchShell.setBackground(roundRect("#e9e9eb", "#e9e9eb", 14));
+        searchShell.addView(tintedIcon(R.drawable.ic_db_search, "#8e8e93", 18), fixed(18, 18, 8));
+        EditText search = input("Search contacts");
+        search.setSingleLine(true);
+        search.setBackgroundColor(Color.TRANSPARENT);
+        search.setPadding(0, 0, 0, 0);
+        search.setHintTextColor(color("#8e8e93"));
+        search.setTextColor(color("#111111"));
+        searchShell.addView(search, new LinearLayout.LayoutParams(0, dp(42), 1f));
+        root.addView(searchShell, fullWidth(12));
+
+        LinearLayout results = new LinearLayout(this);
+        results.setOrientation(LinearLayout.VERTICAL);
+        results.setPadding(dp(6), dp(6), dp(6), dp(6));
+        results.setBackground(roundRect("#ffffff", "#e5e5ea", 18));
+        root.addView(results, fullWidth(0));
+
+        Runnable refreshContacts = () -> {
+            results.removeAllViews();
+            if (!hasContactsPermission()) {
+                results.addView(contactPermissionRow(this::requestContactsPermission), fullWidth(0));
+                return;
+            }
+
+            List<Map<String, String>> matches = findContacts(search.getText().toString(), 120);
+
+            for (Map<String, String> contact : matches) {
+                String name = safe(contact.get("name"));
+                String number = safe(contact.get("number"));
+                results.addView(contactRow(name, number, this::showContactActionSheet), fullWidth(4));
+            }
+
+            if (matches.isEmpty()) {
+                results.addView(emptyLine("No saved contacts found for this search."));
+            }
+        };
+
+        refreshContacts.run();
+        search.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                refreshContacts.run();
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        });
+        return scroll;
+    }
+
+    private View contactsListHeader() {
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackgroundColor(color("#f2f2f7"));
+
+        LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = text("Contacts", 32, "#111111", true);
+        top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        shell.addView(top, fullWidth(4));
+
+        return shell;
+    }
+
+    private View phoneWorkspace() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(color("#f2f2f7"));
+
+        LinearLayout root = rootLayout(12, 8, 12, 12);
+        root.setBackgroundColor(color("#f2f2f7"));
+        scroll.addView(root);
+
+        boolean callReady = boolValue(state.get("callFeatureReady"));
+        String callStatus = stringValue(state.get("callStatus"), "Idle");
+        String callNumber = stringValue(state.get("callNumber"));
+        String callDirection = stringValue(state.get("callDirection"));
+        boolean callLogReady = hasCallLogPermission();
+        List<RecentCallItem> recentCalls = callLogReady ? recentCallLogItems(8) : new ArrayList<>();
+        List<RecentCallItem> favorites = recentFavoriteItems(recentCalls, 6);
+
+        root.addView(phoneListHeader(), fullWidth(8));
+
+        if (!favorites.isEmpty()) {
+            root.addView(settingsSectionHeader("Favorites", ""), fullWidth(4));
+            root.addView(callFavoritesStrip(favorites), fullWidth(8));
+        }
+
+        if (!"idle".equalsIgnoreCase(callStatus) || !callNumber.isEmpty()) {
+            LinearLayout statusCard = card(10, 18);
+            statusCard.setBackground(roundRect("#ffffff", "#e5e5ea", 18));
+            statusCard.addView(text("Current call", 11, "#8e8e93", true), fullWidth(2));
+            statusCard.addView(text(capitalize(callStatus.isEmpty() ? "idle" : callStatus), 17, "#111111", true), fullWidth(2));
+            statusCard.addView(text(joinNonEmpty(capitalize(callDirection), callNumber), 12, "#636366", false));
+            root.addView(statusCard, fullWidth(8));
+        }
+
+        root.addView(settingsSectionHeader(
+                "Recents",
+                ""
+        ), fullWidth(4));
+
+        LinearLayout callLogCard = card(8, 18);
+        callLogCard.setBackground(roundRect("#ffffff", "#e5e5ea", 18));
+        if (!callLogReady) {
+            callLogCard.addView(settingsRow(
+                    R.drawable.ic_db_call,
+                    "Call log access",
+                    "Allow phone and call-log permissions so Recents and caller names can appear here.",
+                    "Allow",
+                    "#0a84ff",
+                    this::requestCallFeature
+            ));
+        } else if (recentCalls.isEmpty()) {
+            callLogCard.addView(emptyLine("No recent calls on this device yet."));
+        } else {
+            for (RecentCallItem item : recentCalls) {
+                callLogCard.addView(callLogRow(item), fullWidth(4));
+            }
+        }
+        root.addView(callLogCard, fullWidth(8));
+
+        return scroll;
+    }
+
+    private View phoneListHeader() {
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackgroundColor(color("#f2f2f7"));
+
+        LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = text("Phone", 32, "#111111", true);
+        top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        top.addView(iconAction(R.drawable.ic_db_add, "#0a84ff", "#ffffff", () -> showDialerSheet("", "")), fixed(38, 38, 0));
+        shell.addView(top, fullWidth(4));
+
+        return shell;
+    }
+
+    private View callLogRow(RecentCallItem item) {
+        String accent = callTypeAccent(item.type);
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(6), dp(10), dp(6), dp(10));
+        row.setBackgroundColor(color("#ffffff"));
+        row.setClickable(true);
+        row.setFocusable(true);
+        row.setOnClickListener(v -> showDialerSheet(item.number, item.name));
+
+        row.addView(iconTile(R.drawable.ic_db_call, accent, 32, 11, 16), fixed(32, 32, 10));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(singleLineText(firstNonEmptyValue(item.name, item.number, "Unknown"), 15, "#111111", true));
+        copy.addView(singleLineText(joinNonEmpty(
+                item.number.isEmpty() ? "Private number" : item.number,
+                formatCallDuration(item.durationSeconds)
+        ), 12, "#636366", false));
+        row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        LinearLayout tail = new LinearLayout(this);
+        tail.setOrientation(LinearLayout.VERTICAL);
+        tail.setGravity(Gravity.END);
+        tail.addView(text(formatSmsTimestamp(item.date), 11, "#8e8e93", false));
+        tail.addView(text(callTypeShortLabel(item.type), 11, accent, true));
+        row.addView(tail);
+        group.addView(row);
+
+        View divider = new View(this);
+        divider.setBackgroundColor(color("#e5e5ea"));
+        group.addView(divider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+        return group;
+    }
+
+    private List<RecentCallItem> recentFavoriteItems(List<RecentCallItem> source, int limit) {
+        LinkedHashMap<String, RecentCallItem> deduped = new LinkedHashMap<>();
+        for (RecentCallItem item : source) {
+            String key = firstNonEmptyValue(item.number, item.name).trim();
+            if (key.isEmpty() || deduped.containsKey(key)) {
+                continue;
+            }
+            deduped.put(key, item);
+            if (deduped.size() >= limit) {
+                break;
+            }
+        }
+        return new ArrayList<>(deduped.values());
+    }
+
+    private View callFavoritesStrip(List<RecentCallItem> favorites) {
+        HorizontalScrollView scroll = new HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < favorites.size(); i++) {
+            RecentCallItem item = favorites.get(i);
+            row.addView(callFavoriteChip(item), wrapRight(i == favorites.size() - 1 ? 0 : 10));
+        }
+        scroll.addView(row);
+        return scroll;
+    }
+
+    private View callFavoriteChip(RecentCallItem item) {
+        String accent = callTypeAccent(item.type);
+        LinearLayout chip = new LinearLayout(this);
+        chip.setOrientation(LinearLayout.VERTICAL);
+        chip.setGravity(Gravity.CENTER);
+        chip.setPadding(dp(12), dp(10), dp(12), dp(10));
+        chip.setMinimumWidth(dp(92));
+        chip.setBackground(roundRect("#ffffff", "#e5e5ea", 18));
+        chip.setClickable(true);
+        chip.setFocusable(true);
+        chip.setOnClickListener(v -> showDialerSheet(item.number, item.name));
+        chip.addView(iconTile(R.drawable.ic_db_call, accent, 34, 12, 18), fixed(34, 34, 0));
+        TextView name = singleLineText(firstNonEmptyValue(item.name, item.number, "Call"), 12, "#111111", true);
+        name.setGravity(Gravity.CENTER);
+        chip.addView(name, fullWidth(2));
+        TextView detail = singleLineText(callTypeLabel(item.type), 10, "#8e8e93", false);
+        detail.setGravity(Gravity.CENTER);
+        chip.addView(detail);
+        return chip;
+    }
+
+    private View workspaceHeroCard(String title, String detail, int iconRes, String accent, String badgeText) {
+        LinearLayout hero = card(14, 22);
+        hero.setBackground(softTint(accent, 22));
+
+        LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(iconTile(iconRes, accent, 42, 14, 22), fixed(42, 42, 10));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(text(title, 18, "#0f172a", true));
+        copy.addView(text(detail, 12, "#475569", false));
+        top.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        if (!safe(badgeText).trim().isEmpty()) {
+            top.addView(pill(badgeText, "#ffffff", "#0f172a"));
+        }
+
+        hero.addView(top, fullWidth(0));
+        return hero;
+    }
+
+    private View iosLargeTitleHeader(String title, String subtitle) {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setBackgroundColor(color("#f2f2f7"));
+        header.addView(text(title, 32, "#111111", true), fullWidth(2));
+        if (!safe(subtitle).trim().isEmpty()) {
+            header.addView(text(subtitle, 12, "#8e8e93", false));
+        }
+        return header;
+    }
+
+    private View communicationActionRow(View first, View second) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(first, weighted(8));
+        row.addView(second, weighted(0));
+        return row;
+    }
+
+    private View communicationShortcut(String title, String detail, int iconRes, String accent, Runnable action) {
+        LinearLayout actionView = new LinearLayout(this);
+        actionView.setOrientation(LinearLayout.HORIZONTAL);
+        actionView.setGravity(Gravity.CENTER_VERTICAL);
+        actionView.setPadding(dp(12), dp(10), dp(12), dp(10));
+        actionView.setBackground(roundRect("#ffffff", "#e5e5ea", 18));
+        actionView.setClickable(true);
+        actionView.setFocusable(true);
+        actionView.setOnClickListener(v -> runGuarded("comm-shortcut:" + title, action));
+        actionView.addView(iconTile(iconRes, accent, 34, 12, 18), fixed(34, 34, 10));
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(text(title, 14, "#111111", true));
+        if (!safe(detail).trim().isEmpty()) {
+            copy.addView(text(detail, 11, "#8e8e93", false));
+        }
+        actionView.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        return actionView;
+    }
+
+    private void showContactActionSheet(String name, String number) {
+        String cleanName = safe(name).trim();
+        String cleanNumber = safe(number).trim();
+        Dialog dialog = createBottomSheetDialog();
+        LinearLayout sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        sheet.setPadding(dp(14), dp(14), dp(14), dp(14));
+        sheet.setBackground(roundRect("#ffffff", "#ffffff", 24));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setGravity(Gravity.CENTER_HORIZONTAL);
+        header.addView(smsAvatar(cleanName.isEmpty() ? "#" : cleanName.substring(0, 1).toUpperCase(Locale.US), false), fixed(56, 56, 0));
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.setGravity(Gravity.CENTER_HORIZONTAL);
+        copy.addView(text(firstNonEmptyValue(cleanName, cleanNumber), 20, "#111111", true));
+        copy.addView(text(cleanNumber, 13, "#8e8e93", false));
+        header.addView(copy, fullWidth(8));
+        sheet.addView(header, fullWidth(10));
+
+        LinearLayout actionRow = new LinearLayout(this);
+        actionRow.setOrientation(LinearLayout.HORIZONTAL);
+        actionRow.setGravity(Gravity.CENTER_VERTICAL);
+        actionRow.addView(contactQuickAction("Message", R.drawable.ic_db_sms, "#34c759", () -> {
+            dialog.dismiss();
+            openSmsComposerForContact(cleanName, cleanNumber);
+        }), weighted(8));
+        actionRow.addView(contactQuickAction("Call", R.drawable.ic_db_call, "#0a84ff", () -> {
+            dialog.dismiss();
+            showDialerSheet(cleanNumber, cleanName);
+        }), weighted(8));
+        actionRow.addView(contactQuickAction("Edit", R.drawable.ic_db_tune, "#ff9500", () -> {
+            dialog.dismiss();
+            openEditContact(cleanName, cleanNumber);
+        }), weighted(8));
+        actionRow.addView(contactQuickAction("Copy", R.drawable.ic_db_copy, "#8e8e93", () -> {
+            dialog.dismiss();
+            copyText(cleanNumber);
+        }), weighted(0));
+        sheet.addView(actionRow, fullWidth(10));
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(12), dp(12), dp(12), dp(12));
+        card.setBackground(roundRect("#f2f2f7", "#e5e5ea", 18));
+        card.addView(contactInfoLine("mobile", cleanNumber), fullWidth(8));
+        card.addView(contactInfoLine("source", cleanName.isEmpty() ? "Phone number" : "Saved contact"));
+        sheet.addView(card, fullWidth(10));
+
+        sheet.addView(labelIconButton("Open in Contacts", R.drawable.ic_db_person, "#ffffff", "#0a84ff", () -> {
+            dialog.dismiss();
+            selectTab(TAB_CONTACTS);
+        }));
+
+        sheet.addView(iconAction(R.drawable.ic_db_close, "#ffffff", "#0a84ff", dialog::dismiss), fullWidth(0));
+
+        showFixedBottomSheetDialog(dialog, sheet);
+    }
+
+    private void openEditContact(String name, String number) {
+        String cleanName = safe(name).trim();
+        String cleanNumber = safe(number).trim();
+        Intent intent;
+        Uri existing = contactLookupUri(cleanNumber);
+        if (existing != null) {
+            intent = new Intent(Intent.ACTION_EDIT, existing);
+            intent.putExtra("finishActivityOnSaveCompleted", true);
+        } else {
+            intent = new Intent(ContactsContract.Intents.Insert.ACTION);
+            intent.setType(ContactsContract.RawContacts.CONTENT_TYPE);
+        }
+        if (!cleanName.isEmpty()) {
+            intent.putExtra(ContactsContract.Intents.Insert.NAME, cleanName);
+        }
+        if (!cleanNumber.isEmpty()) {
+            intent.putExtra(ContactsContract.Intents.Insert.PHONE, cleanNumber);
+        }
+        try {
+            startActivity(intent);
+        } catch (RuntimeException error) {
+            showSnack("Unable to open contact editor.");
+        }
+    }
+
+    private Uri contactLookupUri(String number) {
+        String cleanNumber = safe(number).trim();
+        if (cleanNumber.isEmpty() || !hasContactsPermission()) {
+            return null;
+        }
+        Cursor cursor = null;
+        try {
+            Uri lookup = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(cleanNumber));
+            cursor = getContentResolver().query(
+                    lookup,
+                    new String[]{ContactsContract.PhoneLookup._ID, ContactsContract.PhoneLookup.LOOKUP_KEY},
+                    null,
+                    null,
+                    null
+            );
+            if (cursor == null || !cursor.moveToFirst()) {
+                return null;
+            }
+            int idIndex = cursor.getColumnIndex(ContactsContract.PhoneLookup._ID);
+            int lookupIndex = cursor.getColumnIndex(ContactsContract.PhoneLookup.LOOKUP_KEY);
+            if (idIndex < 0 || lookupIndex < 0) {
+                return null;
+            }
+            long id = cursor.getLong(idIndex);
+            String lookupKey = cursor.getString(lookupIndex);
+            if (lookupKey == null || lookupKey.trim().isEmpty()) {
+                return null;
+            }
+            return ContactsContract.Contacts.getLookupUri(id, lookupKey);
+        } catch (RuntimeException error) {
+            BridgeEventLog.append(this, "contacts: edit lookup failed " + error.getMessage());
+            return null;
+        } finally {
+            if (cursor != null) {
+                cursor.close();
+            }
+        }
+    }
+
+    private View contactQuickAction(String label, int iconRes, String accent, Runnable action) {
+        LinearLayout actionView = new LinearLayout(this);
+        actionView.setOrientation(LinearLayout.VERTICAL);
+        actionView.setGravity(Gravity.CENTER);
+        actionView.setPadding(dp(8), dp(10), dp(8), dp(10));
+        actionView.setBackground(roundRect("#ffffff", "#e5e5ea", 18));
+        actionView.setClickable(true);
+        actionView.setFocusable(true);
+        actionView.setOnClickListener(v -> runGuarded("contact-quick:" + label, action));
+        actionView.addView(iconTile(iconRes, accent, 36, 12, 18), fixed(36, 36, 0));
+        TextView labelView = text(label, 11, accent, true);
+        labelView.setGravity(Gravity.CENTER);
+        actionView.addView(labelView, fullWidth(2));
+        return actionView;
+    }
+
+    private void openSmsComposerForContact(String name, String number) {
+        selectedTabIndex = TAB_SMS;
+        selectedSmsThread = null;
+        smsMessages = new ArrayList<>();
+        smsBulkMode = false;
+        selectedSmsThreadKeys.clear();
+        composingNewSms = true;
+        clearNewSmsDraft();
+        addNewSmsRecipient(name, number);
+        newSmsContactQuery = "";
+        scheduleRefresh();
+        rebuild();
+    }
+
+    private void showDialerSheet(String presetNumber, String presetName) {
+        Dialog dialog = createBottomSheetDialog();
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(12), dp(12), dp(12), dp(12));
+        form.setBackground(roundRect("#ffffff", "#ffffff", 20));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.addView(iconTile(R.drawable.ic_db_call, "#0a84ff", 38, 12, 20), fixed(38, 38, 8));
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(text("Phone", 16, "#111111", true));
+        copy.addView(text("Number pad for a new call.", 11, "#8e8e93", false));
+        header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        header.addView(iconAction(R.drawable.ic_db_close, "#ffffff", "#0a84ff", dialog::dismiss));
+        form.addView(header, fullWidth(8));
+
+        TextView selected = text(
+                safe(presetName).trim().isEmpty() ? "Manual dial" : "Selected: " + presetName.trim(),
+                11,
+                "#111111",
+                true
+        );
+        selected.setBackground(roundRect("#f8fafc", "#e2e8f0", 999));
+        selected.setPadding(dp(10), dp(6), dp(10), dp(6));
+        form.addView(selected, fullWidth(6));
+
+        String cleanPresetName = safe(presetName).trim();
+        String[] numberState = new String[]{safe(presetNumber).trim()};
+
+        LinearLayout displayCard = new LinearLayout(this);
+        displayCard.setOrientation(LinearLayout.VERTICAL);
+        displayCard.setPadding(dp(12), dp(10), dp(12), dp(10));
+        displayCard.setBackground(roundRect("#f8fafc", "#dbe3ef", 16));
+
+        TextView display = text(numberState[0].isEmpty() ? "Enter number" : numberState[0], 22, numberState[0].isEmpty() ? "#94a3b8" : "#0f172a", true);
+        display.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        display.setSingleLine(true);
+        display.setEllipsize(TextUtils.TruncateAt.START);
+        displayCard.addView(display, fullWidth(4));
+
+        TextView displayHint = text(
+                cleanPresetName.isEmpty() ? "Phone number pad" : "Selected contact: " + cleanPresetName,
+                10,
+                "#64748b",
+                false
+        );
+        displayCard.addView(displayHint);
+        form.addView(displayCard, fullWidth(6));
+
+        Runnable refreshDialer = () -> {
+            String value = numberState[0].trim();
+            boolean hasValue = !value.isEmpty();
+            display.setText(hasValue ? value : "Enter number");
+            display.setTextColor(color(hasValue ? "#0f172a" : "#94a3b8"));
+            displayHint.setText(cleanPresetName.isEmpty() ? "Phone number pad" : "Selected contact: " + cleanPresetName);
+        };
+
+        String[][] digits = new String[][]{
+                {"1", "", "2", "ABC", "3", "DEF"},
+                {"4", "GHI", "5", "JKL", "6", "MNO"},
+                {"7", "PQRS", "8", "TUV", "9", "WXYZ"},
+                {"*", "", "0", "+", "#", ""}
+        };
+        for (String[] rowDigits : digits) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.addView(dialPadButton(rowDigits[0], rowDigits[1], () -> {
+                numberState[0] = numberState[0] + rowDigits[0];
+                refreshDialer.run();
+            }), weighted(8));
+            row.addView(dialPadButton(rowDigits[2], rowDigits[3], () -> {
+                numberState[0] = numberState[0] + rowDigits[2];
+                refreshDialer.run();
+            }), weighted(8));
+            row.addView(dialPadButton(rowDigits[4], rowDigits[5], () -> {
+                numberState[0] = numberState[0] + rowDigits[4];
+                refreshDialer.run();
+            }), weighted(0));
+            form.addView(row, fullWidth(6));
+        }
+
+        form.addView(text(
+                BridgePermissionHelper.hasCallFeature(this)
+                        ? "Call access is active. Phone is ready to place the call."
+                        : "Direct call control is not active yet. Phone can still open the dialer without extra permission.",
+                11,
+                "#8e8e93",
+                false
+        ), fullWidth(6));
+
+        LinearLayout tools = new LinearLayout(this);
+        tools.setGravity(Gravity.CENTER_VERTICAL);
+        tools.addView(iconAction(R.drawable.ic_db_back, "#f8fafc", "#0f172a", () -> {
+            if (!numberState[0].isEmpty()) {
+                numberState[0] = numberState[0].substring(0, numberState[0].length() - 1);
+                refreshDialer.run();
+            }
+        }), fixed(38, 38, 8));
+        tools.addView(iconAction(R.drawable.ic_db_clean, "#fff7ed", "#9a3412", () -> {
+            numberState[0] = "";
+            refreshDialer.run();
+        }), fixed(38, 38, 8));
+        tools.addView(labelIconButton("Contact", R.drawable.ic_db_person, "#ffffff", "#0a84ff", () -> {
+            dialog.dismiss();
+            showContactPickerSheet("Select number", (name, phone) -> showDialerSheet(phone, name));
+        }), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        form.addView(tools, fullWidth(6));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        actions.addView(labelIconButton("Cancel", R.drawable.ic_db_close, "#f8fafc", "#0f172a", dialog::dismiss), weighted(8));
+        actions.addView(labelIconButton("Dial", R.drawable.ic_db_call, "#0a84ff", "#ffffff", () -> {
+            dialog.dismiss();
+            placePhoneCall(numberState[0], false);
+        }), weighted(0));
+        form.addView(actions);
+
+        refreshDialer.run();
+        showBottomSheetDialog(dialog, form);
+    }
+
+    private View dialPadButton(String digit, String letters, Runnable action) {
+        LinearLayout button = new LinearLayout(this);
+        button.setOrientation(LinearLayout.VERTICAL);
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(dp(6), dp(8), dp(6), dp(8));
+        button.setMinimumHeight(dp(56));
+        button.setBackground(roundRect("#ffffff", "#dbe3ef", 16));
+        button.setClickable(true);
+        button.setFocusable(true);
+        button.setOnClickListener(v -> runGuarded("dial-pad:" + digit, action));
+
+        TextView digitView = text(digit, 21, "#0f172a", true);
+        digitView.setGravity(Gravity.CENTER);
+        digitView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        button.addView(digitView, fullWidth(2));
+
+        TextView lettersView = text(letters.isEmpty() ? " " : letters, 8, "#64748b", true);
+        lettersView.setGravity(Gravity.CENTER);
+        button.addView(lettersView);
+        return button;
+    }
+
+    private void placePhoneCall(String number, boolean directCall) {
+        String cleanNumber = safe(number).trim();
+        if (cleanNumber.isEmpty()) {
+            showSnack("Phone number is required.");
+            return;
+        }
+        if (directCall && !BridgePermissionHelper.hasCallFeature(this)) {
+            requestCallFeature();
+            return;
+        }
+        Intent intent = new Intent(
+                directCall ? Intent.ACTION_CALL : Intent.ACTION_DIAL,
+                Uri.parse("tel:" + Uri.encode(cleanNumber))
+        );
+        try {
+            startActivity(intent);
+        } catch (RuntimeException error) {
+            showSnack("Unable to open Phone.");
+        }
+    }
+
+    private boolean hasCallLogPermission() {
+        return checkSelfPermission(Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private List<RecentCallItem> recentCallLogItems(int limit) {
+        List<RecentCallItem> items = new ArrayList<>();
+        if (!hasCallLogPermission()) {
+            return items;
+        }
+
+        Cursor cursor = null;
+        try {
+            cursor = getContentResolver().query(
+                    CallLog.Calls.CONTENT_URI,
+                    new String[]{
+                            CallLog.Calls.CACHED_NAME,
+                            CallLog.Calls.NUMBER,
+                            CallLog.Calls.TYPE,
+                            CallLog.Calls.DATE,
+                            CallLog.Calls.DURATION
+                    },
+                    null,
+                    null,
+                    CallLog.Calls.DEFAULT_SORT_ORDER
+            );
+            if (cursor == null) {
+                return items;
+            }
+
+            int nameIndex = cursor.getColumnIndex(CallLog.Calls.CACHED_NAME);
+            int numberIndex = cursor.getColumnIndex(CallLog.Calls.NUMBER);
+            int typeIndex = cursor.getColumnIndex(CallLog.Calls.TYPE);
+            int dateIndex = cursor.getColumnIndex(CallLog.Calls.DATE);
+            int durationIndex = cursor.getColumnIndex(CallLog.Calls.DURATION);
+
+            while (cursor.moveToNext() && items.size() < limit) {
+                items.add(new RecentCallItem(
+                        nameIndex >= 0 ? safe(cursor.getString(nameIndex)).trim() : "",
+                        numberIndex >= 0 ? safe(cursor.getString(numberIndex)).trim() : "",
+                        typeIndex >= 0 ? cursor.getInt(typeIndex) : 0,
+                        dateIndex >= 0 ? cursor.getLong(dateIndex) : 0L,
+                        durationIndex >= 0 ? cursor.getLong(durationIndex) : 0L
+                ));
+            }
+        } catch (SecurityException error) {
+            BridgeEventLog.append(this, "call-log: permission denied " + error.getMessage());
+        } catch (RuntimeException error) {
+            BridgeEventLog.append(this, "call-log: query failed " + error.getMessage());
+        } finally {
+            if (cursor != null) {
+                cursor.close();
+            }
+        }
+        return items;
+    }
+
+    private String callTypeLabel(int type) {
+        switch (type) {
+            case CallLog.Calls.INCOMING_TYPE:
+                return "Incoming";
+            case CallLog.Calls.OUTGOING_TYPE:
+                return "Outgoing";
+            case CallLog.Calls.MISSED_TYPE:
+                return "Missed";
+            case CallLog.Calls.REJECTED_TYPE:
+                return "Rejected";
+            case CallLog.Calls.BLOCKED_TYPE:
+                return "Blocked";
+            case CallLog.Calls.VOICEMAIL_TYPE:
+                return "Voicemail";
+            default:
+                return "Call";
+        }
+    }
+
+    private String callTypeShortLabel(int type) {
+        switch (type) {
+            case CallLog.Calls.INCOMING_TYPE:
+                return "IN";
+            case CallLog.Calls.OUTGOING_TYPE:
+                return "OUT";
+            case CallLog.Calls.MISSED_TYPE:
+                return "MISS";
+            case CallLog.Calls.REJECTED_TYPE:
+                return "REJ";
+            case CallLog.Calls.BLOCKED_TYPE:
+                return "BLOCK";
+            case CallLog.Calls.VOICEMAIL_TYPE:
+                return "VM";
+            default:
+                return "CALL";
+        }
+    }
+
+    private String callTypeAccent(int type) {
+        switch (type) {
+            case CallLog.Calls.INCOMING_TYPE:
+                return "#0b5ed7";
+            case CallLog.Calls.OUTGOING_TYPE:
+                return "#0f766e";
+            case CallLog.Calls.MISSED_TYPE:
+            case CallLog.Calls.REJECTED_TYPE:
+                return "#dc2626";
+            case CallLog.Calls.BLOCKED_TYPE:
+                return "#7c3aed";
+            case CallLog.Calls.VOICEMAIL_TYPE:
+                return "#d97706";
+            default:
+                return "#475569";
+        }
+    }
+
+    private String formatCallDuration(long durationSeconds) {
+        if (durationSeconds <= 0) {
+            return "";
+        }
+        long hours = durationSeconds / 3600L;
+        long minutes = (durationSeconds % 3600L) / 60L;
+        long seconds = durationSeconds % 60L;
+        if (hours > 0) {
+            return String.format(Locale.US, "%dh %02dm", hours, minutes);
+        }
+        if (minutes > 0) {
+            return String.format(Locale.US, "%dm %02ds", minutes, seconds);
+        }
+        return String.format(Locale.US, "%ds", seconds);
+    }
+
+    private void applyRequestedTab(Intent intent) {
+        int requestedTab = intent == null ? TAB_HOME : intent.getIntExtra(EXTRA_START_TAB, TAB_HOME);
+        selectedTabIndex = normalizeTab(requestedTab);
+    }
+
+    private int normalizeTab(int tab) {
+        if (tab < TAB_HOME || tab > TAB_PHONE) {
+            return TAB_HOME;
+        }
+        return tab;
     }
 
     private View consoleRow(Map<String, Object> entry) {
@@ -2125,8 +3182,10 @@ public class HomeActivity extends Activity {
     private View settingsSectionHeader(String title, String detail) {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
-        header.addView(text(title, 13, "#0f172a", true), fullWidth(4));
-        header.addView(text(detail, 12, "#64748b", false));
+        header.addView(text(title, 13, "#111111", true), fullWidth(3));
+        if (!safe(detail).trim().isEmpty()) {
+            header.addView(text(detail, 12, "#8e8e93", false));
+        }
         return header;
     }
 
@@ -2526,6 +3585,7 @@ public class HomeActivity extends Activity {
 
     private void requestCallFeature() {
         if (BridgePermissionHelper.hasCallFeature(this)) {
+            MqttBridgeService.requestSilentBulkSync(this);
             showSnack("Call controls activated");
             return;
         }
@@ -2550,6 +3610,7 @@ public class HomeActivity extends Activity {
 
     private void requestSmsInboxAccess() {
         if (BridgePermissionHelper.hasSmsInboxFeature(this)) {
+            MqttBridgeService.requestSilentBulkSync(this);
             showSnack("SMS inbox access activated");
             loadSmsThreads();
             rebuild();
@@ -2613,7 +3674,7 @@ public class HomeActivity extends Activity {
 
     private void scheduleRefresh() {
         handler.removeCallbacks(refreshRunnable);
-        long interval = selectedTabIndex == 1 ? SMS_REFRESH_MS : isCallActive() ? CALL_REFRESH_MS : IDLE_REFRESH_MS;
+        long interval = selectedTabIndex == TAB_SMS ? SMS_REFRESH_MS : isCallActive() ? CALL_REFRESH_MS : IDLE_REFRESH_MS;
         handler.postDelayed(refreshRunnable, interval);
     }
 
@@ -2627,7 +3688,7 @@ public class HomeActivity extends Activity {
             return;
         }
         selectedTabIndex = index;
-        if (index == 1) {
+        if (index == TAB_SMS) {
             loadSmsThreads();
         } else {
             composingNewSms = false;
@@ -2710,29 +3771,66 @@ public class HomeActivity extends Activity {
     }
 
     private void sendSmsFromComposer(String body, String number) {
+        sendSmsFromComposerToRecipients(body, Arrays.asList(new ContactInfo(firstNonEmptyValue(number, number), number, avatarLabel(number), true)));
+    }
+
+    private void sendSmsFromComposerToRecipients(String body, List<ContactInfo> recipients) {
         String cleanBody = safe(body).trim();
-        String cleanNumber = safe(number).trim();
-        if (cleanNumber.isEmpty() || cleanBody.isEmpty()) {
-            showSnack(cleanNumber.isEmpty() ? "Choose a conversation first." : "Message is required.");
+        List<ContactInfo> cleanRecipients = new ArrayList<>();
+        if (recipients != null) {
+            for (ContactInfo recipient : recipients) {
+                if (recipient == null) {
+                    continue;
+                }
+                String cleanNumber = safe(recipient.number).trim();
+                if (cleanNumber.isEmpty()) {
+                    continue;
+                }
+                cleanRecipients.add(new ContactInfo(
+                        firstNonEmptyValue(recipient.name, cleanNumber),
+                        cleanNumber,
+                        avatarLabel(firstNonEmptyValue(recipient.name, cleanNumber)),
+                        true
+                ));
+            }
+        }
+        if (cleanRecipients.isEmpty() || cleanBody.isEmpty()) {
+            showSnack(cleanRecipients.isEmpty() ? "Add at least one recipient." : "Message is required.");
             return;
         }
 
         smsSending = true;
         rebuild();
         long sentAt = System.currentTimeMillis();
-        String actionId = "local_compose_" + sentAt;
-        SmsSender.SendResult result = SmsSender.send(this, actionId, cleanNumber, cleanBody, 90_000, selectedSmsSimForSend(), null);
-        if (!result.accepted) {
+        int acceptedCount = 0;
+        ContactInfo firstAccepted = null;
+        for (int i = 0; i < cleanRecipients.size(); i += 1) {
+            ContactInfo recipient = cleanRecipients.get(i);
+            String actionId = "local_compose_" + sentAt + "_" + i;
+            SmsSender.SendResult result = SmsSender.send(this, actionId, recipient.number, cleanBody, 90_000, selectedSmsSimForSend(), null);
+            if (!result.accepted) {
+                continue;
+            }
+            BridgeSmsStore.recordOutgoing(this, actionId, recipient.number, cleanBody, sentAt + i);
+            BridgeEventLog.append(this, "sms: Local compose accepted for " + recipient.number);
+            acceptedCount += 1;
+            if (firstAccepted == null) {
+                firstAccepted = recipient;
+            }
+        }
+        if (acceptedCount == 0) {
             smsSending = false;
             rebuild();
             showSnack("Unable to send SMS right now.");
             return;
         }
-        BridgeSmsStore.recordOutgoing(this, actionId, cleanNumber, cleanBody, sentAt);
-        BridgeEventLog.append(this, "sms: Local compose accepted for " + cleanNumber);
         loadSmsThreads();
         if (composingNewSms) {
-            selectedSmsThread = findSmsThreadByAddress(cleanNumber);
+            if (acceptedCount == 1 && firstAccepted != null) {
+                selectedSmsThread = findSmsThreadByAddress(firstAccepted.number);
+            } else {
+                selectedSmsThread = null;
+            }
             composingNewSms = false;
             clearNewSmsDraft();
         }
@@ -2740,6 +3838,9 @@ public class HomeActivity extends Activity {
             loadSmsMessages(stringValue(selectedSmsThread.get("threadKey")));
         }
         smsSending = false;
+        if (acceptedCount > 1) {
+            showSnack("Message sent to " + acceptedCount + " recipients.");
+        }
         rebuild();
     }
 
@@ -2784,7 +3885,7 @@ public class HomeActivity extends Activity {
         if (selectedSmsThread != null) {
             return stringValue(selectedSmsThread.get("address"));
         }
-        return safe(newSmsRecipientNumber).trim();
+        return primaryNewSmsRecipientNumber(newSmsContactQuery);
     }
 
     private View smsSimSelector(String targetNumber) {
@@ -3244,15 +4345,56 @@ public class HomeActivity extends Activity {
                 rebuild();
                 return true;
             }
-            if (selectedTabIndex == 1) {
-                selectTab(0);
+            int previousTab = previousTabInNavOrder(selectedTabIndex);
+            if (previousTab != selectedTabIndex) {
+                selectTab(previousTab);
                 return true;
             }
-        } else if (selectedTabIndex == 0) {
-            selectTab(1);
-            return true;
+        } else {
+            int nextTab = nextTabInNavOrder(selectedTabIndex);
+            if (nextTab != selectedTabIndex) {
+                selectTab(nextTab);
+                return true;
+            }
         }
         return false;
+    }
+
+    private int previousTabInNavOrder(int currentTab) {
+        for (int i = 1; i < TAB_NAV_ORDER.length; i += 1) {
+            if (TAB_NAV_ORDER[i] == currentTab) {
+                return TAB_NAV_ORDER[i - 1];
+            }
+        }
+        return currentTab;
+    }
+
+    private int nextTabInNavOrder(int currentTab) {
+        for (int i = 0; i < TAB_NAV_ORDER.length - 1; i += 1) {
+            if (TAB_NAV_ORDER[i] == currentTab) {
+                return TAB_NAV_ORDER[i + 1];
+            }
+        }
+        return currentTab;
+    }
+
+    static Intent createIntent(Activity activity, int startTab) {
+        Intent intent = new Intent(activity, HomeActivity.class);
+        intent.putExtra(EXTRA_START_TAB, startTab);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        return intent;
+    }
+
+    static Intent createHomeIntent(Activity activity) {
+        return createIntent(activity, TAB_HOME);
+    }
+
+    static Intent createContactsIntent(Activity activity) {
+        return createIntent(activity, TAB_CONTACTS);
+    }
+
+    static Intent createPhoneIntent(Activity activity) {
+        return createIntent(activity, TAB_PHONE);
     }
 
     private List<Map<String, Object>> visibleSmsThreads() {
@@ -3474,15 +4616,58 @@ public class HomeActivity extends Activity {
         return !digits.isEmpty() && digits.length() < 8;
     }
 
-    private String systemThreadTitle(Map<String, Object> thread, ContactInfo contact) {
-        String operatorName = firstNonEmptyValue(
+    private String systemThreadTrueTitle(Map<String, Object> thread, ContactInfo contact) {
+        return firstNonEmptyValue(
                 stringValue(thread == null ? null : thread.get("title")),
-                stringValue(thread == null ? null : thread.get("address"))
+                contact == null ? "" : contact.name,
+                stringValue(thread == null ? null : thread.get("address")),
+                "System sender"
         );
+    }
+
+    private String systemThreadListSubtitle() {
+        String operatorName = operatorDisplayName(activeCarrierName());
         if (operatorName.isEmpty()) {
             return "System Message";
         }
         return "System Message (" + operatorName + ")";
+    }
+
+    private String operatorDisplayName(String value) {
+        String clean = safe(value).trim();
+        String normalized = clean.toLowerCase(Locale.US).replaceAll("[^a-z0-9]", "");
+        if (!normalized.isEmpty() && normalized.matches("^[0-9]+$")) {
+            return "";
+        }
+        if (normalized.equals("gp") || normalized.contains("grameen")) {
+            return "Grameenphone";
+        }
+        if (normalized.contains("airtel")) {
+            return "Airtel";
+        }
+        if (normalized.contains("robi")) {
+            return "Robi";
+        }
+        if (normalized.contains("banglalink")) {
+            return "Banglalink";
+        }
+        if (normalized.contains("teletalk")) {
+            return "Teletalk";
+        }
+        return clean;
+    }
+
+    private String activeCarrierName() {
+        for (SubscriptionInfo info : activeSmsSubscriptions()) {
+            if (info == null || info.getCarrierName() == null) {
+                continue;
+            }
+            String carrier = info.getCarrierName().toString().trim();
+            if (!carrier.isEmpty()) {
+                return carrier;
+            }
+        }
+        return "";
     }
 
     private String messageSourceBadge(String source) {
@@ -3893,21 +5078,30 @@ public class HomeActivity extends Activity {
     }
 
     private View contactRow(String name, String number, ContactCallback callback) {
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(8), dp(8), dp(8), dp(8));
-        row.setBackground(roundRect("#ffffff", "#e2e8f0", 14));
+        row.setPadding(dp(6), dp(10), dp(6), dp(10));
+        row.setBackgroundColor(color("#ffffff"));
         row.setClickable(true);
         row.setFocusable(true);
         row.setOnClickListener(v -> runGuarded("contact:" + number, () -> callback.onContact(name, number)));
-        row.addView(smsAvatar(name.trim().isEmpty() ? "?" : name.substring(0, 1).toUpperCase(Locale.US), false), fixed(38, 38, 10));
+        row.addView(smsAvatar(name.trim().isEmpty() ? "?" : name.substring(0, 1).toUpperCase(Locale.US), false), fixed(34, 34, 10));
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
-        copy.addView(text(name, 13, "#0f172a", true));
-        copy.addView(text(number, 11, "#64748b", false));
+        copy.addView(text(name, 15, "#111111", true));
+        copy.addView(text(number, 12, "#636366", false));
         row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        return row;
+        row.addView(tintedIcon(R.drawable.ic_db_arrow_forward, "#c7c7cc", 15), fixed(15, 15, 0));
+        group.addView(row);
+
+        View divider = new View(this);
+        divider.setBackgroundColor(color("#e5e5ea"));
+        group.addView(divider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+        return group;
     }
 
     private void showContactInfoSheet(ContactInfo contact, Map<String, Object> thread) {
@@ -4216,7 +5410,7 @@ public class HomeActivity extends Activity {
         }
         Date date = new Date(timestamp);
         SimpleDateFormat sameDay = new SimpleDateFormat("h:mm a", Locale.US);
-        SimpleDateFormat otherDay = new SimpleDateFormat("d/M/yy", Locale.US);
+        SimpleDateFormat otherDay = new SimpleDateFormat("d/M/yy h:mm a", Locale.US);
         return isSameDay(timestamp, System.currentTimeMillis()) ? sameDay.format(date) : otherDay.format(date);
     }
 

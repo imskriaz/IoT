@@ -44,7 +44,7 @@ final class BridgeRecoveryActions {
                 BridgeEventLog.append(activity, "Recovery action executed: reset state");
                 return;
             case "healthy":
-                activity.startActivity(DashboardWebActivity.createDeviceHomeIntent(activity));
+                activity.startActivity(HomeActivity.createHomeIntent(activity));
                 return;
             default:
                 activity.startActivity(new Intent(activity, FeatureHubActivity.class));

@@ -51,6 +51,9 @@ public class PermissionFlowActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQ_SINGLE_PERMISSION) {
             BridgeEventLog.append(this, "Permission flow permission result received");
+            if (BridgePermissionHelper.hasSmsInboxFeature(this) || BridgePermissionHelper.hasCallFeature(this)) {
+                MqttBridgeService.requestSilentBulkSync(this);
+            }
             render();
             if (BridgePermissionHelper.hasCore(this)) {
                 routeNext();

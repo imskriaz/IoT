@@ -12,8 +12,10 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
+import android.database.Cursor;
 import android.net.Uri;
 import android.net.ConnectivityManager;
 import android.net.LinkAddress;
@@ -31,6 +33,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.StatFs;
 import android.os.SystemClock;
+import android.provider.CallLog;
 import android.provider.Settings;
 import android.telecom.PhoneAccountHandle;
 import android.telecom.TelecomManager;
@@ -81,7 +84,12 @@ public class MqttBridgeService extends Service {
     private static final int RECONNECT_DELAY_SECONDS = 15;
     private static final int STATUS_HEARTBEAT_INTERVAL_SECONDS = 45;
     private static final int HTTP_OUTSTANDING_POLL_INTERVAL_SECONDS = 15;
+    private static final int BULK_SYNC_LIMIT = 240;
     private static final String KEY_INITIAL_SMS_SYNC_PREFIX = "initial_sms_sync_done_";
+    private static final String KEY_INITIAL_CALL_SYNC_PREFIX = "initial_call_sync_done_";
+    private static final String KEY_SMS_SYNC_WATERMARK_PREFIX = "initial_sms_sync_watermark_";
+    private static final String KEY_CALL_SYNC_WATERMARK_PREFIX = "initial_call_sync_watermark_";
+    private static final String KEY_PENDING_PERMISSION_BULK_SYNC_PREFIX = "pending_permission_bulk_sync_";
     private static volatile MqttBridgeService activeService;
 
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
@@ -267,6 +275,30 @@ public class MqttBridgeService extends Service {
         }
     }
 
+    static void requestSilentBulkSync(Context context) {
+        if (context == null) {
+            return;
+        }
+        Context appContext = context.getApplicationContext();
+        MqttBridgeService service = activeService;
+        if (service != null) {
+            service.executor.execute(() -> service.syncSmsAndCallsToDashboardOnce(true));
+            return;
+        }
+
+        BridgeConfig cfg = BridgeConfig.load(appContext);
+        if (!cfg.usesHttpTransport() || !cfg.hasHttpBridgeConfig()) {
+            appContext.getSharedPreferences(BridgeConfig.PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(syncPrefKey(KEY_PENDING_PERMISSION_BULK_SYNC_PREFIX, cfg), true)
+                    .apply();
+            BridgeEventLog.append(appContext, "Bulk sync waiting for active bridge connection");
+            return;
+        }
+
+        new Thread(() -> runHttpBulkSync(appContext, cfg, true), "device-bridge-bulk-sync").start();
+    }
+
     static void publishSentResult(String actionId, String number, int partCount, int timeoutMs, boolean success, String detail) {
         MqttBridgeService service = activeService;
         if (service == null) {
@@ -346,7 +378,7 @@ public class MqttBridgeService extends Service {
             scheduleStatusHeartbeat();
             scheduleOutstandingPoll();
             updateRuntimeState("online", false, "HTTP bridge active via " + cfg.serverUrl);
-            syncExistingSmsToDashboardOnce();
+            syncSmsAndCallsToDashboardOnce(consumePendingPermissionBulkSync(cfg));
             return;
         }
 
@@ -434,7 +466,7 @@ public class MqttBridgeService extends Service {
             updateBridgeNotification("Device Bridge online", "MQTT connected");
             updateRuntimeState("online", true, "Connected to " + cfg.brokerUri());
             flushPendingPublishes();
-            syncExistingSmsToDashboardOnce();
+            syncSmsAndCallsToDashboardOnce(consumePendingPermissionBulkSync(cfg));
         } catch (MqttException error) {
             Log.e(TAG, "Subscribe failed", error);
             commandSubscriptionsReady = false;
@@ -974,7 +1006,27 @@ public class MqttBridgeService extends Service {
         publishJson(currentConfig().topic("sms/incoming"), json);
     }
 
-    private void syncExistingSmsToDashboardOnce() {
+    private void syncSmsAndCallsToDashboardOnce(boolean allowInitialBackfill) {
+        syncExistingSmsToDashboardOnce(allowInitialBackfill);
+        syncExistingCallsToDashboardOnce(allowInitialBackfill);
+    }
+
+    private boolean consumePendingPermissionBulkSync(BridgeConfig cfg) {
+        SharedPreferences prefs = getSharedPreferences(BridgeConfig.PREFS, MODE_PRIVATE);
+        String key = syncPrefKey(KEY_PENDING_PERMISSION_BULK_SYNC_PREFIX, cfg);
+        boolean pending = prefs.getBoolean(key, false);
+        if (pending) {
+            prefs.edit().putBoolean(key, false).apply();
+        }
+        return pending;
+    }
+
+    private static void runHttpBulkSync(Context context, BridgeConfig cfg, boolean allowInitialBackfill) {
+        syncExistingSmsToDashboardOnce(context, cfg, allowInitialBackfill, payload -> BridgeHttpClient.postIncomingSms(cfg, payload));
+        syncExistingCallsToDashboardOnce(context, cfg, allowInitialBackfill, payload -> BridgeHttpClient.postStatus(cfg, payload));
+    }
+
+    private void syncExistingSmsToDashboardOnce(boolean allowInitialBackfill) {
         BridgeConfig cfg = currentConfig();
         if (cfg == null || cfg.deviceId == null || cfg.deviceId.trim().isEmpty()) {
             return;
@@ -982,11 +1034,29 @@ public class MqttBridgeService extends Service {
         if (checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             return;
         }
-        String key = KEY_INITIAL_SMS_SYNC_PREFIX + cfg.deviceId;
-        if (getSharedPreferences(BridgeConfig.PREFS, MODE_PRIVATE).getBoolean(key, false)) {
+        SharedPreferences prefs = getSharedPreferences(BridgeConfig.PREFS, MODE_PRIVATE);
+        String doneKey = syncPrefKey(KEY_INITIAL_SMS_SYNC_PREFIX, cfg);
+        String watermarkKey = syncPrefKey(KEY_SMS_SYNC_WATERMARK_PREFIX, cfg);
+        boolean alreadyDone = prefs.getBoolean(doneKey, false);
+        long watermark = Math.max(0L, prefs.getLong(watermarkKey, 0L));
+        List<java.util.Map<String, Object>> localMessages = BridgeSmsStore.buildRecentMessages(this, BULK_SYNC_LIMIT);
+        long newestTimestamp = maxSmsSyncTimestamp(localMessages, watermark);
+        if (watermark <= 0L && (alreadyDone || !allowInitialBackfill)) {
+            prefs.edit()
+                    .putBoolean(doneKey, true)
+                    .putLong(watermarkKey, newestTimestamp)
+                    .apply();
             return;
         }
-        List<java.util.Map<String, Object>> messages = BridgeSmsStore.buildRecentMessages(this, 240);
+        List<java.util.Map<String, Object>> messages = filterSmsSyncMessages(localMessages, watermark);
+        if (messages.isEmpty()) {
+            prefs.edit()
+                    .putBoolean(doneKey, true)
+                    .putLong(watermarkKey, newestTimestamp)
+                    .apply();
+            return;
+        }
+        prefs.edit().putLong(watermarkKey, newestTimestamp).apply();
         publishSmsSyncState("sms_sync_start", messages.size(), 0);
         int synced = 0;
         for (java.util.Map<String, Object> message : messages) {
@@ -995,21 +1065,62 @@ public class MqttBridgeService extends Service {
             }
         }
         publishSmsSyncState("sms_sync_complete", messages.size(), synced);
-        getSharedPreferences(BridgeConfig.PREFS, MODE_PRIVATE).edit().putBoolean(key, true).apply();
+        prefs.edit()
+                .putBoolean(doneKey, true)
+                .putLong(watermarkKey, newestTimestamp)
+                .apply();
         logConsoleEvent("sms", "Initial SMS sync published " + synced + " message(s)");
     }
 
-    private void publishSmsSyncState(String type, int total, int synced) {
-        JSONObject json = new JSONObject();
-        try {
-            json.put("type", type);
-            json.put("sync", true);
-            json.put("device_id", currentConfig().deviceId);
-            json.put("total", Math.max(0, total));
-            json.put("synced", Math.max(0, synced));
-            json.put("timestamp", System.currentTimeMillis());
-        } catch (JSONException ignored) {
+    private static void syncExistingSmsToDashboardOnce(Context context, BridgeConfig cfg, boolean allowInitialBackfill, JsonSender sender) {
+        if (context == null || cfg == null || sender == null || cfg.deviceId == null || cfg.deviceId.trim().isEmpty()) {
+            return;
         }
+        if (!hasPermission(context, Manifest.permission.READ_SMS)) {
+            return;
+        }
+        SharedPreferences prefs = context.getSharedPreferences(BridgeConfig.PREFS, Context.MODE_PRIVATE);
+        String doneKey = syncPrefKey(KEY_INITIAL_SMS_SYNC_PREFIX, cfg);
+        String watermarkKey = syncPrefKey(KEY_SMS_SYNC_WATERMARK_PREFIX, cfg);
+        boolean alreadyDone = prefs.getBoolean(doneKey, false);
+        long watermark = Math.max(0L, prefs.getLong(watermarkKey, 0L));
+        List<java.util.Map<String, Object>> localMessages = BridgeSmsStore.buildRecentMessages(context, BULK_SYNC_LIMIT);
+        long newestTimestamp = maxSmsSyncTimestamp(localMessages, watermark);
+        if (watermark <= 0L && (alreadyDone || !allowInitialBackfill)) {
+            prefs.edit()
+                    .putBoolean(doneKey, true)
+                    .putLong(watermarkKey, newestTimestamp)
+                    .apply();
+            return;
+        }
+        List<java.util.Map<String, Object>> messages = filterSmsSyncMessages(localMessages, watermark);
+        if (messages.isEmpty()) {
+            prefs.edit()
+                    .putBoolean(doneKey, true)
+                    .putLong(watermarkKey, newestTimestamp)
+                    .apply();
+            return;
+        }
+        prefs.edit().putLong(watermarkKey, newestTimestamp).apply();
+        sender.send(buildSmsSyncStatePayload(cfg, "sms_sync_start", messages.size(), 0));
+        int synced = 0;
+        for (java.util.Map<String, Object> message : messages) {
+            JSONObject payload = buildSmsSyncPayload(cfg, message);
+            if (payload != null) {
+                sender.send(payload);
+                synced += 1;
+            }
+        }
+        sender.send(buildSmsSyncStatePayload(cfg, "sms_sync_complete", messages.size(), synced));
+        prefs.edit()
+                .putBoolean(doneKey, true)
+                .putLong(watermarkKey, newestTimestamp)
+                .apply();
+        BridgeEventLog.append(context, "Initial SMS sync published " + synced + " message(s)");
+    }
+
+    private void publishSmsSyncState(String type, int total, int synced) {
+        JSONObject json = buildSmsSyncStatePayload(currentConfig(), type, total, synced);
         if (currentConfig().usesHttpTransport()) {
             postHttpIncomingSms(json);
         } else {
@@ -1022,12 +1133,41 @@ public class MqttBridgeService extends Service {
         String address = objectString(message.get("address"));
         String body = objectString(message.get("body"));
         if (address.isEmpty() || body.isEmpty()) return false;
+        JSONObject json = buildSmsSyncPayload(currentConfig(), message);
+        if (json == null) return false;
+        if (currentConfig().usesHttpTransport()) {
+            postHttpIncomingSms(json);
+        } else {
+            publishJson(currentConfig().topic("sms/incoming"), json);
+        }
+        return true;
+    }
+
+    private static JSONObject buildSmsSyncStatePayload(BridgeConfig cfg, String type, int total, int synced) {
+        JSONObject json = new JSONObject();
+        try {
+            json.put("type", type);
+            json.put("sync", true);
+            json.put("device_id", cfg.deviceId);
+            json.put("total", Math.max(0, total));
+            json.put("synced", Math.max(0, synced));
+            json.put("timestamp", System.currentTimeMillis());
+        } catch (JSONException ignored) {
+        }
+        return json;
+    }
+
+    private static JSONObject buildSmsSyncPayload(BridgeConfig cfg, java.util.Map<String, Object> message) {
+        if (cfg == null || message == null) return null;
+        String address = objectString(message.get("address"));
+        String body = objectString(message.get("body"));
+        if (address.isEmpty() || body.isEmpty()) return null;
         boolean outgoing = Boolean.TRUE.equals(message.get("outgoing"));
         JSONObject json = new JSONObject();
         try {
             json.put("type", "sms_sync");
             json.put("sync", true);
-            json.put("device_id", currentConfig().deviceId);
+            json.put("device_id", cfg.deviceId);
             json.put("direction", outgoing ? "outgoing" : "incoming");
             json.put("outgoing", outgoing);
             json.put("from", outgoing ? "" : address);
@@ -1042,12 +1182,294 @@ public class MqttBridgeService extends Service {
             json.put("source", "android-initial-sync");
         } catch (JSONException ignored) {
         }
+        return json;
+    }
+
+    private static List<java.util.Map<String, Object>> filterSmsSyncMessages(List<java.util.Map<String, Object>> source, long watermark) {
+        List<java.util.Map<String, Object>> filtered = new ArrayList<>();
+        if (source == null) {
+            return filtered;
+        }
+        for (java.util.Map<String, Object> message : source) {
+            if (objectLong(message == null ? null : message.get("timestamp"), 0L) > watermark) {
+                filtered.add(message);
+            }
+        }
+        return filtered;
+    }
+
+    private static long maxSmsSyncTimestamp(List<java.util.Map<String, Object>> messages, long fallback) {
+        long max = Math.max(0L, fallback);
+        if (messages == null) {
+            return max;
+        }
+        for (java.util.Map<String, Object> message : messages) {
+            max = Math.max(max, objectLong(message == null ? null : message.get("timestamp"), 0L));
+        }
+        return max;
+    }
+
+    private void syncExistingCallsToDashboardOnce(boolean allowInitialBackfill) {
+        BridgeConfig cfg = currentConfig();
+        if (cfg == null || cfg.deviceId == null || cfg.deviceId.trim().isEmpty()) {
+            return;
+        }
+        if (!hasCallLogPermission()) {
+            return;
+        }
+        SharedPreferences prefs = getSharedPreferences(BridgeConfig.PREFS, MODE_PRIVATE);
+        String doneKey = syncPrefKey(KEY_INITIAL_CALL_SYNC_PREFIX, cfg);
+        String watermarkKey = syncPrefKey(KEY_CALL_SYNC_WATERMARK_PREFIX, cfg);
+        boolean alreadyDone = prefs.getBoolean(doneKey, false);
+        long watermark = Math.max(0L, prefs.getLong(watermarkKey, 0L));
+        List<CallLogSyncRecord> localCalls = buildRecentCallLogRecords(this, BULK_SYNC_LIMIT);
+        long newestTimestamp = maxCallSyncTimestamp(localCalls, watermark);
+        if (watermark <= 0L && (alreadyDone || !allowInitialBackfill)) {
+            prefs.edit()
+                    .putBoolean(doneKey, true)
+                    .putLong(watermarkKey, newestTimestamp)
+                    .apply();
+            return;
+        }
+
+        List<CallLogSyncRecord> calls = filterCallSyncRecords(localCalls, watermark);
+        if (calls.isEmpty()) {
+            prefs.edit()
+                    .putBoolean(doneKey, true)
+                    .putLong(watermarkKey, newestTimestamp)
+                    .apply();
+            return;
+        }
+        prefs.edit().putLong(watermarkKey, newestTimestamp).apply();
+        int synced = 0;
+        for (CallLogSyncRecord call : calls) {
+            if (publishCallSyncRecord(call)) {
+                synced += 1;
+            }
+        }
+        prefs.edit()
+                .putBoolean(doneKey, true)
+                .putLong(watermarkKey, newestTimestamp)
+                .apply();
+        logConsoleEvent("call", "Initial call sync published " + synced + " call(s)");
+    }
+
+    private static void syncExistingCallsToDashboardOnce(Context context, BridgeConfig cfg, boolean allowInitialBackfill, JsonSender sender) {
+        if (context == null || cfg == null || sender == null || cfg.deviceId == null || cfg.deviceId.trim().isEmpty()) {
+            return;
+        }
+        if (!hasPermission(context, Manifest.permission.READ_CALL_LOG)) {
+            return;
+        }
+        SharedPreferences prefs = context.getSharedPreferences(BridgeConfig.PREFS, Context.MODE_PRIVATE);
+        String doneKey = syncPrefKey(KEY_INITIAL_CALL_SYNC_PREFIX, cfg);
+        String watermarkKey = syncPrefKey(KEY_CALL_SYNC_WATERMARK_PREFIX, cfg);
+        boolean alreadyDone = prefs.getBoolean(doneKey, false);
+        long watermark = Math.max(0L, prefs.getLong(watermarkKey, 0L));
+        List<CallLogSyncRecord> localCalls = buildRecentCallLogRecords(context, BULK_SYNC_LIMIT);
+        long newestTimestamp = maxCallSyncTimestamp(localCalls, watermark);
+        if (watermark <= 0L && (alreadyDone || !allowInitialBackfill)) {
+            prefs.edit()
+                    .putBoolean(doneKey, true)
+                    .putLong(watermarkKey, newestTimestamp)
+                    .apply();
+            return;
+        }
+
+        List<CallLogSyncRecord> calls = filterCallSyncRecords(localCalls, watermark);
+        if (calls.isEmpty()) {
+            prefs.edit()
+                    .putBoolean(doneKey, true)
+                    .putLong(watermarkKey, newestTimestamp)
+                    .apply();
+            return;
+        }
+        prefs.edit().putLong(watermarkKey, newestTimestamp).apply();
+        int synced = 0;
+        for (CallLogSyncRecord call : calls) {
+            JSONObject payload = buildCallSyncPayload(cfg, call);
+            if (payload != null) {
+                sender.send(payload);
+                synced += 1;
+            }
+        }
+        prefs.edit()
+                .putBoolean(doneKey, true)
+                .putLong(watermarkKey, newestTimestamp)
+                .apply();
+        BridgeEventLog.append(context, "Initial call sync published " + synced + " call(s)");
+    }
+
+    private void publishCallSyncState(String type, int total, int synced) {
+        JSONObject payload = buildCallSyncStatePayload(currentConfig(), type, total, synced);
         if (currentConfig().usesHttpTransport()) {
-            postHttpIncomingSms(json);
+            postHttpStatus(payload);
         } else {
-            publishJson(currentConfig().topic("sms/incoming"), json);
+            publishJson(currentConfig().topic("call/status"), payload);
+        }
+    }
+
+    private boolean publishCallSyncRecord(CallLogSyncRecord call) {
+        JSONObject payload = buildCallSyncPayload(currentConfig(), call);
+        if (payload == null) return false;
+        if (currentConfig().usesHttpTransport()) {
+            postHttpStatus(payload);
+        } else {
+            publishJson(currentConfig().topic("call/status"), payload);
         }
         return true;
+    }
+
+    private static JSONObject buildCallSyncStatePayload(BridgeConfig cfg, String type, int total, int synced) {
+        JSONObject json = new JSONObject();
+        try {
+            json.put("type", type);
+            json.put("sync", true);
+            json.put("device_id", cfg.deviceId);
+            json.put("total", Math.max(0, total));
+            json.put("synced", Math.max(0, synced));
+            json.put("timestamp", System.currentTimeMillis());
+        } catch (JSONException ignored) {
+        }
+        return json;
+    }
+
+    private static JSONObject buildCallSyncPayload(BridgeConfig cfg, CallLogSyncRecord call) {
+        if (cfg == null || call == null || call.number.isEmpty()) return null;
+        JSONObject json = new JSONObject();
+        JSONObject nested = new JSONObject();
+        try {
+            nested.put("status", call.status);
+            nested.put("direction", call.direction);
+            nested.put("number", call.number);
+            nested.put("name", call.name);
+            nested.put("duration", call.durationSeconds);
+            nested.put("updatedAt", call.timestamp);
+
+            json.put("type", "call_sync");
+            json.put("sync", true);
+            json.put("device_id", cfg.deviceId);
+            json.put("status", call.status);
+            json.put("direction", call.direction);
+            json.put("number", call.number);
+            json.put("name", call.name);
+            json.put("duration", call.durationSeconds);
+            json.put("timestamp", call.timestamp);
+            json.put("call_status", call.status);
+            json.put("call_direction", call.direction);
+            json.put("call_number", call.number);
+            json.put("call_updated_at", call.timestamp);
+            json.put("call", nested);
+        } catch (JSONException ignored) {
+        }
+        return json;
+    }
+
+    private static String syncPrefKey(String prefix, BridgeConfig cfg) {
+        String deviceId = cfg == null ? "" : objectString(cfg.deviceId).trim();
+        return prefix + (deviceId.isEmpty() ? "local" : deviceId);
+    }
+
+    private static List<CallLogSyncRecord> filterCallSyncRecords(List<CallLogSyncRecord> source, long watermark) {
+        List<CallLogSyncRecord> filtered = new ArrayList<>();
+        if (source == null) {
+            return filtered;
+        }
+        for (CallLogSyncRecord call : source) {
+            if (call != null && call.timestamp > watermark) {
+                filtered.add(call);
+            }
+        }
+        return filtered;
+    }
+
+    private static long maxCallSyncTimestamp(List<CallLogSyncRecord> calls, long fallback) {
+        long max = Math.max(0L, fallback);
+        if (calls == null) {
+            return max;
+        }
+        for (CallLogSyncRecord call : calls) {
+            if (call != null) {
+                max = Math.max(max, call.timestamp);
+            }
+        }
+        return max;
+    }
+
+    private static List<CallLogSyncRecord> buildRecentCallLogRecords(Context context, int limit) {
+        List<CallLogSyncRecord> calls = new ArrayList<>();
+        if (context == null || !hasPermission(context, Manifest.permission.READ_CALL_LOG)) {
+            return calls;
+        }
+        try (Cursor cursor = context.getContentResolver().query(
+                CallLog.Calls.CONTENT_URI,
+                new String[]{
+                        CallLog.Calls.CACHED_NAME,
+                        CallLog.Calls.NUMBER,
+                        CallLog.Calls.TYPE,
+                        CallLog.Calls.DATE,
+                        CallLog.Calls.DURATION
+                },
+                null,
+                null,
+                CallLog.Calls.DATE + " DESC"
+        )) {
+            if (cursor == null) {
+                return calls;
+            }
+            int nameIndex = cursor.getColumnIndex(CallLog.Calls.CACHED_NAME);
+            int numberIndex = cursor.getColumnIndex(CallLog.Calls.NUMBER);
+            int typeIndex = cursor.getColumnIndex(CallLog.Calls.TYPE);
+            int dateIndex = cursor.getColumnIndex(CallLog.Calls.DATE);
+            int durationIndex = cursor.getColumnIndex(CallLog.Calls.DURATION);
+            while (cursor.moveToNext() && calls.size() < limit) {
+                String number = numberIndex >= 0 ? cursor.getString(numberIndex) : "";
+                number = number == null ? "" : number.trim();
+                if (number.isEmpty()) {
+                    continue;
+                }
+                String name = nameIndex >= 0 ? cursor.getString(nameIndex) : "";
+                int type = typeIndex >= 0 ? cursor.getInt(typeIndex) : CallLog.Calls.INCOMING_TYPE;
+                long timestamp = dateIndex >= 0 ? cursor.getLong(dateIndex) : System.currentTimeMillis();
+                int durationSeconds = durationIndex >= 0 ? Math.max(0, cursor.getInt(durationIndex)) : 0;
+                calls.add(new CallLogSyncRecord(
+                        name == null ? "" : name.trim(),
+                        number,
+                        callDirectionForType(type),
+                        callStatusForType(type, durationSeconds),
+                        timestamp > 0 ? timestamp : System.currentTimeMillis(),
+                        durationSeconds
+                ));
+            }
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to read call log for sync", error);
+        }
+        return calls;
+    }
+
+    private static String callDirectionForType(int type) {
+        if (type == CallLog.Calls.OUTGOING_TYPE) {
+            return "outgoing";
+        }
+        return "incoming";
+    }
+
+    private static String callStatusForType(int type, int durationSeconds) {
+        switch (type) {
+            case CallLog.Calls.MISSED_TYPE:
+                return "missed";
+            case CallLog.Calls.REJECTED_TYPE:
+                return "rejected";
+            case CallLog.Calls.BLOCKED_TYPE:
+                return "blocked";
+            case CallLog.Calls.VOICEMAIL_TYPE:
+                return "voicemail";
+            case CallLog.Calls.INCOMING_TYPE:
+                return durationSeconds > 0 ? "ended" : "missed";
+            case CallLog.Calls.OUTGOING_TYPE:
+            default:
+                return "ended";
+        }
     }
 
     private void publishStatus(String state) {
@@ -1961,6 +2383,12 @@ public class MqttBridgeService extends Service {
 
     private boolean hasCallLogPermission() {
         return checkSelfPermission(Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private static boolean hasPermission(Context context, String permission) {
+        return context != null
+                && (Build.VERSION.SDK_INT < 23
+                || context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED);
     }
 
     private static boolean samePhoneNumber(String left, String right) {
@@ -3125,6 +3553,28 @@ public class MqttBridgeService extends Service {
             this.imei = imei == null ? "" : imei;
             this.simSlots = simSlots == null ? new ArrayList<>() : simSlots;
             this.activeSimSlotIndex = activeSimSlotIndex;
+        }
+    }
+
+    private interface JsonSender {
+        void send(JSONObject payload);
+    }
+
+    private static final class CallLogSyncRecord {
+        final String name;
+        final String number;
+        final String direction;
+        final String status;
+        final long timestamp;
+        final int durationSeconds;
+
+        CallLogSyncRecord(String name, String number, String direction, String status, long timestamp, int durationSeconds) {
+            this.name = name == null ? "" : name;
+            this.number = number == null ? "" : number;
+            this.direction = direction == null ? "" : direction;
+            this.status = status == null ? "" : status;
+            this.timestamp = timestamp;
+            this.durationSeconds = Math.max(0, durationSeconds);
         }
     }
 

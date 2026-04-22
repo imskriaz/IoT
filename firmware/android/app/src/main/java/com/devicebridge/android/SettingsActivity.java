@@ -65,6 +65,9 @@ public class SettingsActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQ_BRIDGE_PERMISSIONS) {
             BridgeEventLog.append(this, "Settings permission request completed");
+            if (BridgePermissionHelper.hasSmsInboxFeature(this) || BridgePermissionHelper.hasCallFeature(this)) {
+                MqttBridgeService.requestSilentBulkSync(this);
+            }
             refreshStatus("Permissions updated");
         }
     }

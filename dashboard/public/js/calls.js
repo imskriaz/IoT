@@ -1141,6 +1141,7 @@
 
         window.socket.on('call:incoming', function (data) {
             if (!data || !matchesCallsScope(data)) return;
+            if (data.sync === true || String(data.sync || '').toLowerCase() === 'true') return;
             const number = data.number || '';
             showActiveCallBanner(number, 'ringing', 0);
             loadCallLogs(1);
@@ -1149,6 +1150,7 @@
 
         window.socket.on('call:status', function (data) {
             if (!data || !matchesCallsScope(data)) return;
+            if (data.sync === true || String(data.sync || '').toLowerCase() === 'true') return;
             const status = String(data.status || '').toLowerCase();
             const number = data.number || '';
             const duration = Number(data.duration || 0);

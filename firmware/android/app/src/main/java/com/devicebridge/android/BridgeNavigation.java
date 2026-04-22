@@ -14,16 +14,20 @@ final class BridgeNavigation {
         PopupMenu menu = new PopupMenu(activity, anchor);
         Menu popup = menu.getMenu();
         popup.add(0, 1, 1, "Home");
-        popup.add(0, 2, 2, "Logs");
-        popup.add(0, 3, 3, "Settings");
-        popup.add(0, 4, 4, "Health");
+        popup.add(0, 2, 2, "Phone");
+        popup.add(0, 3, 3, "Contacts");
+        popup.add(0, 4, 4, "Logs");
+        popup.add(0, 5, 5, "Settings");
+        popup.add(0, 6, 6, "Health");
 
         menu.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case 1:  open(activity, MainActivity.class); return true;
-                case 2:  open(activity, BridgeDashboardSectionActivity.createIntent(activity, BridgeDashboardSectionActivity.SECTION_CONSOLE)); return true;
-                case 3:  open(activity, SettingsActivity.class); return true;
-                case 4:  open(activity, BridgeDashboardSectionActivity.createIntent(activity, BridgeDashboardSectionActivity.SECTION_HEALTH)); return true;
+                case 2:  open(activity, HomeActivity.createPhoneIntent(activity)); return true;
+                case 3:  open(activity, HomeActivity.createContactsIntent(activity)); return true;
+                case 4:  open(activity, BridgeDashboardSectionActivity.createIntent(activity, BridgeDashboardSectionActivity.SECTION_CONSOLE)); return true;
+                case 5:  open(activity, SettingsActivity.class); return true;
+                case 6:  open(activity, BridgeDashboardSectionActivity.createIntent(activity, BridgeDashboardSectionActivity.SECTION_HEALTH)); return true;
                 default: return false;
             }
         });

@@ -20,10 +20,23 @@ function clean(value) {
 }
 
 function normalizeTimestamp(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        const millis = value > 100000000000 ? value : value * 1000;
+        return new Date(millis).toISOString();
+    }
     const raw = clean(value);
     if (!raw) return new Date().toISOString();
+    if (/^\d+$/.test(raw)) {
+        const numeric = Number(raw);
+        const millis = numeric > 100000000000 ? numeric : numeric * 1000;
+        return new Date(millis).toISOString();
+    }
     const parsed = new Date(raw);
     return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+}
+
+function isSyncPayload(payload = {}) {
+    return payload.sync === true || clean(payload.sync).toLowerCase() === 'true';
 }
 
 function parseDeviceIds(req) {
@@ -53,17 +66,19 @@ function emitDevice(deviceId, eventName, payload) {
 
 function extractCallStatusPayload(payload = {}) {
     const nested = payload.call && typeof payload.call === 'object' ? payload.call : {};
-    const status = clean(nested.status || payload.call_status).toLowerCase();
+    const status = clean(nested.status || payload.call_status || payload.status).toLowerCase();
     if (!status) {
         return null;
     }
 
-    const direction = clean(nested.direction || payload.call_direction).toLowerCase();
+    const direction = clean(nested.direction || payload.call_direction || payload.direction).toLowerCase();
     const number = formatPhoneNumber(nested.number || payload.call_number || '')
         || clean(nested.number || payload.call_number)
         || null;
-    const updatedAtRaw = nested.updatedAt ?? payload.call_updated_at ?? payload.timestamp;
+    const updatedAtRaw = nested.updatedAt ?? nested.timestamp ?? payload.call_updated_at ?? payload.timestamp;
     const timestamp = normalizeTimestamp(updatedAtRaw);
+    const duration = Number(nested.duration ?? payload.duration ?? payload.duration_seconds ?? 0);
+    const contactName = clean(nested.name || nested.contact_name || payload.name || payload.contact_name);
     const simScope = extractSimScope({
         ...payload,
         sim_slot: nested.sim_slot ?? payload.sim_slot,
@@ -75,6 +90,9 @@ function extractCallStatusPayload(payload = {}) {
         direction,
         number,
         timestamp,
+        sync: isSyncPayload(payload),
+        duration: Number.isFinite(duration) && duration >= 0 ? Math.round(duration) : 0,
+        contact_name: contactName,
         sim_slot: simScope.simSlot,
         simSlot: simScope.simSlot
     };
@@ -125,6 +143,7 @@ router.post('/status', requireBoundDevice, async (req, res) => {
         payload.transport_mode = 'http';
         payload.bridge_transport = 'http';
         payload.active_path = payload.active_path || 'http';
+        const syncPayload = isSyncPayload(payload);
 
         await db.run(
             `UPDATE devices
@@ -134,9 +153,11 @@ router.post('/status', requireBoundDevice, async (req, res) => {
             [deviceId]
         );
 
-        global.modemService?.updateDeviceStatus?.(deviceId, payload);
-        await syncDeviceSimInventory(db, deviceId, payload).catch(() => {});
-        emitDevice(deviceId, 'device:status', { deviceId, ...payload });
+        if (!syncPayload) {
+            global.modemService?.updateDeviceStatus?.(deviceId, payload);
+            await syncDeviceSimInventory(db, deviceId, payload).catch(() => {});
+            emitDevice(deviceId, 'device:status', { deviceId, ...payload });
+        }
         const callStatus = extractCallStatusPayload(payload);
         if (callStatus) {
             const snapshotKey = callSnapshotKey(callStatus);
@@ -145,7 +166,7 @@ router.post('/status', requireBoundDevice, async (req, res) => {
                 await updateLatestActiveCall(db, deviceId, callStatus).catch((error) => {
                     logger.error('android bridge HTTP call status update error:', error);
                 });
-                if (callStatus.status === 'ringing' && callStatus.direction === 'incoming') {
+                if (!callStatus.sync && callStatus.status === 'ringing' && callStatus.direction === 'incoming') {
                     emitDevice(deviceId, 'call:incoming', {
                         deviceId,
                         number: callStatus.number,
@@ -154,11 +175,13 @@ router.post('/status', requireBoundDevice, async (req, res) => {
                         timestamp: callStatus.timestamp
                     });
                 }
-                emitDevice(deviceId, 'call:status', {
-                    deviceId,
-                    ...callStatus
-                });
-                if (['ended', 'missed', 'rejected', 'busy', 'no_answer'].includes(callStatus.status)) {
+                if (!callStatus.sync) {
+                    emitDevice(deviceId, 'call:status', {
+                        deviceId,
+                        ...callStatus
+                    });
+                }
+                if (!callStatus.sync && ['ended', 'missed', 'rejected', 'busy', 'no_answer'].includes(callStatus.status)) {
                     emitDevice(deviceId, 'call:ended', {
                         deviceId,
                         ...callStatus

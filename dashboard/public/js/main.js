@@ -1496,6 +1496,7 @@ function isActiveSimScopedEvent(data) {
     
     socket.on('call:incoming', function(data) {
         if (!isActiveSimScopedEvent(data)) return;
+        if (data?.sync === true || String(data?.sync || '').toLowerCase() === 'true') return;
         console.log('Incoming call:', data);
         activeIncomingCallContext = {
             deviceId: String(data?.deviceId || data?.device_id || getStatusActiveDeviceId() || '').trim(),
@@ -1520,6 +1521,7 @@ function isActiveSimScopedEvent(data) {
 
     socket.on('call:status', function(data) {
         if (!isActiveSimScopedEvent(data)) return;
+        if (data?.sync === true || String(data?.sync || '').toLowerCase() === 'true') return;
         // Auto-dismiss incoming call modal when call ends/connected
         if (data.status === 'ended' || data.status === 'missed' || data.status === 'rejected') {
             activeIncomingCallContext = null;

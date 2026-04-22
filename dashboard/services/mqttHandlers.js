@@ -232,6 +232,115 @@ function extractSubscriberNumberFromText(text) {
 const CALL_PHONE_SQL = sqlNormalizePhone('phone_number');
 const CALL_LAST10_SQL = sqlPhoneLastDigits('phone_number');
 
+function cleanText(value) {
+    return String(value || '').trim();
+}
+
+function isSyncPayload(data = {}) {
+    return data.sync === true || cleanText(data.sync).toLowerCase() === 'true';
+}
+
+function normalizeEventTimestamp(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        const millis = value > 100000000000 ? value : value * 1000;
+        return new Date(millis).toISOString();
+    }
+    const raw = cleanText(value);
+    if (!raw) return new Date().toISOString();
+    if (/^\d+$/.test(raw)) {
+        const numeric = Number(raw);
+        const millis = numeric > 100000000000 ? numeric : numeric * 1000;
+        return new Date(millis).toISOString();
+    }
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+}
+
+function toSqliteTimestamp(value) {
+    return normalizeEventTimestamp(value).slice(0, 19).replace('T', ' ');
+}
+
+async function upsertSyncedCallRecord(db, deviceId, data = {}, simScope = {}) {
+    if (!db || !deviceId) return 0;
+
+    const lookup = getPhoneLookupKeys(data.number);
+    const storedNumber = lookup.formatted || cleanText(data.number) || 'Unknown';
+    if (!storedNumber || storedNumber === 'Unknown') return 0;
+
+    const status = cleanText(data.status || 'ended').toLowerCase() || 'ended';
+    const direction = cleanText(data.direction).toLowerCase();
+    const type = direction === 'outgoing' ? 'outgoing' : 'incoming';
+    const duration = Number(data.duration ?? data.duration_seconds ?? 0);
+    const nextDuration = Number.isFinite(duration) && duration >= 0 ? Math.round(duration) : 0;
+    const startTime = toSqliteTimestamp(data.start_time || data.timestamp || data.updatedAt);
+    const startMillis = new Date(normalizeEventTimestamp(data.start_time || data.timestamp || data.updatedAt)).getTime();
+    const terminalStatuses = ['ended', 'missed', 'rejected', 'busy', 'no_answer', 'blocked', 'voicemail'];
+    const endTime = terminalStatuses.includes(status)
+        ? new Date(startMillis + (nextDuration * 1000)).toISOString().slice(0, 19).replace('T', ' ')
+        : null;
+    const contactName = cleanText(data.contact_name || data.name);
+
+    const conditions = ['device_id = ?', 'type = ?', 'start_time = ?'];
+    const params = [deviceId, type, startTime];
+    appendSimScopeCondition(conditions, params, simScope);
+    if (lookup.digits) {
+        conditions.push(`(${CALL_PHONE_SQL} = ? OR ${CALL_LAST10_SQL} = ?)`);
+        params.push(lookup.digits, lookup.last10 || lookup.digits);
+    } else {
+        conditions.push('phone_number = ?');
+        params.push(storedNumber);
+    }
+
+    const existing = await db.get(`
+        SELECT id
+        FROM calls
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY id DESC
+        LIMIT 1
+    `, params);
+
+    if (existing?.id) {
+        const result = await db.run(`
+            UPDATE calls
+            SET phone_number = ?,
+                contact_name = COALESCE(NULLIF(?, ''), contact_name),
+                status = ?,
+                duration = ?,
+                end_time = ?,
+                missed = ?,
+                sim_slot = COALESCE(sim_slot, ?)
+            WHERE id = ?
+        `, [
+            storedNumber,
+            contactName,
+            status,
+            nextDuration,
+            endTime,
+            status === 'missed' ? 1 : 0,
+            simScope.simSlot,
+            existing.id
+        ]);
+        return result.changes || 0;
+    }
+
+    const result = await db.run(`
+        INSERT INTO calls (device_id, phone_number, contact_name, type, status, start_time, end_time, duration, missed, sim_slot)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+        deviceId,
+        storedNumber,
+        contactName || null,
+        type,
+        status,
+        startTime,
+        endTime,
+        nextDuration,
+        status === 'missed' ? 1 : 0,
+        simScope.simSlot
+    ]);
+    return result.lastID ? 1 : 0;
+}
+
 async function ensureIncomingCallRecord(db, deviceId, rawNumber, simScope = {}) {
     if (!db || !deviceId) return null;
 
@@ -288,6 +397,10 @@ async function updateLatestActiveCall(db, deviceId, data = {}) {
     if (!db || !deviceId) return 0;
 
     const simScope = extractSimScope(data);
+    if (isSyncPayload(data)) {
+        return upsertSyncedCallRecord(db, deviceId, data, simScope);
+    }
+
     const status = String(data.status || 'ended').trim() || 'ended';
     const duration = Number(data.duration);
     const nextDuration = Number.isFinite(duration) && duration >= 0 ? Math.round(duration) : 0;
@@ -1350,6 +1463,7 @@ class MQTTHandlers {
     setupCallHandlers() {
         this.mqttService.on('call:incoming', async (deviceId, data) => {
             if (this.isDeletedDevice(deviceId)) return;
+            const syncPayload = isSyncPayload(data);
             logger.info(`📞 Incoming call from ${data.number}`);
             try {
                 const db = this.app.locals.db;
@@ -1363,21 +1477,28 @@ class MQTTHandlers {
             } catch (error) {
                 logger.error('Error saving incoming call:', error);
             }
-            this.toDevice(deviceId, 'call:incoming', { deviceId, ...data });
-            pushNotificationService.notifyLinkedDevices(deviceId, {
-                title: 'Incoming call',
-                body: `From ${data.number || 'Unknown number'}`,
-                data: {
-                    type: 'call.incoming',
-                    deviceId,
-                    number: data.number || null
-                }
-            }).catch(() => {});
-            this.fireEvent('call.incoming', deviceId, data);
+            if (!syncPayload) {
+                this.toDevice(deviceId, 'call:incoming', { deviceId, ...data });
+                pushNotificationService.notifyLinkedDevices(deviceId, {
+                    title: 'Incoming call',
+                    body: `From ${data.number || 'Unknown number'}`,
+                    data: {
+                        type: 'call.incoming',
+                        deviceId,
+                        number: data.number || null
+                    }
+                }).catch(() => {});
+                this.fireEvent('call.incoming', deviceId, data);
+            }
         });
 
         this.mqttService.on('call:status', async (deviceId, data) => {
             if (this.isDeletedDevice(deviceId)) return;
+            const syncPayload = isSyncPayload(data);
+            const syncType = String(data?.type || '').trim().toLowerCase();
+            if (syncPayload && (syncType === 'call_sync_start' || syncType === 'call_sync_complete')) {
+                return;
+            }
             logger.info(`📞 Call status: ${data.status} for ${data.number}`);
 
             try {
@@ -1398,15 +1519,17 @@ class MQTTHandlers {
                 this.toDevice(deviceId, 'call:save-error', { deviceId, number: data.number });
             }
 
-            this.toDevice(deviceId, 'call:status', { deviceId, ...data });
-            this.fireEvent('call.status', deviceId, data);
-            if (['ended', 'missed', 'rejected', 'busy', 'no_answer'].includes(String(data.status || '').toLowerCase())) {
+            if (!syncPayload) {
+                this.toDevice(deviceId, 'call:status', { deviceId, ...data });
+                this.fireEvent('call.status', deviceId, data);
+            }
+            if (!syncPayload && ['ended', 'missed', 'rejected', 'busy', 'no_answer'].includes(String(data.status || '').toLowerCase())) {
                 this.mqttService.clearDeviceBusy(deviceId);
                 this.fireEvent('call.ended', deviceId, data);
             }
 
             // Notify on missed call
-            if (data.status === 'missed') {
+            if (!syncPayload && data.status === 'missed') {
                 notificationService.notifyMissedCall(data.number).catch(() => {});
                 pushNotificationService.notifyLinkedDevices(deviceId, {
                     title: 'Missed call',

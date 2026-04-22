@@ -98,10 +98,6 @@
             android:name=".SupportCenterActivity"
             android:exported="false" />
 
-        <activity
-            android:name=".DashboardWebActivity"
-            android:exported="false" />
-
         <service
             android:name=".MqttBridgeService"
             android:exported="false"
