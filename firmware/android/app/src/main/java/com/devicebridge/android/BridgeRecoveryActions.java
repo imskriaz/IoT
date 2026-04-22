@@ -9,7 +9,7 @@ final class BridgeRecoveryActions {
     }
 
     static void execute(Activity activity, String action) {
-        String normalized = action == null ? "" : action.trim().toLowerCase();
+        String normalized = action == null ? "" : action.trim().toLowerCase(java.util.Locale.ROOT);
         if (normalized.isEmpty()) {
             return;
         }

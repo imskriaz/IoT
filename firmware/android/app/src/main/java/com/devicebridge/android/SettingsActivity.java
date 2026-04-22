@@ -20,6 +20,7 @@ import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public class SettingsActivity extends Activity {
     private static final int REQ_BRIDGE_PERMISSIONS = 4301;
@@ -422,7 +423,7 @@ public class SettingsActivity extends Activity {
     }
 
     private String normalizeTransportMode(String value, String fallback) {
-        String normalized = BridgeProvisioning.firstNonEmpty(value, fallback).toLowerCase();
+        String normalized = BridgeProvisioning.firstNonEmpty(value, fallback).toLowerCase(Locale.ROOT);
         return "http".equals(normalized) ? "http" : "mqtt";
     }
 

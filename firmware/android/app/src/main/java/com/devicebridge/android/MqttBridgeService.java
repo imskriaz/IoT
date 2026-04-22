@@ -2417,7 +2417,7 @@ public class MqttBridgeService extends Service {
 
     private void scheduleStatusHeartbeat() {
         cancelStatusHeartbeat();
-        statusHeartbeatFuture = executor.scheduleAtFixedRate(
+        statusHeartbeatFuture = executor.scheduleWithFixedDelay(
                 () -> publishStatus("online"),
                 STATUS_HEARTBEAT_INTERVAL_SECONDS,
                 STATUS_HEARTBEAT_INTERVAL_SECONDS,
@@ -2442,7 +2442,7 @@ public class MqttBridgeService extends Service {
         if (currentFuture != null && !currentFuture.isDone()) {
             return;
         }
-        outstandingPollFuture = executor.scheduleAtFixedRate(
+        outstandingPollFuture = executor.scheduleWithFixedDelay(
                 this::pollOutstandingHttpMessages,
                 5,
                 HTTP_OUTSTANDING_POLL_INTERVAL_SECONDS,

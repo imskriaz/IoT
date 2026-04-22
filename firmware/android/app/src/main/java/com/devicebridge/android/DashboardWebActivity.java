@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.View;
+import android.webkit.WebResourceRequest;
 import android.webkit.CookieManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -248,18 +249,37 @@ public class DashboardWebActivity extends Activity {
     private void configureWebView(WebView view) {
         WebSettings settings = view.getSettings();
         settings.setJavaScriptEnabled(true);
+        settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setDomStorageEnabled(true);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
         settings.setSupportZoom(true);
         settings.setBuiltInZoomControls(true);
         settings.setDisplayZoomControls(false);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
 
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(view, true);
 
         view.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                Uri target = request == null ? null : request.getUrl();
+                if (target == null) {
+                    return false;
+                }
+                if (isAllowedDashboardUri(target)) {
+                    return false;
+                }
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, target));
+                } catch (RuntimeException ignored) {
+                }
+                return true;
+            }
+
             @Override
             public void onPageFinished(WebView view, String url) {
                 persistCurrentUrl(url);
@@ -276,6 +296,28 @@ public class DashboardWebActivity extends Activity {
                 updateChrome();
             }
         });
+    }
+
+    private boolean isAllowedDashboardUri(Uri target) {
+        if (target == null) {
+            return false;
+        }
+        String scheme = String.valueOf(target.getScheme() == null ? "" : target.getScheme()).trim().toLowerCase(java.util.Locale.ROOT);
+        if (!"http".equals(scheme) && !"https".equals(scheme)) {
+            return false;
+        }
+        Uri base = Uri.parse(resolveBaseServerUrl());
+        if (base == null) {
+            return false;
+        }
+        String baseHost = String.valueOf(base.getHost() == null ? "" : base.getHost()).trim();
+        String targetHost = String.valueOf(target.getHost() == null ? "" : target.getHost()).trim();
+        if (baseHost.isEmpty() || !baseHost.equalsIgnoreCase(targetHost)) {
+            return false;
+        }
+        int basePort = base.getPort();
+        int targetPort = target.getPort();
+        return basePort == -1 || targetPort == -1 || basePort == targetPort;
     }
 
     private void loadDashboard() {

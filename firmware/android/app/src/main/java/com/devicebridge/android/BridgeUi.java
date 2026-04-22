@@ -17,6 +17,8 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.util.Locale;
+
 final class BridgeUi {
     private BridgeUi() {
     }
@@ -178,7 +180,7 @@ final class BridgeUi {
 
         if (eyebrowText != null && !eyebrowText.isEmpty()) {
             TextView eyebrow = new TextView(context);
-            eyebrow.setText(eyebrowText.toUpperCase());
+            eyebrow.setText(eyebrowText.toUpperCase(Locale.ROOT));
             eyebrow.setTextColor(Color.parseColor("#93c5fd"));
             eyebrow.setTextSize(10);
             eyebrow.setTypeface(Typeface.DEFAULT_BOLD);

@@ -26,8 +26,12 @@ import java.util.Set;
 
 final class BridgeSmsStore {
     private static final String KEY_LOCAL_SMS_MIRROR = "local_sms_mirror";
+    private static final String KEY_THREAD_READ_SHADOWS = "local_sms_thread_read_shadows";
+    private static final String KEY_THREAD_DELETE_SHADOWS = "local_sms_thread_delete_shadows";
+    private static final String KEY_DELETED_MESSAGE_IDS = "local_sms_deleted_message_ids";
     private static final int MAX_PROVIDER_MESSAGES = 400;
     private static final int MAX_LOCAL_MESSAGES = 160;
+    private static final int MAX_DELETED_MESSAGE_IDS = 800;
     private static final long LOCAL_RETENTION_MS = 14L * 24L * 60L * 60L * 1000L;
 
     private BridgeSmsStore() {
@@ -232,7 +236,8 @@ final class BridgeSmsStore {
         }
 
         int localChanged = markLocalThreadsRead(activity, refs);
-        return new SmsMutationResult(providerChanged, localChanged, providerBlocked);
+        int shadowChanged = applyThreadShadow(activity, KEY_THREAD_READ_SHADOWS, refs);
+        return new SmsMutationResult(providerChanged, localChanged + shadowChanged, providerBlocked);
     }
 
     static SmsMutationResult deleteThreads(Activity activity, List<Map<String, Object>> threads) {
@@ -270,7 +275,8 @@ final class BridgeSmsStore {
         }
 
         int localChanged = deleteLocalThreads(activity, refs);
-        return new SmsMutationResult(providerChanged, localChanged, providerBlocked);
+        int shadowChanged = applyThreadShadow(activity, KEY_THREAD_DELETE_SHADOWS, refs);
+        return new SmsMutationResult(providerChanged, localChanged + shadowChanged, providerBlocked);
     }
 
     static SmsMutationResult deleteMessages(Activity activity, List<Map<String, Object>> messages) {
@@ -303,14 +309,15 @@ final class BridgeSmsStore {
         }
 
         int localChanged = deleteLocalMessages(activity, refs);
-        return new SmsMutationResult(providerChanged, localChanged, providerBlocked);
+        int shadowChanged = applyDeletedMessageShadow(activity, refs);
+        return new SmsMutationResult(providerChanged, localChanged + shadowChanged, providerBlocked);
     }
 
     private static List<SmsRecord> loadMergedMessages(Context context) {
         List<SmsRecord> providerRecords = loadProviderMessages(context);
         List<SmsRecord> localRecords = loadLocalMirror(context);
         if (localRecords.isEmpty()) {
-            return providerRecords;
+            return applyLocalShadows(context, providerRecords);
         }
 
         Map<String, String> addressToThread = new HashMap<>();
@@ -337,8 +344,7 @@ final class BridgeSmsStore {
             fingerprints.add(fingerprint);
         }
 
-        providerRecords.sort((left, right) -> Long.compare(right.timestamp, left.timestamp));
-        return providerRecords;
+        return applyLocalShadows(context, providerRecords);
     }
 
     private static List<SmsRecord> loadProviderMessages(Context activity) {
@@ -529,6 +535,86 @@ final class BridgeSmsStore {
         return changed;
     }
 
+    private static List<SmsRecord> applyLocalShadows(Context context, List<SmsRecord> records) {
+        if (records == null || records.isEmpty()) {
+            return records == null ? new ArrayList<>() : records;
+        }
+        List<ThreadShadow> readShadows = loadThreadShadows(context, KEY_THREAD_READ_SHADOWS);
+        List<ThreadShadow> deleteShadows = loadThreadShadows(context, KEY_THREAD_DELETE_SHADOWS);
+        Set<String> deletedMessageIds = loadDeletedMessageIds(context);
+        List<SmsRecord> effective = new ArrayList<>();
+        for (SmsRecord record : records) {
+            if (record == null) {
+                continue;
+            }
+            if (!record.id.isEmpty() && deletedMessageIds.contains(record.id)) {
+                continue;
+            }
+            if (matchesThreadShadow(record, deleteShadows)) {
+                continue;
+            }
+            effective.add(matchesThreadShadow(record, readShadows) ? record.withRead(true) : record);
+        }
+        effective.sort((left, right) -> Long.compare(right.timestamp, left.timestamp));
+        return effective;
+    }
+
+    private static int applyThreadShadow(Context context, String key, List<ThreadReference> refs) {
+        if (context == null || key == null || key.trim().isEmpty() || refs == null || refs.isEmpty()) {
+            return 0;
+        }
+        List<ThreadShadow> merged = new ArrayList<>(loadThreadShadows(context, key));
+        long cutoffTimestamp = System.currentTimeMillis();
+        int changed = 0;
+        for (ThreadReference ref : refs) {
+            if (ref == null) {
+                continue;
+            }
+            String dedupe = ref.threadKey + "|" + ref.normalizedAddress;
+            boolean replaced = false;
+            for (int i = 0; i < merged.size(); i += 1) {
+                ThreadShadow current = merged.get(i);
+                if (current == null) {
+                    continue;
+                }
+                String currentDedupe = current.threadKey + "|" + current.normalizedAddress;
+                if (!dedupe.equals(currentDedupe)) {
+                    continue;
+                }
+                merged.set(i, new ThreadShadow(ref.threadKey, ref.normalizedAddress, cutoffTimestamp));
+                replaced = true;
+                changed += 1;
+                break;
+            }
+            if (!replaced) {
+                merged.add(new ThreadShadow(ref.threadKey, ref.normalizedAddress, cutoffTimestamp));
+                changed += 1;
+            }
+        }
+        saveThreadShadows(context, key, merged);
+        return changed;
+    }
+
+    private static int applyDeletedMessageShadow(Context context, List<MessageReference> refs) {
+        if (context == null || refs == null || refs.isEmpty()) {
+            return 0;
+        }
+        Set<String> deleted = loadDeletedMessageIds(context);
+        int changed = 0;
+        for (MessageReference ref : refs) {
+            if (ref == null || ref.localOnly || ref.id.isEmpty()) {
+                continue;
+            }
+            if (deleted.add(ref.id)) {
+                changed += 1;
+            }
+        }
+        if (changed > 0) {
+            saveDeletedMessageIds(context, deleted);
+        }
+        return changed;
+    }
+
     private static boolean matchesThreadRef(JSONObject item, List<ThreadReference> refs) {
         String itemThreadKey = item.optString("threadKey", "");
         String itemAddress = normalizeAddress(item.optString("address", ""));
@@ -551,6 +637,25 @@ final class BridgeSmsStore {
         String itemId = item.optString("id", "");
         for (MessageReference ref : refs) {
             if (!ref.id.isEmpty() && ref.id.equals(itemId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean matchesThreadShadow(SmsRecord record, List<ThreadShadow> shadows) {
+        if (record == null || shadows == null || shadows.isEmpty()) {
+            return false;
+        }
+        String normalizedAddress = normalizeAddress(record.address);
+        for (ThreadShadow shadow : shadows) {
+            if (shadow == null || shadow.cutoffTimestamp <= 0L || record.timestamp > shadow.cutoffTimestamp) {
+                continue;
+            }
+            if (!shadow.threadKey.isEmpty() && shadow.threadKey.equals(record.threadKey)) {
+                return true;
+            }
+            if (!shadow.normalizedAddress.isEmpty() && shadow.normalizedAddress.equals(normalizedAddress)) {
                 return true;
             }
         }
@@ -683,6 +788,95 @@ final class BridgeSmsStore {
         } catch (JSONException ignored) {
             return new JSONArray();
         }
+    }
+
+    private static List<ThreadShadow> loadThreadShadows(Context context, String key) {
+        List<ThreadShadow> shadows = new ArrayList<>();
+        if (context == null || key == null || key.trim().isEmpty()) {
+            return shadows;
+        }
+        long retentionCutoff = System.currentTimeMillis() - LOCAL_RETENTION_MS;
+        JSONArray source = parseArray(prefs(context).getString(key, "[]"));
+        JSONArray retained = new JSONArray();
+        for (int i = 0; i < source.length(); i += 1) {
+            JSONObject item = source.optJSONObject(i);
+            if (item == null) {
+                continue;
+            }
+            long cutoffTimestamp = item.optLong("cutoffTimestamp", 0L);
+            if (cutoffTimestamp <= 0L || cutoffTimestamp < retentionCutoff) {
+                continue;
+            }
+            String threadKey = item.optString("threadKey", "").trim();
+            String normalizedAddress = item.optString("normalizedAddress", "").trim();
+            if (threadKey.isEmpty() && normalizedAddress.isEmpty()) {
+                continue;
+            }
+            retained.put(item);
+            shadows.add(new ThreadShadow(threadKey, normalizedAddress, cutoffTimestamp));
+        }
+        if (retained.length() != source.length()) {
+            prefs(context).edit().putString(key, retained.toString()).apply();
+        }
+        return shadows;
+    }
+
+    private static void saveThreadShadows(Context context, String key, List<ThreadShadow> shadows) {
+        if (context == null || key == null || key.trim().isEmpty()) {
+            return;
+        }
+        JSONArray array = new JSONArray();
+        int start = Math.max(0, shadows.size() - MAX_LOCAL_MESSAGES);
+        for (int i = start; i < shadows.size(); i += 1) {
+            ThreadShadow shadow = shadows.get(i);
+            if (shadow == null) {
+                continue;
+            }
+            JSONObject item = new JSONObject();
+            try {
+                item.put("threadKey", shadow.threadKey);
+                item.put("normalizedAddress", shadow.normalizedAddress);
+                item.put("cutoffTimestamp", shadow.cutoffTimestamp);
+            } catch (JSONException ignored) {
+            }
+            array.put(item);
+        }
+        prefs(context).edit().putString(key, array.toString()).apply();
+    }
+
+    private static Set<String> loadDeletedMessageIds(Context context) {
+        Set<String> ids = new HashSet<>();
+        if (context == null) {
+            return ids;
+        }
+        JSONArray source = parseArray(prefs(context).getString(KEY_DELETED_MESSAGE_IDS, "[]"));
+        JSONArray retained = new JSONArray();
+        int start = Math.max(0, source.length() - MAX_DELETED_MESSAGE_IDS);
+        for (int i = start; i < source.length(); i += 1) {
+            String id = source.optString(i, "").trim();
+            if (id.isEmpty() || ids.contains(id)) {
+                continue;
+            }
+            ids.add(id);
+            retained.put(id);
+        }
+        if (retained.length() != source.length()) {
+            prefs(context).edit().putString(KEY_DELETED_MESSAGE_IDS, retained.toString()).apply();
+        }
+        return ids;
+    }
+
+    private static void saveDeletedMessageIds(Context context, Set<String> ids) {
+        if (context == null) {
+            return;
+        }
+        JSONArray array = new JSONArray();
+        List<String> ordered = new ArrayList<>(ids);
+        int start = Math.max(0, ordered.size() - MAX_DELETED_MESSAGE_IDS);
+        for (int i = start; i < ordered.size(); i += 1) {
+            array.put(ordered.get(i));
+        }
+        prefs(context).edit().putString(KEY_DELETED_MESSAGE_IDS, array.toString()).apply();
     }
 
     private static String dedupeFingerprint(SmsRecord record) {
@@ -888,6 +1082,22 @@ final class BridgeSmsStore {
                     source
             );
         }
+
+        SmsRecord withRead(boolean nextRead) {
+            return new SmsRecord(
+                    id,
+                    threadId,
+                    threadKey,
+                    address,
+                    body,
+                    timestamp,
+                    outgoing,
+                    nextRead,
+                    status,
+                    localOnly,
+                    source
+            );
+        }
     }
 
     private static final class ThreadReference {
@@ -911,6 +1121,18 @@ final class BridgeSmsStore {
         MessageReference(String id, boolean localOnly) {
             this.id = id == null ? "" : id;
             this.localOnly = localOnly;
+        }
+    }
+
+    private static final class ThreadShadow {
+        final String threadKey;
+        final String normalizedAddress;
+        final long cutoffTimestamp;
+
+        ThreadShadow(String threadKey, String normalizedAddress, long cutoffTimestamp) {
+            this.threadKey = threadKey == null ? "" : threadKey.trim();
+            this.normalizedAddress = normalizedAddress == null ? "" : normalizedAddress.trim();
+            this.cutoffTimestamp = cutoffTimestamp;
         }
     }
 }

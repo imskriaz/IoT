@@ -3,8 +3,6 @@ package com.devicebridge.android;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.os.Build;
-
 public class BootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -21,11 +19,7 @@ public class BootReceiver extends BroadcastReceiver {
         }
 
         Intent service = new Intent(context, MqttBridgeService.class).setAction(MqttBridgeService.ACTION_START);
-        if (Build.VERSION.SDK_INT >= 26) {
-            context.startForegroundService(service);
-        } else {
-            context.startService(service);
-        }
+        context.startForegroundService(service);
     }
 }
 

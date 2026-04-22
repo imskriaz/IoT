@@ -9,6 +9,7 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.zip.Inflater;
 
 final class BridgeProvisioning {
@@ -193,12 +194,12 @@ final class BridgeProvisioning {
     }
 
     private static String normalizeTransportMode(String value, String fallback) {
-        String normalized = firstNonEmpty(value, fallback).toLowerCase();
+        String normalized = firstNonEmpty(value, fallback).toLowerCase(Locale.ROOT);
         return "http".equals(normalized) ? "http" : "mqtt";
     }
 
     private static String inferBrokerProtocol(String host) {
-        String normalized = firstNonEmpty(host).toLowerCase();
+        String normalized = firstNonEmpty(host).toLowerCase(Locale.ROOT);
         return normalized.startsWith("mqtts://") || normalized.startsWith("ssl://") ? "mqtts" : "mqtt";
     }
 

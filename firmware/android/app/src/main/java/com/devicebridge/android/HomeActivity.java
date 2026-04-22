@@ -1114,9 +1114,9 @@ public class HomeActivity extends Activity {
         badge.setGravity(Gravity.CENTER);
         badge.setPadding(dp(3), 0, dp(3), 0);
         badge.setBackground(roundRect("#ffffff", "#bfdbfe", 999));
-        FrameLayout.LayoutParams badgeParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(14), Gravity.TOP | Gravity.RIGHT);
+        FrameLayout.LayoutParams badgeParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(14), Gravity.TOP | Gravity.END);
         badgeParams.topMargin = dp(1);
-        badgeParams.rightMargin = dp(1);
+        badgeParams.setMarginEnd(dp(1));
         button.addView(badge, badgeParams);
         return button;
     }
@@ -1179,7 +1179,7 @@ public class HomeActivity extends Activity {
         String source = stringValue(message.get("source"), outgoing ? "phone" : "device");
         boolean dashboard = source.toLowerCase(Locale.US).contains("dashboard");
         LinearLayout outer = new LinearLayout(this);
-        outer.setGravity(outgoing ? Gravity.RIGHT : Gravity.LEFT);
+        outer.setGravity(outgoing ? Gravity.END : Gravity.START);
         LinearLayout bubble = new LinearLayout(this);
         bubble.setOrientation(LinearLayout.VERTICAL);
         bubble.setPadding(dp(14), dp(10), dp(14), dp(10));
@@ -1192,7 +1192,7 @@ public class HomeActivity extends Activity {
         });
         bubble.addView(text(stringValue(message.get("body"), ""), 14, "#0f172a", false));
         LinearLayout meta = new LinearLayout(this);
-        meta.setGravity(Gravity.CENTER_VERTICAL | (outgoing ? Gravity.RIGHT : Gravity.LEFT));
+        meta.setGravity(Gravity.CENTER_VERTICAL | (outgoing ? Gravity.END : Gravity.START));
         TextView time = text(formatSmsTimestamp(message.get("timestamp")), 10, "#64748b", false);
         meta.addView(time);
         String badge = messageSourceBadge(source);
@@ -1792,7 +1792,7 @@ public class HomeActivity extends Activity {
         EditText input = input("Setup code");
         input.setSingleLine(false);
         input.setMinLines(4);
-        input.setGravity(Gravity.TOP | Gravity.LEFT);
+        input.setGravity(Gravity.TOP | Gravity.START);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         sheet.addView(input, fullWidth(12));
 
@@ -2564,12 +2564,11 @@ public class HomeActivity extends Activity {
             return;
         }
         try {
-            startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                    .setData(Uri.parse("package:" + getPackageName())));
-        } catch (Exception requestError) {
+            startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+        } catch (Exception ignored) {
             try {
-                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
-            } catch (Exception ignored) {
+                BridgePermissionHelper.openAppSettings(this);
+            } catch (Exception appSettingsError) {
                 showSnack("Unable to open battery optimization settings.");
             }
         }
@@ -3341,7 +3340,7 @@ public class HomeActivity extends Activity {
         smsBulkMode = false;
         loadSmsThreads();
         rebuild();
-        showSnack(result.providerBlocked ? "Android blocked provider read update; local mirror updated." : "Marked read.");
+        showSnack(result.providerBlocked ? "Marked read in app. Android blocked provider update." : "Marked read.");
     }
 
     private void confirmDeleteSelectedSmsThreads() {
@@ -3362,7 +3361,7 @@ public class HomeActivity extends Activity {
                     smsMessages = new ArrayList<>();
                     loadSmsThreads();
                     rebuild();
-                    showSnack(result.providerBlocked ? "Android blocked phone SMS delete; local mirror updated." : "Deleted selected conversations.");
+                    showSnack(result.providerBlocked ? "Deleted in app. Android blocked phone SMS delete." : "Deleted selected conversations.");
                 })
                 .show();
     }
@@ -4571,7 +4570,7 @@ public class HomeActivity extends Activity {
 
     private LinearLayout.LayoutParams weighted(int rightMargin) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        params.rightMargin = dp(rightMargin);
+        params.setMarginEnd(dp(rightMargin));
         return params;
     }
 
@@ -4580,7 +4579,7 @@ public class HomeActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        params.rightMargin = dp(rightMargin);
+        params.setMarginEnd(dp(rightMargin));
         return params;
     }
 
@@ -4589,13 +4588,13 @@ public class HomeActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        params.leftMargin = dp(leftMargin);
+        params.setMarginStart(dp(leftMargin));
         return params;
     }
 
     private LinearLayout.LayoutParams fixed(int width, int height, int rightMargin) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(width), dp(height));
-        params.rightMargin = dp(rightMargin);
+        params.setMarginEnd(dp(rightMargin));
         return params;
     }
 

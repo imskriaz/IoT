@@ -3,6 +3,7 @@ package com.devicebridge.android;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import java.util.Locale;
 import java.util.UUID;
 
 final class BridgeConfig {
@@ -301,12 +302,12 @@ final class BridgeConfig {
     }
 
     private static String normalizeBrokerProtocol(String value) {
-        String protocol = clean(value).toLowerCase();
+        String protocol = clean(value).toLowerCase(Locale.ROOT);
         return "mqtts".equals(protocol) ? "mqtts" : "mqtt";
     }
 
     private static String normalizeTransportMode(String value) {
-        return "http".equals(clean(value).toLowerCase()) ? "http" : "mqtt";
+        return "http".equals(clean(value).toLowerCase(Locale.ROOT)) ? "http" : "mqtt";
     }
 
     private String defaultProtocolPrefix() {

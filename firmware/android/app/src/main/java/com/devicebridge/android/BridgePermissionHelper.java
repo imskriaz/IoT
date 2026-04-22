@@ -63,9 +63,7 @@ final class BridgePermissionHelper {
         List<PermissionItem> items = new ArrayList<>();
         items.add(buildItem(activity, Manifest.permission.READ_SMS, "SMS inbox"));
         items.add(buildItem(activity, Manifest.permission.READ_PHONE_STATE, "SIM state"));
-        if (Build.VERSION.SDK_INT >= 26) {
-            items.add(buildItem(activity, Manifest.permission.READ_PHONE_NUMBERS, "SIM numbers"));
-        }
+        items.add(buildItem(activity, Manifest.permission.READ_PHONE_NUMBERS, "SIM numbers"));
         return items;
     }
 
