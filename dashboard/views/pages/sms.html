@@ -1,4 +1,11 @@
 <!-- SMS Management -->
+<div class="sms-sync-overlay d-none" id="smsSyncOverlay" aria-live="polite" aria-busy="true">
+    <div class="sms-sync-card">
+        <div class="spinner-border text-primary mb-3" role="status" aria-hidden="true"></div>
+        <h5 class="mb-1">Device SMS Syncing</h5>
+        <p class="text-muted mb-0" id="smsSyncOverlayText">Please wait while messages are copied from the phone.</p>
+    </div>
+</div>
 <div class="sms-compact d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4 gap-3">
     <div>
         <h2 class="mb-1">
@@ -305,6 +312,24 @@
                 <div class="mb-3">
                     <label class="form-label">Send At</label>
                     <input type="datetime-local" class="form-control" id="schedSendAt">
+                </div>
+                <div class="border rounded mb-3 p-3 bg-light-subtle">
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+                        <div>
+                            <h6 class="fw-semibold mb-1"><i class="bi bi-file-earmark-spreadsheet me-1"></i>Bulk Excel Template</h6>
+                            <div class="small text-muted">Upload CSV exported from Excel with columns: phone, message, send_at, sim_slot.</div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="downloadSmsScheduleTemplate()">
+                            <i class="bi bi-download me-1"></i>Template
+                        </button>
+                    </div>
+                    <div class="input-group input-group-sm">
+                        <input type="file" class="form-control" id="schedImportFile" accept=".csv,.tsv,text/csv,text/plain">
+                        <button type="button" class="btn btn-outline-primary" id="schedImportBtn" onclick="importScheduledSmsTemplate()">
+                            <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                            <i class="bi bi-upload me-1"></i>Upload
+                        </button>
+                    </div>
                 </div>
                 <div class="border rounded">
                     <div class="d-flex justify-content-between align-items-center px-3 py-2 border-bottom bg-light">
@@ -777,6 +802,57 @@ async function createScheduledSms() {
     }
 }
 
+function downloadSmsScheduleTemplate() {
+    const now = new Date(Date.now() + 60 * 60 * 1000);
+    const sendAt = now.toISOString().slice(0, 16);
+    const csv = [
+        'phone,message,send_at,sim_slot',
+        `+8801700000000,"Test scheduled SMS",${sendAt},0`
+    ].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'sms-schedule-template.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+}
+
+async function importScheduledSmsTemplate() {
+    const input = document.getElementById('schedImportFile');
+    const button = document.getElementById('schedImportBtn');
+    const spinner = button?.querySelector('.spinner-border');
+    const file = input?.files?.[0];
+    const deviceId = smsPageActiveDeviceId();
+    if (!deviceId) { showToast('Select a device first.', 'warning'); return; }
+    if (!file) { showToast('Choose a CSV template first.', 'warning'); return; }
+    const formData = new FormData();
+    formData.append('file', file);
+    if (button) button.disabled = true;
+    if (spinner) spinner.classList.remove('d-none');
+    try {
+        const res = await fetch(buildSmsPageRequestUrl('/api/sms/scheduled/import'), {
+            method: 'POST',
+            body: formData
+        });
+        const data = await res.json();
+        if (data.success) {
+            const skipped = Array.isArray(data.errors) && data.errors.length ? ` (${data.errors.length} skipped)` : '';
+            showToast(`${data.count || 0} SMS scheduled from template${skipped}`, 'success');
+            input.value = '';
+            loadScheduledSms();
+        } else {
+            showToast(data.message || 'Failed to import template', 'danger');
+        }
+    } catch (_) { showToast('Network error', 'danger'); }
+    finally {
+        if (spinner) spinner.classList.add('d-none');
+        if (button) button.disabled = false;
+    }
+}
+
 async function cancelScheduledSms(id) {
     if (!confirm('Cancel this scheduled SMS?')) return;
     try {
@@ -1068,6 +1144,26 @@ document.addEventListener('DOMContentLoaded', function() {
 </div>
 
 <style>
+.sms-sync-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2055;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(4px);
+}
+
+.sms-sync-card {
+    width: min(92vw, 24rem);
+    padding: 1.5rem;
+    border-radius: 1.25rem;
+    background: var(--bs-body-bg);
+    box-shadow: 0 1.25rem 3rem rgba(15, 23, 42, 0.25);
+    text-align: center;
+}
+
 .sms-compact .card-body,
 .sms-compact .card-header {
     padding-top: 0.55rem !important;

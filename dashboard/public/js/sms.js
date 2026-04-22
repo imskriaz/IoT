@@ -6,6 +6,9 @@
     let contacts = [];
     let pageCtrl = null;
     let liveSmsHandler = null;
+    let smsSyncStartedHandler = null;
+    let smsSyncCompletedHandler = null;
+    let smsSyncHideTimer = null;
     let refreshTimer = null;
     let threadRefreshTimer = null;
     let smsRefreshToken = 0;
@@ -72,6 +75,35 @@
         }
 
         return Number(payloadSimSlot) === Number(activeSimSlot);
+    }
+
+    function setSmsSyncOverlay(visible, payload = {}) {
+        const overlay = document.getElementById('smsSyncOverlay');
+        if (!overlay) return;
+        const text = document.getElementById('smsSyncOverlayText');
+        if (smsSyncHideTimer) {
+            clearTimeout(smsSyncHideTimer);
+            smsSyncHideTimer = null;
+        }
+        if (visible) {
+            const total = Number(payload.total || 0);
+            overlay.classList.remove('d-none');
+            if (text) {
+                text.textContent = total > 0
+                    ? `Syncing ${total} message${total === 1 ? '' : 's'} from the phone. Dashboard updates will resume after completion.`
+                    : 'Please wait while messages are copied from the phone.';
+            }
+            return;
+        }
+        if (text) {
+            const synced = Number(payload.synced || 0);
+            text.textContent = synced > 0
+                ? `Sync complete. ${synced} message${synced === 1 ? '' : 's'} copied.`
+                : 'Sync complete. Refreshing dashboard.';
+        }
+        smsSyncHideTimer = setTimeout(function () {
+            overlay.classList.add('d-none');
+        }, 700);
     }
 
     function buildSmsRequestUrl(url, options = {}) {
@@ -578,10 +610,25 @@
             window.socket.off('sms:bulk-read', liveSmsHandler);
             window.socket.off('sms:bulk-deleted', liveSmsHandler);
         }
+        if (smsSyncStartedHandler && typeof window.socket.off === 'function') {
+            window.socket.off('sms:sync-started', smsSyncStartedHandler);
+            window.socket.off('sms:sync-completed', smsSyncCompletedHandler);
+        }
         liveSmsHandler = function (data) {
             if (!matchesSmsScope(data)) return;
+            if (data?.sync) return;
 
             scheduleSmsRefresh();
+            scheduleThreadRefresh(180);
+        };
+        smsSyncStartedHandler = function (data) {
+            if (!matchesSmsScope(data)) return;
+            setSmsSyncOverlay(true, data);
+        };
+        smsSyncCompletedHandler = function (data) {
+            if (!matchesSmsScope(data)) return;
+            setSmsSyncOverlay(false, data);
+            scheduleSmsRefresh(100);
             scheduleThreadRefresh(180);
         };
 
@@ -594,6 +641,8 @@
         window.socket.on('sms:deleted', liveSmsHandler);
         window.socket.on('sms:bulk-read', liveSmsHandler);
         window.socket.on('sms:bulk-deleted', liveSmsHandler);
+        window.socket.on('sms:sync-started', smsSyncStartedHandler);
+        window.socket.on('sms:sync-completed', smsSyncCompletedHandler);
         window.addEventListener('beforeunload', function cleanupLiveSms() {
             if (refreshTimer) clearTimeout(refreshTimer);
             window.socket?.off?.('sms:received', liveSmsHandler);
@@ -605,6 +654,8 @@
             window.socket?.off?.('sms:deleted', liveSmsHandler);
             window.socket?.off?.('sms:bulk-read', liveSmsHandler);
             window.socket?.off?.('sms:bulk-deleted', liveSmsHandler);
+            window.socket?.off?.('sms:sync-started', smsSyncStartedHandler);
+            window.socket?.off?.('sms:sync-completed', smsSyncCompletedHandler);
             window.removeEventListener('beforeunload', cleanupLiveSms);
         });
     }

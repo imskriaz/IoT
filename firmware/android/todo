@@ -1,4 +1,0 @@
-Onboard UI in must be like, 1st show scan options like QR or token entry, if done take to dashboard with connection sceen as now in app, after dashoard land, open menu to show battery optimisation disable (if not). 
-In Operation Console, keep all events including system and telemtry, ensure one event never get logged twice, In que only record user action like sending or receiveing
-Add Bottom Menu, Home will be current home, add another screen SMS, where close same to same ui as google messages ui add where user can read and write sms as threaded as google app. 
-Make app optimised and event driven so consume resousrse what actualy need and can run low level device also smoothly 

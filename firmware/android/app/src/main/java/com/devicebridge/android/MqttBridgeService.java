@@ -8,6 +8,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.media.AudioManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -80,6 +81,7 @@ public class MqttBridgeService extends Service {
     private static final int RECONNECT_DELAY_SECONDS = 15;
     private static final int STATUS_HEARTBEAT_INTERVAL_SECONDS = 45;
     private static final int HTTP_OUTSTANDING_POLL_INTERVAL_SECONDS = 15;
+    private static final String KEY_INITIAL_SMS_SYNC_PREFIX = "initial_sms_sync_done_";
     private static volatile MqttBridgeService activeService;
 
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
@@ -99,6 +101,7 @@ public class MqttBridgeService extends Service {
     private volatile long lastIncomingSyncAtMs;
     private volatile long lastSendAcceptedAtMs;
     private volatile PhoneStateListener callStateListener;
+    private volatile BroadcastReceiver phoneStateReceiver;
     private volatile int lastCallState = TelephonyManager.CALL_STATE_IDLE;
     private volatile String lastCallNumber = "";
     private volatile String pendingDialNumber = "";
@@ -115,6 +118,7 @@ public class MqttBridgeService extends Service {
         httpHandler = new BridgeHttpHandler(this, executor);
         hydrateRuntimeTelemetry();
         createNotificationChannel();
+        registerPhoneStateReceiver();
         registerCallStateListener();
         BridgeEventLog.append(this, "Device Bridge service created");
         BridgeRuntimeState.save(this, "idle", false, "Bridge not started");
@@ -124,6 +128,7 @@ public class MqttBridgeService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
         config = BridgeConfig.load(this);
+        registerPhoneStateReceiver();
         registerCallStateListener();
         if (ACTION_STOP.equals(action)) {
             BridgeEventLog.append(this, "Stop requested from service command");
@@ -191,6 +196,7 @@ public class MqttBridgeService extends Service {
         cancelReconnect();
         cancelStatusHeartbeat();
         cancelOutstandingPoll();
+        unregisterPhoneStateReceiver();
         unregisterCallStateListener();
         executor.execute(() -> {
             try {
@@ -340,6 +346,7 @@ public class MqttBridgeService extends Service {
             scheduleStatusHeartbeat();
             scheduleOutstandingPoll();
             updateRuntimeState("online", false, "HTTP bridge active via " + cfg.serverUrl);
+            syncExistingSmsToDashboardOnce();
             return;
         }
 
@@ -427,6 +434,7 @@ public class MqttBridgeService extends Service {
             updateBridgeNotification("Device Bridge online", "MQTT connected");
             updateRuntimeState("online", true, "Connected to " + cfg.brokerUri());
             flushPendingPublishes();
+            syncExistingSmsToDashboardOnce();
         } catch (MqttException error) {
             Log.e(TAG, "Subscribe failed", error);
             commandSubscriptionsReady = false;
@@ -526,7 +534,7 @@ public class MqttBridgeService extends Service {
             return;
         }
         logConsoleEvent("sms", "SMS accepted for " + number + " (" + result.partCount + " part)");
-        BridgeSmsStore.recordOutgoing(this, actionId, number, text, System.currentTimeMillis());
+        BridgeSmsStore.recordOutgoing(this, actionId, number, text, System.currentTimeMillis(), "dashboard_mqtt");
         lastSendAcceptedAtMs = System.currentTimeMillis();
         persistRuntimeTelemetry();
 
@@ -786,6 +794,12 @@ public class MqttBridgeService extends Service {
             return;
         }
 
+        if (Build.VERSION.SDK_INT < 28) {
+            logConsoleEvent("call", "End call rejected: Android version does not support telecom endCall");
+            publishActionResult(actionId, normalizedCommand, "failed", 2, "call_end_not_supported", null, 15000);
+            return;
+        }
+
         try {
             boolean ended = telecomManager.endCall();
             if (!ended) {
@@ -960,6 +974,82 @@ public class MqttBridgeService extends Service {
         publishJson(currentConfig().topic("sms/incoming"), json);
     }
 
+    private void syncExistingSmsToDashboardOnce() {
+        BridgeConfig cfg = currentConfig();
+        if (cfg == null || cfg.deviceId == null || cfg.deviceId.trim().isEmpty()) {
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        String key = KEY_INITIAL_SMS_SYNC_PREFIX + cfg.deviceId;
+        if (getSharedPreferences(BridgeConfig.PREFS, MODE_PRIVATE).getBoolean(key, false)) {
+            return;
+        }
+        List<java.util.Map<String, Object>> messages = BridgeSmsStore.buildRecentMessages(this, 240);
+        publishSmsSyncState("sms_sync_start", messages.size(), 0);
+        int synced = 0;
+        for (java.util.Map<String, Object> message : messages) {
+            if (publishSmsSyncRecord(message)) {
+                synced += 1;
+            }
+        }
+        publishSmsSyncState("sms_sync_complete", messages.size(), synced);
+        getSharedPreferences(BridgeConfig.PREFS, MODE_PRIVATE).edit().putBoolean(key, true).apply();
+        logConsoleEvent("sms", "Initial SMS sync published " + synced + " message(s)");
+    }
+
+    private void publishSmsSyncState(String type, int total, int synced) {
+        JSONObject json = new JSONObject();
+        try {
+            json.put("type", type);
+            json.put("sync", true);
+            json.put("device_id", currentConfig().deviceId);
+            json.put("total", Math.max(0, total));
+            json.put("synced", Math.max(0, synced));
+            json.put("timestamp", System.currentTimeMillis());
+        } catch (JSONException ignored) {
+        }
+        if (currentConfig().usesHttpTransport()) {
+            postHttpIncomingSms(json);
+        } else {
+            publishJson(currentConfig().topic("sms/incoming"), json);
+        }
+    }
+
+    private boolean publishSmsSyncRecord(java.util.Map<String, Object> message) {
+        if (message == null) return false;
+        String address = objectString(message.get("address"));
+        String body = objectString(message.get("body"));
+        if (address.isEmpty() || body.isEmpty()) return false;
+        boolean outgoing = Boolean.TRUE.equals(message.get("outgoing"));
+        JSONObject json = new JSONObject();
+        try {
+            json.put("type", "sms_sync");
+            json.put("sync", true);
+            json.put("device_id", currentConfig().deviceId);
+            json.put("direction", outgoing ? "outgoing" : "incoming");
+            json.put("outgoing", outgoing);
+            json.put("from", outgoing ? "" : address);
+            json.put("to", outgoing ? address : "");
+            json.put("from_number", outgoing ? "" : address);
+            json.put("to_number", outgoing ? address : "");
+            json.put("text", body);
+            json.put("content", body);
+            json.put("message", body);
+            json.put("timestamp", objectLong(message.get("timestamp"), System.currentTimeMillis()));
+            json.put("read", Boolean.TRUE.equals(message.get("read")) ? 1 : 0);
+            json.put("source", "android-initial-sync");
+        } catch (JSONException ignored) {
+        }
+        if (currentConfig().usesHttpTransport()) {
+            postHttpIncomingSms(json);
+        } else {
+            publishJson(currentConfig().topic("sms/incoming"), json);
+        }
+        return true;
+    }
+
     private void publishStatus(String state) {
         publishStatus(state, false);
     }
@@ -1011,6 +1101,50 @@ public class MqttBridgeService extends Service {
         callStateListener = null;
     }
 
+    private void registerPhoneStateReceiver() {
+        if (phoneStateReceiver != null || !hasPhoneStatePermission()) {
+            return;
+        }
+        IntentFilter filter = new IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED);
+        BroadcastReceiver receiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null) {
+                    return;
+                }
+                String state = firstNonEmpty(intent.getStringExtra(TelephonyManager.EXTRA_STATE), "");
+                String incomingNumber = firstNonEmpty(intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER), "");
+                if (!TelephonyManager.EXTRA_STATE_RINGING.equals(state) || incomingNumber.isEmpty()) {
+                    return;
+                }
+                executor.execute(() -> handleIncomingNumberHint(incomingNumber));
+            }
+        };
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED);
+            } else {
+                registerReceiver(receiver, filter);
+            }
+            phoneStateReceiver = receiver;
+            BridgeEventLog.append(this, "Phone state receiver registered");
+        } catch (RuntimeException ignored) {
+            phoneStateReceiver = null;
+        }
+    }
+
+    private void unregisterPhoneStateReceiver() {
+        BroadcastReceiver receiver = phoneStateReceiver;
+        if (receiver == null) {
+            return;
+        }
+        try {
+            unregisterReceiver(receiver);
+        } catch (RuntimeException ignored) {
+        }
+        phoneStateReceiver = null;
+    }
+
     private void handleCallStateChanged(int state, String phoneNumber) {
         String resolvedNumber = firstNonEmpty(phoneNumber, lastCallNumber, pendingDialNumber);
         int previousState = lastCallState;
@@ -1020,6 +1154,9 @@ public class MqttBridgeService extends Service {
         }
 
         if (state == TelephonyManager.CALL_STATE_RINGING) {
+            if (resolvedNumber.isEmpty() && !hasCallLogPermission()) {
+                logConsoleEvent("call", "Incoming call detected but caller ID is unavailable: grant Incoming caller ID permission");
+            }
             recordLocalCallState("ringing", "incoming", resolvedNumber);
             publishIncomingCall(resolvedNumber);
             publishCallStatus("ringing", resolvedNumber, "incoming");
@@ -1555,7 +1692,7 @@ public class MqttBridgeService extends Service {
     }
 
     SmsSender.SendResult sendHttpOutstandingMessage(BridgeHttpClient.OutstandingMessage message) {
-        return SmsSender.send(
+        SmsSender.SendResult result = SmsSender.send(
                 this,
                 message.id,
                 message.to,
@@ -1564,6 +1701,10 @@ public class MqttBridgeService extends Service {
                 message.simSlot,
                 message.subscriptionId
         );
+        if (result.accepted) {
+            BridgeSmsStore.recordOutgoing(this, message.id, message.to, message.content, System.currentTimeMillis(), "dashboard_http");
+        }
+        return result;
     }
 
     private String commandFromTopic(String topic) {
@@ -1591,6 +1732,35 @@ public class MqttBridgeService extends Service {
             }
         }
         return "";
+    }
+
+    private static String objectString(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private static long objectLong(Object value, long fallback) {
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        try {
+            return Long.parseLong(objectString(value));
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private void handleIncomingNumberHint(String phoneNumber) {
+        String normalizedNumber = phoneNumber == null ? "" : phoneNumber.trim();
+        if (normalizedNumber.isEmpty()) {
+            return;
+        }
+        boolean changed = !samePhoneNumber(lastCallNumber, normalizedNumber);
+        lastCallNumber = normalizedNumber;
+        if (lastCallState == TelephonyManager.CALL_STATE_RINGING && changed) {
+            recordLocalCallState("ringing", "incoming", normalizedNumber);
+            publishIncomingCall(normalizedNumber);
+            publishCallStatus("ringing", normalizedNumber, "incoming");
+        }
     }
 
     private static Integer firstInteger(Integer... values) {
@@ -1787,6 +1957,25 @@ public class MqttBridgeService extends Service {
 
     private boolean hasPhoneStatePermission() {
         return checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean hasCallLogPermission() {
+        return checkSelfPermission(Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private static boolean samePhoneNumber(String left, String right) {
+        return normalizePhoneNumber(left).equals(normalizePhoneNumber(right));
+    }
+
+    private static String normalizePhoneNumber(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "";
+        }
+        String normalized = value.replaceAll("[^0-9+]", "");
+        if (normalized.startsWith("00")) {
+            normalized = "+" + normalized.substring(2);
+        }
+        return normalized;
     }
 
     private boolean hasPhoneNumbersPermission() {

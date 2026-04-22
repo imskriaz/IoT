@@ -40,6 +40,12 @@ android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
+firmware/android/.gradle/
+firmware/android/build/
+firmware/android/app/build/
+firmware/android/local.properties
+firmware/android/flutter_ui/.dart_tool/
+firmware/android/flutter_ui/.android/Flutter/build/
 *.bin
 *.elf
 *.map

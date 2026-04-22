@@ -48,6 +48,7 @@ final class BridgePermissionHelper {
         items.add(buildItem(activity, Manifest.permission.CALL_PHONE, "Call and USSD"));
         items.add(buildItem(activity, Manifest.permission.ANSWER_PHONE_CALLS, "Call controls"));
         items.add(buildItem(activity, Manifest.permission.READ_PHONE_STATE, "Phone state"));
+        items.add(buildItem(activity, Manifest.permission.READ_CALL_LOG, "Incoming caller ID"));
         items.add(buildItem(activity, Manifest.permission.READ_PHONE_NUMBERS, "Phone numbers"));
         return items;
     }
@@ -61,6 +62,10 @@ final class BridgePermissionHelper {
     static List<PermissionItem> collectSmsInboxFeature(Activity activity) {
         List<PermissionItem> items = new ArrayList<>();
         items.add(buildItem(activity, Manifest.permission.READ_SMS, "SMS inbox"));
+        items.add(buildItem(activity, Manifest.permission.READ_PHONE_STATE, "SIM state"));
+        if (Build.VERSION.SDK_INT >= 26) {
+            items.add(buildItem(activity, Manifest.permission.READ_PHONE_NUMBERS, "SIM numbers"));
+        }
         return items;
     }
 
@@ -224,6 +229,9 @@ final class BridgePermissionHelper {
         }
         if (Manifest.permission.READ_PHONE_STATE.equals(permission)) {
             return "Read SIM, network, signal, and phone state for device health.";
+        }
+        if (Manifest.permission.READ_CALL_LOG.equals(permission)) {
+            return "Expose incoming caller numbers to the app during live calls.";
         }
         if (Manifest.permission.READ_PHONE_NUMBERS.equals(permission)) {
             return "Show SIM line numbers when Android exposes them.";

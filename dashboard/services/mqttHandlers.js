@@ -1167,10 +1167,27 @@ class MQTTHandlers {
 
         this.mqttService.on('sms:incoming', async (deviceId, data) => {
             if (this.isDeletedDevice(deviceId)) return;
+            const syncType = String(data?.type || '').trim().toLowerCase();
+            if (syncType === 'sms_sync_start' || syncType === 'sms_sync_complete') {
+                if (!await this.isRegisteredDevice(deviceId)) {
+                    await this.noteUnregisteredDevice(deviceId, syncType, data);
+                    return;
+                }
+                this.toDevice(deviceId, syncType === 'sms_sync_start' ? 'sms:sync-started' : 'sms:sync-completed', {
+                    deviceId,
+                    device_id: deviceId,
+                    total: Number(data?.total || 0),
+                    synced: Number(data?.synced || 0),
+                    timestamp: data?.timestamp || new Date().toISOString()
+                });
+                return;
+            }
             // Firmware may publish "text" (from mqtt_mgr) or "message" (from dashboard commands).
             // Accept both for compatibility.
             const message = data.message || data.text || '';
             const fromNumber = data.from || data.from_number || data.sender || '';
+            const isOutgoing = data.outgoing === true || String(data.direction || '').trim().toLowerCase() === 'outgoing';
+            const toNumber = data.to || data.to_number || '';
             logger.info(`📨 Incoming SMS from ${fromNumber}: ${message?.substring(0, 50)}...`);
 
             let emittedResponse = decodeUcs2Hex(String(data.response || '').trim()) || String(data.response || '');
@@ -1193,11 +1210,23 @@ class MQTTHandlers {
                     const smsTimestamp = normalizeSmsTimestamp(data.timestamp);
                     const decodedMessage = decodeUcs2Hex(message);
                     const decodedFrom = decodeUcs2Hex(fromNumber);
+                    const decodedTo = decodeUcs2Hex(toNumber);
                     const simScope = extractSimScope(data);
                     const result = await db.run(`
-                        INSERT OR IGNORE INTO sms (from_number, to_number, message, type, device_id, timestamp, read, sim_slot)
-                        VALUES (?, ?, ?, 'incoming', COALESCE(?, ''), ?, 0, ?)
-                    `, [decodedFrom, data.to || data.to_number || null, decodedMessage, deviceId, smsTimestamp, simScope.simSlot]);
+                        INSERT OR IGNORE INTO sms (from_number, to_number, message, type, status, device_id, timestamp, read, source, sim_slot)
+                        VALUES (?, ?, ?, ?, ?, COALESCE(?, ''), ?, ?, ?, ?)
+                    `, [
+                        isOutgoing ? null : decodedFrom,
+                        isOutgoing ? decodedTo : (decodedTo || null),
+                        decodedMessage,
+                        isOutgoing ? 'outgoing' : 'incoming',
+                        isOutgoing ? 'sent' : 'received',
+                        deviceId,
+                        smsTimestamp,
+                        isOutgoing ? 1 : 0,
+                        data.sync ? 'android-mqtt-sync' : 'android-mqtt',
+                        simScope.simSlot
+                    ]);
 
                     logger.info(`✅ Saved incoming SMS from ${decodedFrom} (ID: ${result.lastID})`);
 
@@ -1210,20 +1239,22 @@ class MQTTHandlers {
                     await attachSmsToConversation(db, {
                         id: result.lastID,
                         device_id: deviceId,
-                        from_number: decodedFrom,
-                        to_number: data.to || data.to_number || null,
-                        type: 'incoming'
+                        from_number: isOutgoing ? null : decodedFrom,
+                        to_number: isOutgoing ? decodedTo : (decodedTo || null),
+                        type: isOutgoing ? 'outgoing' : 'incoming'
                     });
 
-                    await this.reconcileOutgoingSmsFromIncoming(deviceId, {
-                        from: decodedFrom,
-                        message: decodedMessage,
-                        timestamp: smsTimestamp,
-                        simSlot: simScope.simSlot
-                    });
+                    if (!isOutgoing) {
+                        await this.reconcileOutgoingSmsFromIncoming(deviceId, {
+                            from: decodedFrom,
+                            message: decodedMessage,
+                            timestamp: smsTimestamp,
+                            simSlot: simScope.simSlot
+                        });
+                    }
 
                     // Update in-memory unread count for this device.
-                    smsCache.increment(deviceId);
+                    if (!isOutgoing) smsCache.increment(deviceId);
 
                     // Seed cache from DB if not yet initialised.
                     if (smsCache.get(deviceId) === null) {
@@ -1236,9 +1267,10 @@ class MQTTHandlers {
 
                     this.toDevice(deviceId, 'sms:received', {
                         deviceId,
-                        from: decodedFrom,
-                        from_number: decodedFrom,
-                        to_number: data.to || data.to_number || null,
+                        sync: Boolean(data.sync),
+                        from: isOutgoing ? null : decodedFrom,
+                        from_number: isOutgoing ? null : decodedFrom,
+                        to_number: isOutgoing ? decodedTo : (decodedTo || null),
                         sim_slot: simScope.simSlot,
                         message: decodedMessage,
                         text: decodedMessage,
@@ -1247,24 +1279,26 @@ class MQTTHandlers {
                         timestamp: smsTimestamp
                     });
 
-                    // Fire notification + webhooks (non-blocking)
-                    notificationService.notifySms(fromNumber, decodedMessage).catch(() => {});
-                    pushNotificationService.notifyLinkedDevices(deviceId, {
-                        title: 'New SMS received',
-                        body: `From ${decodedFrom}: ${decodedMessage}`,
-                        data: {
-                            type: 'sms.incoming',
+                    if (!isOutgoing && !data.sync) {
+                        // Fire notification + webhooks (non-blocking)
+                        notificationService.notifySms(fromNumber, decodedMessage).catch(() => {});
+                        pushNotificationService.notifyLinkedDevices(deviceId, {
+                            title: 'New SMS received',
+                            body: `From ${decodedFrom}: ${decodedMessage}`,
+                            data: {
+                                type: 'sms.incoming',
+                                deviceId,
+                                from: decodedFrom
+                            }
+                        }).catch(() => {});
+                        this.fireEvent('sms.incoming', deviceId, {
                             deviceId,
-                            from: decodedFrom
-                        }
-                    }).catch(() => {});
-                    this.fireEvent('sms.incoming', deviceId, {
-                        deviceId,
-                        from: decodedFrom,
-                        message: decodedMessage,
-                        text: decodedMessage,
-                        timestamp: smsTimestamp
-                    });
+                            from: decodedFrom,
+                            message: decodedMessage,
+                            text: decodedMessage,
+                            timestamp: smsTimestamp
+                        });
+                    }
                 }
             } catch (error) {
                 logger.error('❌ Error saving incoming SMS:', error);
@@ -2085,3 +2119,4 @@ class MQTTHandlers {
 }
 
 module.exports = MQTTHandlers;
+module.exports.updateLatestActiveCall = updateLatestActiveCall;

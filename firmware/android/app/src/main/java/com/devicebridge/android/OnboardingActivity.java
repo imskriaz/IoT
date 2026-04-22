@@ -10,7 +10,7 @@ public class OnboardingActivity extends Activity {
         super.onCreate(savedInstanceState);
         BridgeEventLog.append(this, "Onboarding redirect opened");
 
-        Intent next = new Intent(this, FlutterHomeActivity.class);
+        Intent next = new Intent(this, HomeActivity.class);
         next.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
 
         String inboundToken = BridgeProvisioning.extractSetupToken(getIntent());

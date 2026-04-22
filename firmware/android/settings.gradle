@@ -16,6 +16,3 @@ dependencyResolutionManagement {
 
 rootProject.name = 'IoTAndroidBridge'
 include ':app'
-
-setBinding(new Binding([gradle: this]))
-evaluate(new File(settingsDir, 'flutter_ui/.android/include_flutter.groovy'))

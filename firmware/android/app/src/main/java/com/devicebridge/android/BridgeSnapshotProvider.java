@@ -23,6 +23,9 @@ import java.util.Locale;
 import java.util.Map;
 
 final class BridgeSnapshotProvider {
+    private static final long ACTION_DEDUPE_WINDOW_MS = 2L * 60L * 1000L;
+    private static final long MESSAGE_DEDUPE_WINDOW_MS = 5_000L;
+
     private BridgeSnapshotProvider() {
     }
 
@@ -86,6 +89,7 @@ final class BridgeSnapshotProvider {
             return entries;
         }
         String[] lines = current.split("\\n");
+        Map<String, Long> recentEntries = new HashMap<>();
         for (String line : lines) {
             String raw = line == null ? "" : line.trim();
             if (raw.isEmpty()) {
@@ -98,6 +102,21 @@ final class BridgeSnapshotProvider {
                     ? raw.substring(21).trim()
                     : raw;
             ConsoleMessageParts parts = parseConsoleMessage(message);
+            long lineTimestampMs = timestampMillis(timestamp);
+            String semanticKey = semanticConsoleKey(message, parts);
+            if (!semanticKey.isEmpty()) {
+                Long previousSeenAt = recentEntries.get(semanticKey);
+                long dedupeWindowMs = semanticKey.startsWith("action:")
+                        ? ACTION_DEDUPE_WINDOW_MS
+                        : MESSAGE_DEDUPE_WINDOW_MS;
+                if (previousSeenAt != null
+                        && previousSeenAt > 0L
+                        && lineTimestampMs > 0L
+                        && (lineTimestampMs - previousSeenAt) <= dedupeWindowMs) {
+                    continue;
+                }
+                recentEntries.put(semanticKey, lineTimestampMs);
+            }
             String level = inferConsoleLevel(parts);
             String type = inferConsoleType(parts);
             Map<String, Object> entry = new HashMap<>();
@@ -121,6 +140,47 @@ final class BridgeSnapshotProvider {
             entries.add(0, entry);
         }
         return entries;
+    }
+
+    private static long timestampMillis(String timestamp) {
+        if (timestamp == null || timestamp.trim().isEmpty()) {
+            return 0L;
+        }
+        try {
+            java.util.Date parsed = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+                    .parse(timestamp.trim());
+            return parsed == null ? 0L : parsed.getTime();
+        } catch (Exception ignored) {
+            return 0L;
+        }
+    }
+
+    private static String semanticConsoleKey(String message, ConsoleMessageParts parts) {
+        String actionId = extractActionId(message);
+        if (!actionId.isEmpty()) {
+            return "action:" + actionId;
+        }
+        if (parts == null) {
+            return "";
+        }
+        return (parts.source + "|" + parts.summary + "|" + parts.detail)
+                .trim()
+                .replaceAll("\\s+", " ")
+                .toLowerCase(Locale.US);
+    }
+
+    private static String extractActionId(String message) {
+        if (message == null || message.trim().isEmpty()) {
+            return "";
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
+                        "(?:^|[\\s,{])(?:action_id|messageId)[\"\\s:=]+([A-Za-z0-9._:-]+)",
+                        java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(message);
+        if (matcher.find()) {
+            return stringValue(matcher.group(1)).trim();
+        }
+        return "";
     }
 
     private static List<Map<String, Object>> buildModules(
@@ -915,6 +975,8 @@ final class BridgeSnapshotProvider {
         try {
             String value = telephony.getLine1Number();
             return value == null ? "" : value.trim();
+        } catch (SecurityException ignored) {
+            return "";
         } catch (RuntimeException ignored) {
             return "";
         }

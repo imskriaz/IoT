@@ -20,16 +20,25 @@ $env:JAVA_HOME="D:\Dev\Java\jdk-21.0.10+7"
 $env:ANDROID_HOME="D:\Dev\Android\Sdk"
 $env:ANDROID_SDK_ROOT="D:\Dev\Android\Sdk"
 $env:Path="D:\Dev\Java\jdk-21.0.10+7\bin;D:\Dev\Gradle\gradle-9.4.1\bin;D:\Dev\Android\Sdk\cmdline-tools\latest\bin;D:\Dev\Android\Sdk\platform-tools;$env:Path"
-gradle :app:assembleDebug
+.\gradlew.bat :app:assembleRelease
 ```
 
 Install to a real phone:
 
 ```powershell
-adb install -r .\app\build\outputs\apk\debug\app-debug.apk
+.\install-apk.ps1
 ```
 
-Run those commands from `firmware/android`. Then open the app, verify the env-backed MQTT settings, request SMS permissions, and start the bridge.
+Run those commands from `firmware/android`. The default installer builds the signed release APK, chooses the APK matching the connected phone CPU ABI, and prints a clear diagnostic if `adb` sees no device, an `offline` device, or an `unauthorized` device.
+
+Useful install options:
+
+```powershell
+.\install-apk.ps1 -Serial <adb-serial>
+.\install-apk.ps1 -Clean
+```
+
+Use `-Clean` only when Android reports a signature mismatch from a previously installed APK; it uninstalls `com.devicebridge.android` before reinstalling. Then open the app, verify the env-backed MQTT settings, request SMS permissions, and start the bridge.
 
 Related docs:
 

@@ -5,6 +5,8 @@ import android.content.Intent;
 import android.os.Bundle;
 
 public class MainActivity extends Activity {
+    private boolean launchedNext;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -12,16 +14,25 @@ public class MainActivity extends Activity {
     }
 
     @Override
-    protected void onResume() {
-        super.onResume();
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        launchedNext = false;
         launchNext();
     }
 
     private void launchNext() {
-        if (BridgeAppGate.routeFromStartup(this)) {
+        if (launchedNext || isFinishing()) {
             return;
         }
-        startActivity(new Intent(this, FlutterHomeActivity.class));
+        launchedNext = true;
+        if (BridgeAppGate.routeFromStartup(this)) {
+            launchedNext = false;
+            return;
+        }
+        Intent intent = new Intent(this, HomeActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        startActivity(intent);
         finish();
     }
 }

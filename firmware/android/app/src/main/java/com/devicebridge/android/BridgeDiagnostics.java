@@ -116,6 +116,7 @@ final class BridgeDiagnostics {
         builder.append("Device Bridge Support Bundle")
                 .append("\nReadiness Score: ").append(readinessScore(context)).append("/100")
                 .append("\nReadiness Label: ").append(readinessLabel(context))
+                .append("\nSession Log Path: ").append(BridgeSessionLog.path(context))
                 .append("\n\nHealth Pulse\n")
                 .append(buildHealthPulse(context))
                 .append("\n\nPermission Watchdog\n")
@@ -125,7 +126,9 @@ final class BridgeDiagnostics {
                 .append("\n\nStatus Snapshot\n")
                 .append(buildStatusSummary(context, null))
                 .append("\n\nRecent Event Log\n")
-                .append(recentLog(context, 40));
+                .append(recentLog(context, 40))
+                .append("\n\nSession Log Tail\n")
+                .append(BridgeSessionLog.readTail(context, 80));
         return builder.toString();
     }
 

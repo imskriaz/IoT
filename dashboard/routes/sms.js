@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
+const multer = require('multer');
 const logger = require('../utils/logger');
 const {
     formatPhoneNumber,
@@ -30,6 +31,10 @@ const {
 } = require('../utils/simScope');
 
 const smsRateLimit = createRateLimiter({ windowMs: 60000, max: 10, message: 'SMS rate limit exceeded. Max 10 per minute.' });
+const scheduleImportUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }
+});
 
 function isValidNumericId(id) {
     return /^[0-9]+$/.test(String(id));
@@ -80,6 +85,75 @@ function normalizeSmsRecipients(value) {
     });
 
     return { recipients, invalid };
+}
+
+function parseDelimitedLine(line) {
+    const cells = [];
+    let current = '';
+    let quoted = false;
+    const raw = String(line || '');
+    for (let i = 0; i < raw.length; i += 1) {
+        const ch = raw[i];
+        if (ch === '"') {
+            if (quoted && raw[i + 1] === '"') {
+                current += '"';
+                i += 1;
+            } else {
+                quoted = !quoted;
+            }
+        } else if ((ch === ',' || ch === '\t') && !quoted) {
+            cells.push(current.trim());
+            current = '';
+        } else {
+            current += ch;
+        }
+    }
+    cells.push(current.trim());
+    return cells;
+}
+
+function csvColumnIndex(columns, names) {
+    const allowed = new Set(names.map((name) => String(name).trim().toLowerCase()));
+    return columns.findIndex((column) => allowed.has(String(column || '').trim().toLowerCase()));
+}
+
+function parseScheduleImport(buffer) {
+    const text = buffer.toString('utf8').replace(/^\uFEFF/, '');
+    const lines = text.split(/\r?\n/).filter((line) => line.trim());
+    if (!lines.length) return { rows: [], errors: ['Template is empty'] };
+    const columns = parseDelimitedLine(lines[0]);
+    const phoneIndex = csvColumnIndex(columns, ['phone', 'number', 'to', 'recipient']);
+    const messageIndex = csvColumnIndex(columns, ['message', 'body', 'text']);
+    const sendAtIndex = csvColumnIndex(columns, ['send_at', 'send at', 'schedule_at', 'scheduled_at']);
+    const simIndex = csvColumnIndex(columns, ['sim_slot', 'sim', 'sim slot']);
+    const errors = [];
+    if (phoneIndex < 0) errors.push('Missing phone column');
+    if (messageIndex < 0) errors.push('Missing message column');
+    if (sendAtIndex < 0) errors.push('Missing send_at column');
+    if (errors.length) return { rows: [], errors };
+
+    const rows = [];
+    for (let i = 1; i < lines.length; i += 1) {
+        const cells = parseDelimitedLine(lines[i]);
+        const phone = cells[phoneIndex] || '';
+        const message = cells[messageIndex] || '';
+        const sendAtRaw = cells[sendAtIndex] || '';
+        const sendAt = new Date(sendAtRaw);
+        const simRaw = simIndex >= 0 ? cells[simIndex] : '';
+        const simSlot = simRaw === '' || simRaw == null ? null : Number.parseInt(simRaw, 10);
+        if (!phone.trim() && !message.trim()) continue;
+        if (!phone.trim() || !message.trim() || !Number.isFinite(sendAt.getTime())) {
+            errors.push(`Row ${i + 1} is invalid`);
+            continue;
+        }
+        rows.push({
+            phone: phone.trim(),
+            message: message.trim(),
+            sendAt,
+            simSlot: Number.isFinite(simSlot) ? Math.max(0, simSlot > 0 && simSlot <= 2 ? simSlot - 1 : simSlot) : null
+        });
+    }
+    return { rows, errors };
 }
 
 async function getSmsTemplateById(db, id) {
@@ -1340,7 +1414,78 @@ router.post('/scheduled', [
     }
 });
 
-// DELETE /api/sms/scheduled/:id — cancel a pending scheduled SMS
+// POST /api/sms/scheduled/import - upload an Excel-compatible CSV/TSV schedule template
+router.post('/scheduled/import', scheduleImportUpload.single('file'), async (req, res) => {
+    try {
+        if (!req.file?.buffer) {
+            return res.status(400).json({ success: false, message: 'Upload a CSV template first' });
+        }
+        const originalName = String(req.file.originalname || '').toLowerCase();
+        if (originalName.endsWith('.xlsx') || originalName.endsWith('.xls')) {
+            return res.status(400).json({ success: false, message: 'Export the Excel template as CSV, then upload it here.' });
+        }
+        const parsed = parseScheduleImport(req.file.buffer);
+        if (parsed.errors.length && !parsed.rows.length) {
+            return res.status(400).json({ success: false, message: parsed.errors[0], errors: parsed.errors.slice(0, 20) });
+        }
+
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const db = req.app.locals.db;
+        const created = [];
+        const rowErrors = [...parsed.errors];
+        for (const row of parsed.rows) {
+            const { recipients, invalid } = normalizeSmsRecipients(row.phone);
+            if (!recipients.length || invalid.length) {
+                rowErrors.push(`Invalid phone number: ${row.phone}`);
+                continue;
+            }
+            if (row.sendAt <= new Date()) {
+                rowErrors.push(`Past send_at skipped for ${row.phone}`);
+                continue;
+            }
+            try {
+                validateSmsMessageSize(row.message);
+            } catch (error) {
+                rowErrors.push(`Message too large for ${row.phone}`);
+                continue;
+            }
+            for (const recipient of recipients) {
+                const result = await db.run(
+                    `INSERT INTO scheduled_sms (device_id, to_number, message, send_at, sim_slot, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+                    [deviceId, recipient, row.message, row.sendAt.toISOString(), row.simSlot, req.session?.user?.id || null]
+                );
+                const item = {
+                    id: result.lastID,
+                    deviceId,
+                    to_number: recipient,
+                    message: row.message,
+                    send_at: row.sendAt.toISOString(),
+                    sim_slot: row.simSlot,
+                    status: 'pending',
+                    created_by: req.session?.user?.username || null
+                };
+                created.push(item);
+                emitDeviceEvent(deviceId, 'sms:scheduled-created', item);
+            }
+        }
+
+        if (!created.length) {
+            return res.status(400).json({ success: false, message: rowErrors[0] || 'No valid schedule rows found', errors: rowErrors.slice(0, 20) });
+        }
+        res.json({
+            success: true,
+            count: created.length,
+            ids: created.map((item) => item.id),
+            errors: rowErrors.slice(0, 20),
+            message: `${created.length} SMS scheduled from template`
+        });
+    } catch (error) {
+        logger.error('API SMS scheduled import error:', error);
+        res.status(500).json({ success: false, message: 'Failed to import schedule template' });
+    }
+});
+
+// DELETE /api/sms/scheduled/:id - cancel a pending scheduled SMS
 router.delete('/scheduled/:id', async (req, res) => {
     try {
         const { id } = req.params;

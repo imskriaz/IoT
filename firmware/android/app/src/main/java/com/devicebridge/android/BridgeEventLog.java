@@ -81,10 +81,14 @@ final class BridgeEventLog {
                 bounded.append(retainedLines[i]);
             }
             prefs.edit().putString(KEY_LOG, bounded.toString()).apply();
+            BridgeSessionLog.append(context, "event", message.trim());
+            BridgeAppEvents.notifyStateChanged(context, "console");
             return;
         }
 
         prefs.edit().putString(KEY_LOG, trimmed.toString()).apply();
+        BridgeSessionLog.append(context, "event", message.trim());
+        BridgeAppEvents.notifyStateChanged(context, "console");
     }
 
     static String read(Context context) {
@@ -99,6 +103,8 @@ final class BridgeEventLog {
             return;
         }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(KEY_LOG).apply();
+        BridgeSessionLog.append(context, "event", "Console cleared");
+        BridgeAppEvents.notifyStateChanged(context, "console_cleared");
     }
 
     private static String timestamp() {

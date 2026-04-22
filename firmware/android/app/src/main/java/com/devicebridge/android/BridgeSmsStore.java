@@ -2,6 +2,7 @@ package com.devicebridge.android;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -30,6 +31,22 @@ final class BridgeSmsStore {
     private static final long LOCAL_RETENTION_MS = 14L * 24L * 60L * 60L * 1000L;
 
     private BridgeSmsStore() {
+    }
+
+    static final class SmsMutationResult {
+        final int providerChanged;
+        final int localChanged;
+        final boolean providerBlocked;
+
+        SmsMutationResult(int providerChanged, int localChanged, boolean providerBlocked) {
+            this.providerChanged = providerChanged;
+            this.localChanged = localChanged;
+            this.providerBlocked = providerBlocked;
+        }
+
+        int totalChanged() {
+            return providerChanged + localChanged;
+        }
     }
 
     static List<Map<String, Object>> buildThreadSummaries(Activity activity) {
@@ -96,13 +113,43 @@ final class BridgeSmsStore {
             item.put("read", record.read);
             item.put("status", record.status);
             item.put("localOnly", record.localOnly);
+            item.put("source", record.source);
+            item.put("actionId", record.id);
             messages.add(item);
         }
         messages.sort(Comparator.comparingLong(item -> longValue(item.get("timestamp"))));
         return messages;
     }
 
+    static List<Map<String, Object>> buildRecentMessages(Context context, int limit) {
+        List<SmsRecord> records = loadMergedMessages(context);
+        records.sort(Comparator.comparingLong(record -> record.timestamp));
+        int max = Math.max(1, limit);
+        int start = Math.max(0, records.size() - max);
+        List<Map<String, Object>> messages = new ArrayList<>();
+        for (int i = start; i < records.size(); i += 1) {
+            SmsRecord record = records.get(i);
+            Map<String, Object> item = new HashMap<>();
+            item.put("id", record.id);
+            item.put("threadKey", record.threadKey);
+            item.put("address", record.address);
+            item.put("body", record.body);
+            item.put("timestamp", record.timestamp);
+            item.put("outgoing", record.outgoing);
+            item.put("read", record.read);
+            item.put("status", record.status);
+            item.put("source", record.source);
+            item.put("localOnly", record.localOnly);
+            messages.add(item);
+        }
+        return messages;
+    }
+
     static void recordOutgoing(Context context, String actionId, String address, String body, long timestamp) {
+        recordOutgoing(context, actionId, address, body, timestamp, "local");
+    }
+
+    static void recordOutgoing(Context context, String actionId, String address, String body, long timestamp, String source) {
         if (context == null) {
             return;
         }
@@ -118,7 +165,8 @@ final class BridgeSmsStore {
                         true,
                         true,
                         "queued",
-                        true
+                        true,
+                        safe(source, "local")
                 )
         );
     }
@@ -139,14 +187,128 @@ final class BridgeSmsStore {
                         false,
                         false,
                         "received",
-                        true
+                        true,
+                        "device"
                 )
         );
     }
 
-    private static List<SmsRecord> loadMergedMessages(Activity activity) {
-        List<SmsRecord> providerRecords = loadProviderMessages(activity);
-        List<SmsRecord> localRecords = loadLocalMirror(activity);
+    static SmsMutationResult markThreadsRead(Activity activity, List<Map<String, Object>> threads) {
+        List<ThreadReference> refs = threadReferences(threads);
+        if (refs.isEmpty()) {
+            return new SmsMutationResult(0, 0, false);
+        }
+
+        int providerChanged = 0;
+        boolean providerBlocked = false;
+        if (activity != null) {
+            ContentValues values = new ContentValues();
+            values.put(Telephony.Sms.READ, 1);
+            for (ThreadReference ref : refs) {
+                try {
+                    if (!ref.threadId.isEmpty()) {
+                        providerChanged += activity.getContentResolver().update(
+                                Telephony.Sms.CONTENT_URI,
+                                values,
+                                Telephony.Sms.THREAD_ID + "=? AND " + Telephony.Sms.READ + "=0",
+                                new String[]{ref.threadId}
+                        );
+                    } else if (!ref.address.isEmpty()) {
+                        providerChanged += activity.getContentResolver().update(
+                                Telephony.Sms.CONTENT_URI,
+                                values,
+                                Telephony.Sms.ADDRESS + "=? AND " + Telephony.Sms.READ + "=0",
+                                new String[]{ref.address}
+                        );
+                    }
+                } catch (SecurityException error) {
+                    providerBlocked = true;
+                    BridgeEventLog.append(activity, "sms: mark read blocked by Android provider policy");
+                    break;
+                } catch (RuntimeException error) {
+                    BridgeEventLog.append(activity, "sms: mark read failed " + error.getMessage());
+                }
+            }
+        }
+
+        int localChanged = markLocalThreadsRead(activity, refs);
+        return new SmsMutationResult(providerChanged, localChanged, providerBlocked);
+    }
+
+    static SmsMutationResult deleteThreads(Activity activity, List<Map<String, Object>> threads) {
+        List<ThreadReference> refs = threadReferences(threads);
+        if (refs.isEmpty()) {
+            return new SmsMutationResult(0, 0, false);
+        }
+
+        int providerChanged = 0;
+        boolean providerBlocked = false;
+        if (activity != null) {
+            for (ThreadReference ref : refs) {
+                try {
+                    if (!ref.threadId.isEmpty()) {
+                        providerChanged += activity.getContentResolver().delete(
+                                Telephony.Sms.CONTENT_URI,
+                                Telephony.Sms.THREAD_ID + "=?",
+                                new String[]{ref.threadId}
+                        );
+                    } else if (!ref.address.isEmpty()) {
+                        providerChanged += activity.getContentResolver().delete(
+                                Telephony.Sms.CONTENT_URI,
+                                Telephony.Sms.ADDRESS + "=?",
+                                new String[]{ref.address}
+                        );
+                    }
+                } catch (SecurityException error) {
+                    providerBlocked = true;
+                    BridgeEventLog.append(activity, "sms: delete blocked by Android provider policy");
+                    break;
+                } catch (RuntimeException error) {
+                    BridgeEventLog.append(activity, "sms: delete failed " + error.getMessage());
+                }
+            }
+        }
+
+        int localChanged = deleteLocalThreads(activity, refs);
+        return new SmsMutationResult(providerChanged, localChanged, providerBlocked);
+    }
+
+    static SmsMutationResult deleteMessages(Activity activity, List<Map<String, Object>> messages) {
+        List<MessageReference> refs = messageReferences(messages);
+        if (refs.isEmpty()) {
+            return new SmsMutationResult(0, 0, false);
+        }
+
+        int providerChanged = 0;
+        boolean providerBlocked = false;
+        if (activity != null) {
+            for (MessageReference ref : refs) {
+                if (ref.localOnly || ref.id.isEmpty()) {
+                    continue;
+                }
+                try {
+                    providerChanged += activity.getContentResolver().delete(
+                            Telephony.Sms.CONTENT_URI,
+                            Telephony.Sms._ID + "=?",
+                            new String[]{ref.id}
+                    );
+                } catch (SecurityException error) {
+                    providerBlocked = true;
+                    BridgeEventLog.append(activity, "sms: message delete blocked by Android provider policy");
+                    break;
+                } catch (RuntimeException error) {
+                    BridgeEventLog.append(activity, "sms: message delete failed " + error.getMessage());
+                }
+            }
+        }
+
+        int localChanged = deleteLocalMessages(activity, refs);
+        return new SmsMutationResult(providerChanged, localChanged, providerBlocked);
+    }
+
+    private static List<SmsRecord> loadMergedMessages(Context context) {
+        List<SmsRecord> providerRecords = loadProviderMessages(context);
+        List<SmsRecord> localRecords = loadLocalMirror(context);
         if (localRecords.isEmpty()) {
             return providerRecords;
         }
@@ -179,7 +341,7 @@ final class BridgeSmsStore {
         return providerRecords;
     }
 
-    private static List<SmsRecord> loadProviderMessages(Activity activity) {
+    private static List<SmsRecord> loadProviderMessages(Context activity) {
         List<SmsRecord> records = new ArrayList<>();
         if (activity == null || activity.checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             return records;
@@ -237,7 +399,8 @@ final class BridgeSmsStore {
                         outgoing,
                         read,
                         statusForType(type),
-                        false
+                        false,
+                        "phone"
                 ));
                 count += 1;
             }
@@ -280,7 +443,8 @@ final class BridgeSmsStore {
                     item.optBoolean("outgoing", false),
                     item.optBoolean("read", false),
                     item.optString("status", ""),
-                    true
+                    true,
+                    item.optString("source", inferSource(item.optString("id", ""), item.optBoolean("outgoing", false)))
             ));
         }
 
@@ -288,6 +452,109 @@ final class BridgeSmsStore {
             prefs(context).edit().putString(KEY_LOCAL_SMS_MIRROR, retained.toString()).apply();
         }
         return records;
+    }
+
+    private static int markLocalThreadsRead(Context context, List<ThreadReference> refs) {
+        if (context == null || refs.isEmpty()) {
+            return 0;
+        }
+        JSONArray existing = parseArray(readMirrorValue(context));
+        JSONArray retained = new JSONArray();
+        int changed = 0;
+        for (int i = 0; i < existing.length(); i += 1) {
+            JSONObject item = existing.optJSONObject(i);
+            if (item == null) {
+                continue;
+            }
+            if (matchesThreadRef(item, refs) && !item.optBoolean("read", false)) {
+                try {
+                    item.put("read", true);
+                    changed += 1;
+                } catch (JSONException ignored) {
+                }
+            }
+            retained.put(item);
+        }
+        if (changed > 0) {
+            prefs(context).edit().putString(KEY_LOCAL_SMS_MIRROR, retained.toString()).apply();
+        }
+        return changed;
+    }
+
+    private static int deleteLocalThreads(Context context, List<ThreadReference> refs) {
+        if (context == null || refs.isEmpty()) {
+            return 0;
+        }
+        JSONArray existing = parseArray(readMirrorValue(context));
+        JSONArray retained = new JSONArray();
+        int changed = 0;
+        for (int i = 0; i < existing.length(); i += 1) {
+            JSONObject item = existing.optJSONObject(i);
+            if (item == null) {
+                continue;
+            }
+            if (matchesThreadRef(item, refs)) {
+                changed += 1;
+                continue;
+            }
+            retained.put(item);
+        }
+        if (changed > 0) {
+            prefs(context).edit().putString(KEY_LOCAL_SMS_MIRROR, retained.toString()).apply();
+        }
+        return changed;
+    }
+
+    private static int deleteLocalMessages(Context context, List<MessageReference> refs) {
+        if (context == null || refs.isEmpty()) {
+            return 0;
+        }
+        JSONArray existing = parseArray(readMirrorValue(context));
+        JSONArray retained = new JSONArray();
+        int changed = 0;
+        for (int i = 0; i < existing.length(); i += 1) {
+            JSONObject item = existing.optJSONObject(i);
+            if (item == null) {
+                continue;
+            }
+            if (matchesMessageRef(item, refs)) {
+                changed += 1;
+                continue;
+            }
+            retained.put(item);
+        }
+        if (changed > 0) {
+            prefs(context).edit().putString(KEY_LOCAL_SMS_MIRROR, retained.toString()).apply();
+        }
+        return changed;
+    }
+
+    private static boolean matchesThreadRef(JSONObject item, List<ThreadReference> refs) {
+        String itemThreadKey = item.optString("threadKey", "");
+        String itemAddress = normalizeAddress(item.optString("address", ""));
+        String itemAddressThread = buildAddressThreadKey(item.optString("address", ""));
+        for (ThreadReference ref : refs) {
+            if (!ref.threadKey.isEmpty() && ref.threadKey.equals(itemThreadKey)) {
+                return true;
+            }
+            if (!ref.threadKey.isEmpty() && ref.threadKey.equals(itemAddressThread)) {
+                return true;
+            }
+            if (!ref.normalizedAddress.isEmpty() && ref.normalizedAddress.equals(itemAddress)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean matchesMessageRef(JSONObject item, List<MessageReference> refs) {
+        String itemId = item.optString("id", "");
+        for (MessageReference ref : refs) {
+            if (!ref.id.isEmpty() && ref.id.equals(itemId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void appendLocalRecord(Context context, SmsRecord record) {
@@ -316,11 +583,12 @@ final class BridgeSmsStore {
                     item.optString("threadKey", buildAddressThreadKey(item.optString("address", ""))),
                     item.optString("address", ""),
                     item.optString("body", ""),
-                    timestamp,
-                    item.optBoolean("outgoing", false),
-                    item.optBoolean("read", false),
-                    item.optString("status", ""),
-                    true
+                        timestamp,
+                        item.optBoolean("outgoing", false),
+                        item.optBoolean("read", false),
+                        item.optString("status", ""),
+                        true,
+                        item.optString("source", inferSource(item.optString("id", ""), item.optBoolean("outgoing", false)))
             );
             if (dedupeFingerprint(current).equals(nextFingerprint)) {
                 return;
@@ -339,6 +607,7 @@ final class BridgeSmsStore {
             next.put("outgoing", record.outgoing);
             next.put("read", record.read);
             next.put("status", record.status);
+            next.put("source", record.source);
         } catch (JSONException ignored) {
         }
         retainedItems.add(next);
@@ -356,6 +625,52 @@ final class BridgeSmsStore {
         }
         String value = prefs(context).getString(KEY_LOCAL_SMS_MIRROR, "[]");
         return value == null || value.trim().isEmpty() ? "[]" : value;
+    }
+
+    private static List<ThreadReference> threadReferences(List<Map<String, Object>> threads) {
+        List<ThreadReference> refs = new ArrayList<>();
+        if (threads == null) {
+            return refs;
+        }
+        Set<String> seen = new HashSet<>();
+        for (Map<String, Object> thread : threads) {
+            if (thread == null) {
+                continue;
+            }
+            String threadKey = objectString(thread.get("threadKey")).trim();
+            String address = objectString(thread.get("address")).trim();
+            String id = "";
+            if (threadKey.startsWith("thread:")) {
+                id = threadKey.substring("thread:".length()).trim();
+            }
+            String dedupe = threadKey + "|" + normalizeAddress(address);
+            if (dedupe.trim().equals("|") || seen.contains(dedupe)) {
+                continue;
+            }
+            refs.add(new ThreadReference(threadKey, id, address, normalizeAddress(address)));
+            seen.add(dedupe);
+        }
+        return refs;
+    }
+
+    private static List<MessageReference> messageReferences(List<Map<String, Object>> messages) {
+        List<MessageReference> refs = new ArrayList<>();
+        if (messages == null) {
+            return refs;
+        }
+        Set<String> seen = new HashSet<>();
+        for (Map<String, Object> message : messages) {
+            if (message == null) {
+                continue;
+            }
+            String id = objectString(message.get("id")).trim();
+            if (id.isEmpty() || seen.contains(id)) {
+                continue;
+            }
+            refs.add(new MessageReference(id, boolValue(message.get("localOnly"))));
+            seen.add(id);
+        }
+        return refs;
     }
 
     private static SharedPreferences prefs(Context context) {
@@ -475,6 +790,34 @@ final class BridgeSmsStore {
         return value == null ? fallback : value;
     }
 
+    private static String inferSource(String id, boolean outgoing) {
+        String clean = safe(id, "").toLowerCase(Locale.US);
+        if (!outgoing) {
+            return "device";
+        }
+        if (clean.startsWith("local_compose_")) {
+            return "local";
+        }
+        if (clean.startsWith("http") || clean.contains("http")) {
+            return "dashboard_http";
+        }
+        return "dashboard";
+    }
+
+    private static boolean boolValue(Object value) {
+        if (value instanceof Boolean) {
+            return (Boolean) value;
+        }
+        if (value instanceof String) {
+            return Boolean.parseBoolean(((String) value).trim());
+        }
+        return false;
+    }
+
+    private static String objectString(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
     private static final class ThreadBucket {
         final String threadKey;
         final String address;
@@ -502,6 +845,7 @@ final class BridgeSmsStore {
         final boolean read;
         final String status;
         final boolean localOnly;
+        final String source;
 
         SmsRecord(
                 String id,
@@ -513,7 +857,8 @@ final class BridgeSmsStore {
                 boolean outgoing,
                 boolean read,
                 String status,
-                boolean localOnly
+                boolean localOnly,
+                String source
         ) {
             this.id = id == null ? "" : id;
             this.threadId = threadId == null ? "" : threadId;
@@ -525,6 +870,7 @@ final class BridgeSmsStore {
             this.read = read;
             this.status = status == null ? "" : status;
             this.localOnly = localOnly;
+            this.source = source == null || source.trim().isEmpty() ? "phone" : source;
         }
 
         SmsRecord withThreadKey(String nextThreadKey) {
@@ -538,8 +884,33 @@ final class BridgeSmsStore {
                     outgoing,
                     read,
                     status,
-                    localOnly
+                    localOnly,
+                    source
             );
+        }
+    }
+
+    private static final class ThreadReference {
+        final String threadKey;
+        final String threadId;
+        final String address;
+        final String normalizedAddress;
+
+        ThreadReference(String threadKey, String threadId, String address, String normalizedAddress) {
+            this.threadKey = threadKey == null ? "" : threadKey;
+            this.threadId = threadId == null ? "" : threadId;
+            this.address = address == null ? "" : address;
+            this.normalizedAddress = normalizedAddress == null ? "" : normalizedAddress;
+        }
+    }
+
+    private static final class MessageReference {
+        final String id;
+        final boolean localOnly;
+
+        MessageReference(String id, boolean localOnly) {
+            this.id = id == null ? "" : id;
+            this.localOnly = localOnly;
         }
     }
 }

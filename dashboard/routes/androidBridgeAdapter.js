@@ -4,12 +4,16 @@ const express = require('express');
 const router = express.Router();
 const logger = require('../utils/logger');
 const { attachSmsToConversation } = require('../services/smsConversations');
+const { formatPhoneNumber } = require('../utils/phoneNumber');
 const { syncDeviceSimInventory } = require('../services/simInventoryService');
+const { updateLatestActiveCall } = require('../services/mqttHandlers');
 const { extractSimScope } = require('../utils/simScope');
 const {
     isRegisteredDevice,
     noteUnregisteredDevice
 } = require('../utils/unregisteredDevices');
+
+const lastCallSnapshotKeyByDevice = new Map();
 
 function clean(value) {
     return String(value || '').trim();
@@ -45,6 +49,44 @@ function emitDevice(deviceId, eventName, payload) {
     const room = global.io.to?.(`device:${deviceId}`);
     if (room?.emit) room.emit(eventName, payload);
     else global.io.emit?.(eventName, payload);
+}
+
+function extractCallStatusPayload(payload = {}) {
+    const nested = payload.call && typeof payload.call === 'object' ? payload.call : {};
+    const status = clean(nested.status || payload.call_status).toLowerCase();
+    if (!status) {
+        return null;
+    }
+
+    const direction = clean(nested.direction || payload.call_direction).toLowerCase();
+    const number = formatPhoneNumber(nested.number || payload.call_number || '')
+        || clean(nested.number || payload.call_number)
+        || null;
+    const updatedAtRaw = nested.updatedAt ?? payload.call_updated_at ?? payload.timestamp;
+    const timestamp = normalizeTimestamp(updatedAtRaw);
+    const simScope = extractSimScope({
+        ...payload,
+        sim_slot: nested.sim_slot ?? payload.sim_slot,
+        simSlot: nested.simSlot ?? payload.simSlot
+    });
+
+    return {
+        status,
+        direction,
+        number,
+        timestamp,
+        sim_slot: simScope.simSlot,
+        simSlot: simScope.simSlot
+    };
+}
+
+function callSnapshotKey(call = {}) {
+    return [
+        clean(call.status).toLowerCase(),
+        clean(call.direction).toLowerCase(),
+        clean(call.number),
+        clean(call.timestamp)
+    ].join('|');
 }
 
 async function resolveRegisteredAndroidHttpDevice(db, req, details = {}, eventType = 'android-http') {
@@ -95,6 +137,35 @@ router.post('/status', requireBoundDevice, async (req, res) => {
         global.modemService?.updateDeviceStatus?.(deviceId, payload);
         await syncDeviceSimInventory(db, deviceId, payload).catch(() => {});
         emitDevice(deviceId, 'device:status', { deviceId, ...payload });
+        const callStatus = extractCallStatusPayload(payload);
+        if (callStatus) {
+            const snapshotKey = callSnapshotKey(callStatus);
+            if (lastCallSnapshotKeyByDevice.get(deviceId) !== snapshotKey) {
+                lastCallSnapshotKeyByDevice.set(deviceId, snapshotKey);
+                await updateLatestActiveCall(db, deviceId, callStatus).catch((error) => {
+                    logger.error('android bridge HTTP call status update error:', error);
+                });
+                if (callStatus.status === 'ringing' && callStatus.direction === 'incoming') {
+                    emitDevice(deviceId, 'call:incoming', {
+                        deviceId,
+                        number: callStatus.number,
+                        sim_slot: callStatus.sim_slot,
+                        simSlot: callStatus.simSlot,
+                        timestamp: callStatus.timestamp
+                    });
+                }
+                emitDevice(deviceId, 'call:status', {
+                    deviceId,
+                    ...callStatus
+                });
+                if (['ended', 'missed', 'rejected', 'busy', 'no_answer'].includes(callStatus.status)) {
+                    emitDevice(deviceId, 'call:ended', {
+                        deviceId,
+                        ...callStatus
+                    });
+                }
+            }
+        }
         res.json({ success: true, device_id: deviceId });
     } catch (error) {
         logger.error('android bridge status adapter error:', error);
@@ -105,11 +176,27 @@ router.post('/status', requireBoundDevice, async (req, res) => {
 router.post('/messages/receive', requireBoundDevice, async (req, res) => {
     try {
         const db = req.app.locals.db;
-        const from = clean(req.body.from);
-        const to = clean(req.body.to);
+        const syncType = String(req.body.type || '').trim().toLowerCase();
+        if (syncType === 'sms_sync_start' || syncType === 'sms_sync_complete') {
+            const deviceId = await resolveRegisteredAndroidHttpDevice(db, req, req.body, syncType);
+            if (!deviceId) {
+                return res.status(202).json({ success: true, ignored: true, unregistered: true });
+            }
+            emitDevice(deviceId, syncType === 'sms_sync_start' ? 'sms:sync-started' : 'sms:sync-completed', {
+                deviceId,
+                device_id: deviceId,
+                total: Number(req.body.total || 0),
+                synced: Number(req.body.synced || 0),
+                timestamp: req.body.timestamp || new Date().toISOString()
+            });
+            return res.json({ success: true, device_id: deviceId, sync: true });
+        }
+        const isOutgoing = req.body.outgoing === true || String(req.body.direction || req.body.type || '').toLowerCase() === 'outgoing';
+        const from = clean(req.body.from || req.body.from_number);
+        const to = clean(req.body.to || req.body.to_number);
         const content = String(req.body.content || req.body.text || '');
-        if (!from || !content) {
-            return res.status(400).json({ success: false, message: 'from and content required' });
+        if ((!isOutgoing && !from) || (isOutgoing && !to) || !content) {
+            return res.status(400).json({ success: false, message: isOutgoing ? 'to and content required' : 'from and content required' });
         }
 
         const deviceId = await resolveRegisteredAndroidHttpDevice(db, req, req.body, 'sms:incoming');
@@ -121,24 +208,36 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
         const result = await db.run(
             `INSERT OR IGNORE INTO sms
                 (device_id, from_number, to_number, message, type, status, timestamp, read, source, sim_slot)
-             VALUES (?, ?, ?, ?, 'incoming', 'received', ?, 0, 'android-http', ?)`,
-            [deviceId, from, to || null, content, timestamp, simScope.simSlot]
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                deviceId,
+                isOutgoing ? null : from,
+                isOutgoing ? to : (to || null),
+                content,
+                isOutgoing ? 'outgoing' : 'incoming',
+                isOutgoing ? 'sent' : 'received',
+                timestamp,
+                isOutgoing ? 1 : 0,
+                req.body.sync ? 'android-http-sync' : 'android-http',
+                simScope.simSlot
+            ]
         );
 
         if (Number(result?.changes || 0) > 0) {
             await attachSmsToConversation(db, {
                 id: result.lastID,
                 device_id: deviceId,
-                from_number: from,
-                to_number: to || null,
-                type: 'incoming'
+                from_number: isOutgoing ? null : from,
+                to_number: isOutgoing ? to : (to || null),
+                type: isOutgoing ? 'outgoing' : 'incoming'
             });
             emitDevice(deviceId, 'sms:received', {
                 deviceId,
                 id: result.lastID,
-                from,
-                from_number: from,
-                to_number: to || null,
+                sync: Boolean(req.body.sync),
+                from: isOutgoing ? null : from,
+                from_number: isOutgoing ? null : from,
+                to_number: isOutgoing ? to : (to || null),
                 message: content,
                 text: content,
                 timestamp

@@ -6,7 +6,11 @@
   "scripts": {
     "start":     "cd dashboard && node server.js",
     "dev":       "cd dashboard && npx nodemon server.js",
-    "test":      "cd dashboard && npm test"
+    "test":      "cd dashboard && npm test",
+    "android:build": "cd firmware/android && gradlew.bat :app:assembleFlutterUiRelease",
+    "android:build:native": "cd firmware/android && gradlew.bat :app:assembleNativeOnlyRelease",
+    "android:install": "powershell -ExecutionPolicy Bypass -File firmware/android/install-apk.ps1",
+    "android:devices": "adb devices -l"
   },
   "workspaces": ["dashboard"]
 }
