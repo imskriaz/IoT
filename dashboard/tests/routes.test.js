@@ -2026,6 +2026,7 @@ describe('rendered dashboard pages', () => {
                     last_message_at: '2026-04-16T08:00:00.000Z'
                 }])
                 .mockResolvedValueOnce([{ id: 3 }])
+                .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([{ id: 'device-11', name: 'Device 11', description: '' }]),
             get: jest.fn()
                 .mockResolvedValueOnce({ count: 4 })
@@ -2136,6 +2137,7 @@ describe('rendered dashboard pages', () => {
                 .mockResolvedValueOnce([{ id: 1 }])
                 .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([{ id: 2 }])
+                .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([{ id: 'device-11', name: 'Device 11', description: '' }]),
             get: jest.fn()
                 .mockResolvedValueOnce({ count: 0 })
@@ -2197,6 +2199,7 @@ describe('rendered dashboard pages', () => {
                 .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])
+                .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([{ id: 'device-11', name: 'Device 11', description: '' }]),
             get: jest.fn()
                 .mockResolvedValueOnce({ count: 0 })
@@ -2242,6 +2245,7 @@ describe('rendered dashboard pages', () => {
     test('renders the active device card with active path, current network, and active signal', async () => {
         const db = makeDbMock({
             all: jest.fn()
+                .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])
@@ -2305,6 +2309,7 @@ describe('rendered dashboard pages', () => {
     test('renders flat firmware home status with Wi-Fi, MQTT, modem, and missing SIM wording', async () => {
         const db = makeDbMock({
             all: jest.fn()
+                .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])
@@ -2394,6 +2399,7 @@ describe('rendered dashboard pages', () => {
                 .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])
+                .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([{ id: 'device-11', name: 'Device 11', description: '' }]),
             get: jest.fn()
                 .mockResolvedValueOnce({ count: 0 })
@@ -2447,6 +2453,7 @@ describe('rendered dashboard pages', () => {
     test('renders dashboard and device queue summaries on the home page from live queue state', async () => {
         const db = makeDbMock({
             all: jest.fn()
+                .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([])

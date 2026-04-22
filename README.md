@@ -87,6 +87,13 @@ The table below uses the preferred runtime lane for each feature.
 - For `Android`, MQTT is the preferred runtime lane and HTTP remains an optional transport mode.
 - Use browser `WebSocket` as the live dashboard layer on top of MQTT or HTTP, not as a separate device family.
 
+## Build Notes
+
+- Keep the current firmware folder layout as-is: `firmware/esp32-s3-a7670e/espidf`.
+- Use `.\.toolchain\build-firmware.ps1` to build the ESP32 firmware.
+- Use `.\.toolchain\flash-firmware.ps1 -Port COM5` to flash it.
+- Dashboard status validation uses `firmware/esp32-s3-a7670e/espidf/verify-status-payload.js`.
+
 ## More Detail
 
 - Device families and transport rules: [firmware/docs/DEVICE_TYPES.md](D:/Projects/IoT/firmware/docs/DEVICE_TYPES.md)

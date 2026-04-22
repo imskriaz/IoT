@@ -60,6 +60,8 @@ This is the single active ESP-IDF firmware lane for the Waveshare ESP32-S3-A7670
   - `.\.toolchain\build-firmware.ps1`
   - `.\.toolchain\flash-firmware.ps1 -Port COM5`
 
+These scripts resolve the current repo layout at `firmware/esp32-s3-a7670e/espidf`. No folder move is required.
+
 ## References
 
 - use the repo [Docs Index](/d:/Projects/IoT/firmware/docs/README.md)
