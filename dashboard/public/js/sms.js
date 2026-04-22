@@ -1085,6 +1085,54 @@
         return `SIM ${slot + 1} (slot ${slot})`;
     }
 
+    function toSmsDetailKey(label) {
+        return String(label || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, '') || 'field';
+    }
+
+    function buildSmsDetailMarkup(rows) {
+        const lines = rows.map(function (row) {
+            return `  ${toSmsDetailKey(row[0])}: ${JSON.stringify(String(row[1] || ''))}`;
+        });
+        return `message_info {\n${lines.join(',\n')}\n}`;
+    }
+
+    function copySmsDetailText(text) {
+        const value = String(text || '');
+        if (!value) {
+            showToast('No message info available to copy', 'warning');
+            return;
+        }
+
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(value).then(function () {
+                showToast('Message info copied', 'success');
+            }).catch(function () {
+                showToast('Failed to copy message info', 'danger');
+            });
+            return;
+        }
+
+        const input = document.createElement('textarea');
+        input.value = value;
+        input.setAttribute('readonly', 'readonly');
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        document.body.appendChild(input);
+        input.select();
+        try {
+            document.execCommand('copy');
+            showToast('Message info copied', 'success');
+        } catch (_) {
+            showToast('Failed to copy message info', 'danger');
+        } finally {
+            document.body.removeChild(input);
+        }
+    }
+
     function buildSmsDetailRows(sms) {
         const sourceMeta = getSmsSourceMeta(sms);
         const outgoing = String(sms?.type || '').trim().toLowerCase() === 'outgoing';
@@ -1132,30 +1180,26 @@
         const sourceMeta = getSmsSourceMeta(sms);
         const preview = summarizeMessagePreview(sms?.message || '') || 'Message details';
         const rows = buildSmsDetailRows(sms);
+        const detailMarkup = buildSmsDetailMarkup(rows);
 
         titleEl.innerHTML = `<i class="bi bi-info-circle me-2"></i>${esc(preview)}`;
         metaEl.textContent = `${sourceMeta.label} | ${formatTs(sms?.timestamp)}`;
+        modalEl.dataset.smsMessageInfoCopy = detailMarkup;
         bodyEl.innerHTML = `
-            <div class="row g-3">
-                <div class="col-12 col-lg-7">
-                    <div class="border rounded p-3 h-100">
-                        <div class="small text-uppercase text-muted fw-semibold mb-2">Message</div>
-                        ${renderMessageContent(sms)}
-                    </div>
+            <div class="d-flex flex-column gap-3">
+                <div class="border rounded p-3">
+                    <div class="small text-uppercase text-muted fw-semibold mb-2">Message</div>
+                    ${renderMessageContent(sms)}
                 </div>
-                <div class="col-12 col-lg-5">
-                    <div class="border rounded p-3 h-100">
-                        <div class="small text-uppercase text-muted fw-semibold mb-2">Details</div>
-                        <div class="d-flex flex-column gap-2">
-                            ${rows.map(function (row) {
-                                return `
-                                    <div>
-                                        <div class="small text-muted">${esc(row[0])}</div>
-                                        <div class="fw-semibold text-break">${esc(row[1])}</div>
-                                    </div>`;
-                            }).join('')}
-                        </div>
-                    </div>
+                <div class="sms-detail-editor">
+                    <button type="button"
+                            class="btn btn-sm sms-detail-editor-copy"
+                            data-sms-copy-message-info
+                            title="Copy message info"
+                            aria-label="Copy message info">
+                        <i class="bi bi-clipboard"></i>
+                    </button>
+                    <pre class="sms-detail-editor-pre mb-0"><code>${esc(detailMarkup)}</code></pre>
                 </div>
             </div>`;
 
@@ -2575,6 +2619,17 @@
                 if (!document.getElementById('smsConversationWorkspace')) {
                     clearThreadSelection({ historyMode: 'replace' });
                 }
+            });
+        }
+
+        const messageDetailsModal = document.getElementById('smsMessageDetailsModal');
+        if (messageDetailsModal && messageDetailsModal.dataset.copyBound !== '1') {
+            messageDetailsModal.dataset.copyBound = '1';
+            messageDetailsModal.addEventListener('click', function (event) {
+                const copyBtn = event.target.closest('[data-sms-copy-message-info]');
+                if (!copyBtn) return;
+                event.preventDefault();
+                copySmsDetailText(messageDetailsModal.dataset.smsMessageInfoCopy || '');
             });
         }
 

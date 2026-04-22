@@ -21,6 +21,7 @@
     ((uint32_t)CONFIG_UNIFIED_TELEPHONY_POLL_INTERVAL_MS * SMS_SERVICE_FALLBACK_POLL_DIVISOR)
 #define SMS_SERVICE_SINGLE_SMS_TEXT_LEN_BYTES  160U
 #define SMS_SERVICE_MULTIPART_SEND_TIMEOUT_MS  60000U
+#define SMS_SERVICE_BACKGROUND_MODEM_TIMEOUT_MS  2500U
 
 static sms_service_status_t s_status;
 static SemaphoreHandle_t s_lock;
@@ -36,6 +37,18 @@ static uint32_t sms_service_effective_send_timeout_ms(const char *text, uint32_t
     }
 
     return effective_timeout_ms;
+}
+
+static uint32_t sms_service_background_timeout_ms(void) {
+    const uint32_t configured_timeout_ms = CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS;
+
+    if (configured_timeout_ms == 0U) {
+        return SMS_SERVICE_BACKGROUND_MODEM_TIMEOUT_MS;
+    }
+
+    return configured_timeout_ms < SMS_SERVICE_BACKGROUND_MODEM_TIMEOUT_MS
+        ? configured_timeout_ms
+        : SMS_SERVICE_BACKGROUND_MODEM_TIMEOUT_MS;
 }
 
 static bool sms_payload_equals(const unified_sms_payload_t *left, const unified_sms_payload_t *right) {
@@ -229,6 +242,7 @@ static void sms_service_task(void *arg) {
     TickType_t wait_ticks = pdMS_TO_TICKS(CONFIG_UNIFIED_TELEPHONY_POLL_INTERVAL_MS);
     uint32_t now_ms = 0U;
     uint32_t last_fallback_poll_ms = 0U;
+    uint32_t background_timeout_ms = sms_service_background_timeout_ms();
     uint32_t failure_count_delta = 0U;
     const char *cycle_detail = NULL;
     esp_err_t cycle_error = ESP_OK;
@@ -247,6 +261,7 @@ static void sms_service_task(void *arg) {
         modem_a7670_get_status(&modem_status);
         handled_event = false;
         now_ms = unified_tick_now_ms();
+        background_timeout_ms = sms_service_background_timeout_ms();
         wait_ticks = pdMS_TO_TICKS(CONFIG_UNIFIED_TELEPHONY_POLL_INTERVAL_MS);
         failure_count_delta = 0U;
         cycle_detail = NULL;
@@ -273,7 +288,7 @@ static void sms_service_task(void *arg) {
             }
 
             if (handled_event) {
-                while (modem_a7670_consume_pending_sms(&payload, CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS) == ESP_OK) {
+                while (modem_a7670_consume_pending_sms(&payload, background_timeout_ms) == ESP_OK) {
                     handled_event = true;
                     sms_service_emit_incoming(&payload, "incoming_sms_urc");
                     cycle_detail = "incoming_sms";
@@ -284,11 +299,11 @@ static void sms_service_task(void *arg) {
                 (last_fallback_poll_ms == 0U ||
                  (now_ms - last_fallback_poll_ms) >= SMS_SERVICE_FALLBACK_POLL_INTERVAL_MS)) {
                 last_fallback_poll_ms = now_ms;
-                if (modem_a7670_consume_pending_sms(&payload, CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS) == ESP_OK) {
+                if (modem_a7670_consume_pending_sms(&payload, background_timeout_ms) == ESP_OK) {
                     do {
                         sms_service_emit_incoming(&payload, "incoming_sms_fallback");
                         cycle_detail = "incoming_sms_fallback";
-                    } while (modem_a7670_consume_pending_sms(&payload, CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS) == ESP_OK);
+                    } while (modem_a7670_consume_pending_sms(&payload, background_timeout_ms) == ESP_OK);
                 }
             }
 

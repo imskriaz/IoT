@@ -40,6 +40,7 @@ typedef enum {
     UNIFIED_ACTION_CMD_MOBILE_APN,
     UNIFIED_ACTION_CMD_ROUTING_CONFIGURE,
     UNIFIED_ACTION_CMD_STATUS_WATCH,
+    UNIFIED_ACTION_CMD_GET_SMS_HISTORY,
 } unified_action_command_t;
 
 typedef enum {

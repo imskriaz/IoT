@@ -23,4 +23,5 @@ typedef struct {
 
 esp_err_t storage_mgr_init(void);
 esp_err_t storage_mgr_append_sms(const unified_sms_payload_t *payload);
+esp_err_t storage_mgr_build_sms_history_json(char *buffer, size_t buffer_len, uint16_t max_entries);
 void storage_mgr_get_status(storage_mgr_status_t *out_status);

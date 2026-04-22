@@ -39,6 +39,15 @@ This is the single active ESP-IDF firmware lane for the Waveshare ESP32-S3-A7670
 - device status payload generation
 - serial config path for provisioning/debug
 
+## Dashboard Screen Support
+
+Use this order when auditing the active dashboard against firmware: `SMS`, `Call`, `Modem`, `Internet`.
+
+- `SMS`: supported. Firmware exposes send, multipart send, modem inbox consumption, storage append, and incoming MQTT publish. Dashboard-side scheduling, retries, template logic, and conversation UX remain server concerns.
+- `Call`: supported only for telephony actions that are present in the active firmware lane today: dial and hangup. Do not assume hold, resume, mute, answer, or reject support unless they are explicitly implemented and validated against the vendor modem references.
+- `Modem`: supported for modem readiness, SIM presence, operator details, signal reporting, telephony capability flags, mobile-data enable or disable, APN changes, and MQTT/runtime status reporting.
+- `Internet`: supported as a two-lane policy. Wi-Fi is primary. Mobile data on the A7670 modem is fallback. The active firmware exposes Wi-Fi status, reconnect, toggle, disconnect, and scan commands, plus modem data and APN controls.
+
 ## Design Boundary
 
 - runtime operations should flow through MQTT

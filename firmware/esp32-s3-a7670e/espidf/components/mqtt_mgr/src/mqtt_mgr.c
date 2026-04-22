@@ -37,7 +37,7 @@ static const char *TAG = "mqtt_mgr";
 #define MQTT_MGR_WIFI_PRIMARY_MIN_RSSI_DBM   (-85)
 #define MQTT_MGR_ESP_CONNECT_GRACE_MS      20000U
 #define MQTT_MGR_ACTION_RESULT_BATCH_LIMIT     6U
-#define MQTT_MGR_TASK_STACK_LEN            3072U
+#define MQTT_MGR_TASK_STACK_LEN            5120U
 
 typedef enum {
     MQTT_MGR_TRANSPORT_NONE = 0,
@@ -394,7 +394,7 @@ static esp_err_t mqtt_mgr_start_modem_client_locked(void) {
         s_modem_client_id,
         s_username[0] ? s_username : NULL,
         s_password[0] ? s_password : NULL,
-        s_command_topic,
+        NULL,
         response,
         sizeof(response),
         15000U
@@ -488,6 +488,8 @@ static esp_err_t mqtt_mgr_subscribe_commands_locked(void) {
 
 static esp_err_t mqtt_mgr_subscribe_modem_command_topics_locked(void) {
     static const char *const command_suffixes[] = {
+        "command/#",
+        "cmd/#",
         "command/config-set",
         "command/wifi-scan",
         "command/wifi-reconnect",
@@ -498,6 +500,7 @@ static esp_err_t mqtt_mgr_subscribe_modem_command_topics_locked(void) {
         "command/routing-configure",
         "command/status-watch",
         "command/get-status",
+        "command/get-sms-history",
         "command/send-sms",
         "command/send-sms-multipart",
         "command/send-ussd",
@@ -509,9 +512,8 @@ static esp_err_t mqtt_mgr_subscribe_modem_command_topics_locked(void) {
     char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
     esp_err_t last_err = ESP_FAIL;
     size_t success_count = 0U;
+    bool primary_command_topic_subscribed = false;
 
-    /* The SIMCom MQTT note documents wildcard subscriptions, but on the modem
-     * transport exact command topics are more reliable with CMQTTRX delivery. */
     for (size_t index = 0U; index < sizeof(command_suffixes) / sizeof(command_suffixes[0]); ++index) {
         topic[0] = '\0';
         response[0] = '\0';
@@ -522,10 +524,13 @@ static esp_err_t mqtt_mgr_subscribe_modem_command_topics_locked(void) {
         last_err = modem_a7670_mqtt_subscribe(topic, response, sizeof(response), 5000U);
         if (last_err == ESP_OK) {
             success_count++;
+            if (strncmp(command_suffixes[index], "command/", 8) == 0) {
+                primary_command_topic_subscribed = true;
+            }
         }
     }
 
-    if (success_count > 0U) {
+    if (primary_command_topic_subscribed) {
         s_status.subscribed = true;
         s_status.subscribed_count += success_count;
         return ESP_OK;
@@ -741,6 +746,12 @@ static void mqtt_mgr_process_modem_messages(void) {
         s_modem_rx_payload,
         CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN
     )) {
+        ESP_LOGI(
+            TAG,
+            "processing modem mqtt topic=%s payload_len=%u",
+            s_modem_rx_topic,
+            (unsigned)strlen(s_modem_rx_payload)
+        );
         esp_err_t submit_err = automation_bridge_submit_mqtt_command(
             s_modem_rx_topic,
             strlen(s_modem_rx_topic),
@@ -757,9 +768,11 @@ static void mqtt_mgr_process_modem_messages(void) {
             s_status.command_rejects++;
             s_status.runtime.last_error = submit_err;
             snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "mqtt_command_submit_failed");
+            ESP_LOGW(TAG, "modem mqtt submit failed topic=%s err=%s", s_modem_rx_topic, esp_err_to_name(submit_err));
         } else {
             s_status.runtime.last_error = ESP_OK;
             s_status.runtime.last_error_text[0] = '\0';
+            ESP_LOGI(TAG, "modem mqtt submitted topic=%s", s_modem_rx_topic);
         }
         mqtt_mgr_set_health_locked();
         xSemaphoreGive(s_lock);
@@ -1706,6 +1719,13 @@ esp_err_t mqtt_mgr_publish_action_result(const unified_action_response_t *respon
     }
 
     publish_err = mqtt_mgr_publish_text("action/result", json);
+    ESP_LOGI(
+        TAG,
+        "action result publish command=%s result=%s err=%s",
+        unified_action_command_name(response->action.command),
+        unified_action_result_name(response->result),
+        esp_err_to_name(publish_err)
+    );
     free(json);
     return publish_err;
 }

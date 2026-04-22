@@ -95,6 +95,17 @@ The table below uses the preferred runtime lane for each feature.
 - Dashboard status validation uses `firmware/esp32-s3-a7670e/espidf/verify-status-payload.js`.
 - For firmware behavior, the vendor bundle under `firmware/esp32-s3-a7670e/docs/vendor/` is the source of truth.
 
+## Dashboard Flow Audit
+
+The current ESP32 dashboard audit was reviewed in this order: `SMS`, `Call`, `Modem`, `Internet`.
+
+- `SMS`: supported on the active ESP32 lane through MQTT-backed actions and modem telephony. Firmware covers send, multipart send, inbox consumption, and incoming publish. Dashboard orchestration such as scheduling, queueing, templates, import/export, and thread UX stays on the server side.
+- `Call`: supported for dial and hangup on the active ESP32 lane. Treat advanced in-call controls such as hold, resume, mute, or answer/reject as unsupported on this firmware unless the vendor-backed modem lane is implemented and verified for them.
+- `Modem`: supported for modem readiness, SIM/operator state, signal, mobile-data enable or disable, APN updates, and MQTT session health. Keep modem capability decisions aligned with the status payload and device capability profile.
+- `Internet`: Wi-Fi is the preferred internet path. The modem data lane is the fallback path when Wi-Fi is unavailable. Dashboard actions should assume support for Wi-Fi status, scan, reconnect, disconnect, toggle, and modem-data routing rather than direct browser-to-device internet control.
+
+These support statements are intentionally constrained to the active firmware under `firmware/esp32-s3-a7670e/espidf` and the vendor references under `firmware/esp32-s3-a7670e/docs/vendor/`.
+
 ## More Detail
 
 - Device families and transport rules: [firmware/docs/DEVICE_TYPES.md](D:/Projects/IoT/firmware/docs/DEVICE_TYPES.md)

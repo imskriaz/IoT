@@ -393,6 +393,9 @@ static unified_action_command_t automation_bridge_parse_command_name(const char 
     if (strcmp(normalized, "status_watch") == 0) {
         return UNIFIED_ACTION_CMD_STATUS_WATCH;
     }
+    if (strcmp(normalized, "get_sms_history") == 0) {
+        return UNIFIED_ACTION_CMD_GET_SMS_HISTORY;
+    }
     if (strcmp(normalized, "get_status") == 0) {
         return UNIFIED_ACTION_CMD_GET_STATUS;
     }
@@ -834,6 +837,13 @@ static void automation_bridge_task(void *arg) {
         error_detail = NULL;
         err = automation_bridge_parse_item(&ctx->item, &ctx->action, &ctx->request);
         if (err == ESP_OK) {
+            ESP_LOGI(
+                TAG,
+                "dispatch action_id=%s command=%s topic=%s",
+                ctx->action.correlation.correlation_id,
+                unified_action_command_name(ctx->action.command),
+                ctx->item.topic
+            );
             err = api_bridge_execute_action(
                 &ctx->action,
                 &ctx->request,
@@ -884,6 +894,15 @@ static void automation_bridge_task(void *arg) {
                 ctx->payload[0] != '\0' ? ctx->payload : NULL
             );
         }
+        ESP_LOGI(
+            TAG,
+            "response action_id=%s command=%s result=%s code=%ld detail=%s",
+            ctx->response.action.correlation.correlation_id,
+            unified_action_command_name(ctx->response.action.command),
+            unified_action_result_name(ctx->response.result),
+            (long)ctx->response.result_code,
+            ctx->response.detail
+        );
 
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
             s_active_background_topic[0] = '\0';
@@ -929,15 +948,29 @@ esp_err_t automation_bridge_init(void) {
         return ESP_ERR_NO_MEM;
     }
 
-    task_ok = xTaskCreatePinnedToCore(
+    #if CONFIG_SPIRAM && CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+    task_ok = xTaskCreatePinnedToCoreWithCaps(
         automation_bridge_task,
         "automation_bridge_task",
         CONFIG_UNIFIED_TASK_STACK_MEDIUM,
         NULL,
         4,
-        NULL,
-        1
+        &s_task_handle,
+        1,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
     );
+    #endif
+    if (task_ok != pdPASS) {
+        task_ok = xTaskCreatePinnedToCore(
+            automation_bridge_task,
+            "automation_bridge_task",
+            CONFIG_UNIFIED_TASK_STACK_MEDIUM,
+            NULL,
+            4,
+            &s_task_handle,
+            1
+        );
+    }
     if (task_ok != pdPASS) {
         heap_caps_free(s_pending_queue);
         heap_caps_free(s_background_state);
@@ -986,6 +1019,14 @@ esp_err_t automation_bridge_submit_mqtt_command(const char *topic, size_t topic_
     incoming_background = automation_bridge_command_is_background(command, source);
     item.background = incoming_background;
     item.priority = automation_bridge_effective_priority(command, incoming_background);
+    ESP_LOGI(
+        TAG,
+        "submit topic=%s command=%s background=%d payload_len=%u",
+        item.topic,
+        command_name ? command_name : "<unknown>",
+        incoming_background ? 1 : 0,
+        (unsigned)payload_len
+    );
 
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
         const TickType_t now = xTaskGetTickCount();

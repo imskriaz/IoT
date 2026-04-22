@@ -1990,6 +1990,8 @@ esp_err_t modem_a7670_prepare_command(char *buffer, size_t buffer_len, const cha
 static void modem_a7670_task(void *arg) {
     modem_a7670_runtime_scratch_t *scratch = &s_runtime_scratch;
     char *urc_buffer = scratch->task_urc_buffer;
+    uart_event_t uart_event = {0};
+    bool probe_due = false;
 
     (void)arg;
 
@@ -1998,28 +2000,68 @@ static void modem_a7670_task(void *arg) {
     ESP_ERROR_CHECK(health_monitor_register_module("modem_a7670"));
 
     while (true) {
-        if (modem_a7670_probe_uart_sideband(true) != ESP_OK) {
+        probe_due = s_uart_event_queue == NULL ||
+            xQueueReceive(
+                s_uart_event_queue,
+                &uart_event,
+                pdMS_TO_TICKS(CONFIG_UNIFIED_MODEM_PROBE_INTERVAL_MS)
+            ) != pdTRUE;
+
+        if (probe_due) {
+            if (modem_a7670_probe_uart_sideband(true) != ESP_OK) {
+                if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+                    s_status.runtime.running = false;
+                    modem_a7670_sync_state_modes_locked();
+                    modem_a7670_set_health_locked();
+                    modem_a7670_publish_status_locked();
+                    xSemaphoreGive(s_lock);
+                }
+            }
+
             if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
-                s_status.runtime.running = false;
-                modem_a7670_sync_state_modes_locked();
-                modem_a7670_set_health_locked();
-                modem_a7670_publish_status_locked();
+                /* The sideband probe already drains stale URCs before issuing AT
+                 * commands. Keep only this post-probe drain to collect trailing
+                 * registration and CMQTT URCs without doubling idle UART reads. */
+                memset(urc_buffer, 0, sizeof(scratch->task_urc_buffer));
+                modem_a7670_read_until_quiet_locked(urc_buffer, sizeof(scratch->task_urc_buffer), 50);
+                modem_a7670_handle_ussd_request_timeout_locked();
                 xSemaphoreGive(s_lock);
             }
-        }
+        } else if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+            switch (uart_event.type) {
+                case UART_DATA:
+                case UART_PATTERN_DET:
+                    memset(urc_buffer, 0, sizeof(scratch->task_urc_buffer));
+                    /* Drain modem URCs as soon as bytes arrive instead of waiting
+                     * for the next probe tick. This makes SMS and MQTT notifications
+                     * effectively event-driven on the UART side. */
+                    modem_a7670_read_until_quiet_locked(urc_buffer, sizeof(scratch->task_urc_buffer), 50);
+                    break;
+                case UART_FIFO_OVF:
+                case UART_BUFFER_FULL:
+                    uart_flush_input((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT);
+                    if (s_uart_event_queue) {
+                        xQueueReset(s_uart_event_queue);
+                    }
+                    modem_a7670_reset_uart_parse_fragment_locked();
+                    s_status.timeout_count++;
+                    snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "uart_overflow");
+                    break;
+                case UART_BREAK:
+                case UART_PARITY_ERR:
+                case UART_FRAME_ERR:
+                    s_status.timeout_count++;
+                    snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "uart_signal_error");
+                    break;
+                default:
+                    break;
+            }
 
-        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
-            /* The sideband probe already drains stale URCs before issuing AT
-             * commands. Keep only this post-probe drain to collect trailing
-             * registration and CMQTT URCs without doubling idle UART reads. */
-            memset(urc_buffer, 0, sizeof(scratch->task_urc_buffer));
-            modem_a7670_read_until_quiet_locked(urc_buffer, sizeof(scratch->task_urc_buffer), 50);
             modem_a7670_handle_ussd_request_timeout_locked();
             xSemaphoreGive(s_lock);
         }
 
         ESP_ERROR_CHECK(task_registry_heartbeat("modem_task"));
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_UNIFIED_MODEM_PROBE_INTERVAL_MS));
     }
 }
 
@@ -2067,6 +2109,7 @@ esp_err_t modem_a7670_init(void) {
     s_metadata_refresh_pending = true;
     s_mqtt_service_started = false;
     s_mqtt_connected = false;
+    modem_a7670_sms_invalidate_runtime_state_locked();
     modem_a7670_reset_mqtt_rx_locked();
     modem_a7670_reset_uart_parse_fragment_locked();
     modem_a7670_reset_pending_ussd_response_locked();
@@ -2170,6 +2213,7 @@ esp_err_t modem_a7670_reset_modem(char *response, size_t response_len, uint32_t 
             s_imei_refresh_pending = (s_status.imei[0] == '\0');
             s_subscriber_refresh_pending = false;
             s_metadata_refresh_pending = true;
+            modem_a7670_sms_invalidate_runtime_state_locked();
             s_status.sim_ready = false;
             s_status.network_registered = false;
             s_status.telephony_enabled = false;
@@ -2232,17 +2276,27 @@ static esp_err_t modem_a7670_mqtt_subscribe_locked(
         return ESP_ERR_INVALID_STATE;
     }
 
-    snprintf(command, sizeof(command), "AT+CMQTTSUB=0,%u,1", (unsigned)strlen(topic));
+    /* The A76XX MQTT application note's two-step subscribe flow is more
+     * reliable than pushing the topic inline with CMQTTSUB on this modem. */
+    snprintf(command, sizeof(command), "AT+CMQTTSUBTOPIC=0,%u,1", (unsigned)strlen(topic));
     err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
     if (err == ESP_OK) {
         response[0] = '\0';
         if (uart_write_bytes((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT, topic, strlen(topic)) < 0) {
             err = ESP_FAIL;
         } else {
+            err = modem_a7670_read_response_locked(response, response_len, timeout_ms, false);
+        }
+    }
+
+    if (err == ESP_OK) {
+        response[0] = '\0';
+        err = modem_a7670_send_command_locked("AT+CMQTTSUB=0", response, response_len, timeout_ms, false);
+        if (!modem_a7670_response_has_phrase(response, "+CMQTTSUB:")) {
             err = modem_a7670_read_response_until_phrase_locked(response, response_len, timeout_ms, "+CMQTTSUB:");
-            if (err == ESP_ERR_TIMEOUT && modem_a7670_response_has_success(response)) {
-                err = ESP_OK;
-            }
+        }
+        if (err == ESP_OK && !modem_a7670_response_has_phrase(response, "+CMQTTSUB: 0,0")) {
+            err = ESP_FAIL;
         }
     }
 
@@ -2254,6 +2308,8 @@ static esp_err_t modem_a7670_mqtt_subscribe_locked(
             esp_err_to_name(err),
             response[0] ? response : "<empty>"
         );
+    } else {
+        ESP_LOGI(TAG, "CMQTTSUB topic=%s ok", topic);
     }
     return err;
 }

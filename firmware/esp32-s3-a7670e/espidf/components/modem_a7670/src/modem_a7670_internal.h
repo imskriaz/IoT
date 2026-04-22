@@ -42,3 +42,4 @@ bool modem_a7670_uart_control_blocked_locked(void);
 void modem_a7670_mark_mqtt_desynced(void);
 void modem_a7670_clear_ussd_request_locked(void);
 void modem_a7670_arm_ussd_request_locked(uint32_t timeout_ms);
+void modem_a7670_sms_invalidate_runtime_state_locked(void);

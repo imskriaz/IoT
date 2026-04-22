@@ -21,8 +21,40 @@
 #define MODEM_A7670_USSD_CANCEL_POLL_QUIET_MS     250U
 #define MODEM_A7670_USSD_CANCEL_IDLE_SLICE_MS     100U
 
+typedef struct {
+    bool text_mode_known;
+    bool text_mode_enabled;
+    bool charset_known;
+    char charset[8];
+    bool text_params_known;
+    uint8_t fo;
+    uint8_t vp;
+    uint8_t pid;
+    uint8_t dcs;
+} modem_a7670_sms_runtime_state_t;
+
+static modem_a7670_sms_runtime_state_t s_sms_runtime_state;
+
 static bool modem_a7670_sms_decode_ucs2_hex(const char *input, char *output, size_t output_len);
 static bool modem_a7670_sms_next_utf8_char(const char *text, size_t *out_len);
+
+static int64_t modem_a7670_timeout_deadline_us(uint32_t timeout_ms) {
+    return esp_timer_get_time() + ((int64_t)timeout_ms * 1000LL);
+}
+
+static uint32_t modem_a7670_timeout_remaining_ms(int64_t deadline_us) {
+    const int64_t now_us = esp_timer_get_time();
+
+    if (deadline_us <= now_us) {
+        return 0U;
+    }
+
+    return (uint32_t)((deadline_us - now_us + 999LL) / 1000LL);
+}
+
+void modem_a7670_sms_invalidate_runtime_state_locked(void) {
+    memset(&s_sms_runtime_state, 0, sizeof(s_sms_runtime_state));
+}
 
 static bool modem_a7670_parse_sms_payload_from_response(const char *response, unified_sms_payload_t *out_payload) {
     const char *header = NULL;
@@ -252,11 +284,26 @@ static esp_err_t modem_a7670_sms_set_charset_locked(
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (s_sms_runtime_state.charset_known &&
+        strcmp(s_sms_runtime_state.charset, charset) == 0) {
+        response[0] = '\0';
+        return ESP_OK;
+    }
+
     if (snprintf(command, sizeof(command), "AT+CSCS=\"%s\"", charset) < 0) {
         return ESP_FAIL;
     }
 
-    return modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
+    esp_err_t err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
+    if (err == ESP_OK) {
+        s_sms_runtime_state.charset_known = true;
+        unified_copy_cstr(s_sms_runtime_state.charset, sizeof(s_sms_runtime_state.charset), charset);
+    } else {
+        s_sms_runtime_state.charset_known = false;
+        s_sms_runtime_state.charset[0] = '\0';
+    }
+
+    return err;
 }
 
 static esp_err_t modem_a7670_sms_set_text_mode_params_locked(
@@ -274,11 +321,59 @@ static esp_err_t modem_a7670_sms_set_text_mode_params_locked(
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (s_sms_runtime_state.text_params_known &&
+        s_sms_runtime_state.fo == fo &&
+        s_sms_runtime_state.vp == vp &&
+        s_sms_runtime_state.pid == pid &&
+        s_sms_runtime_state.dcs == dcs) {
+        response[0] = '\0';
+        return ESP_OK;
+    }
+
     if (snprintf(command, sizeof(command), "AT+CSMP=%u,%u,%u,%u", fo, vp, pid, dcs) < 0) {
         return ESP_FAIL;
     }
 
-    return modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
+    esp_err_t err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
+    if (err == ESP_OK) {
+        s_sms_runtime_state.text_params_known = true;
+        s_sms_runtime_state.fo = fo;
+        s_sms_runtime_state.vp = vp;
+        s_sms_runtime_state.pid = pid;
+        s_sms_runtime_state.dcs = dcs;
+    } else {
+        s_sms_runtime_state.text_params_known = false;
+    }
+
+    return err;
+}
+
+static esp_err_t modem_a7670_sms_set_text_mode_locked(
+    char *response,
+    size_t response_len,
+    uint32_t timeout_ms
+) {
+    esp_err_t err = ESP_OK;
+
+    if (!response || response_len == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_sms_runtime_state.text_mode_known && s_sms_runtime_state.text_mode_enabled) {
+        response[0] = '\0';
+        return ESP_OK;
+    }
+
+    err = modem_a7670_send_command_locked("AT+CMGF=1", response, response_len, timeout_ms, false);
+    if (err == ESP_OK) {
+        s_sms_runtime_state.text_mode_known = true;
+        s_sms_runtime_state.text_mode_enabled = true;
+    } else {
+        s_sms_runtime_state.text_mode_known = false;
+        s_sms_runtime_state.text_mode_enabled = false;
+    }
+
+    return err;
 }
 
 static bool modem_a7670_sms_is_gsm7_extension_char(char c) {
@@ -596,12 +691,13 @@ static esp_err_t modem_a7670_read_sms_locked(
     unified_sms_payload_t *out_payload,
     char *response,
     size_t response_len,
-    uint32_t timeout_ms,
+    int64_t deadline_us,
     bool delete_after
 ) {
     char command[32] = {0};
     esp_err_t err = ESP_FAIL;
     int written = 0;
+    uint32_t remaining_timeout_ms = 0U;
 
     if (storage_index < 0 || !out_payload || !response || response_len == 0U) {
         return ESP_ERR_INVALID_ARG;
@@ -612,12 +708,22 @@ static esp_err_t modem_a7670_read_sms_locked(
         return ESP_ERR_INVALID_SIZE;
     }
 
-    err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
+    remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+    if (remaining_timeout_ms == 0U) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    err = modem_a7670_send_command_locked(command, response, response_len, remaining_timeout_ms, false);
     if (err == ESP_OK && !modem_a7670_parse_sms_payload_from_response(response, out_payload)) {
         err = ESP_FAIL;
     }
     if (err == ESP_OK && delete_after) {
-        err = modem_a7670_delete_sms_locked(storage_index, response, response_len, timeout_ms);
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            err = ESP_ERR_TIMEOUT;
+        } else {
+            err = modem_a7670_delete_sms_locked(storage_index, response, response_len, remaining_timeout_ms);
+        }
     }
 
     return err;
@@ -627,15 +733,20 @@ static esp_err_t modem_a7670_consume_concat_sms_locked(
     unified_sms_payload_t *out_payload,
     char *response,
     size_t response_len,
-    uint32_t timeout_ms
+    int64_t deadline_us
 ) {
     int indexes[MODEM_A7670_SMS_MAX_SEGMENTS] = {0};
     size_t index_count = 0U;
     unified_sms_payload_t segment = {0};
     esp_err_t err = ESP_OK;
+    uint32_t remaining_timeout_ms = 0U;
 
     response[0] = '\0';
-    err = modem_a7670_send_command_locked("AT+CCONCINDEX", response, response_len, timeout_ms, false);
+    remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+    if (remaining_timeout_ms == 0U) {
+        return ESP_ERR_TIMEOUT;
+    }
+    err = modem_a7670_send_command_locked("AT+CCONCINDEX", response, response_len, remaining_timeout_ms, false);
     if (err != ESP_OK || !modem_a7670_parse_concat_indexes(response, indexes, MODEM_A7670_SMS_MAX_SEGMENTS, &index_count)) {
         return err == ESP_OK ? ESP_ERR_NOT_FOUND : err;
     }
@@ -643,7 +754,7 @@ static esp_err_t modem_a7670_consume_concat_sms_locked(
     memset(out_payload, 0, sizeof(*out_payload));
     for (size_t i = 0U; i < index_count; ++i) {
         memset(&segment, 0, sizeof(segment));
-        err = modem_a7670_read_sms_locked(indexes[i], &segment, response, response_len, timeout_ms, false);
+        err = modem_a7670_read_sms_locked(indexes[i], &segment, response, response_len, deadline_us, false);
         if (err != ESP_OK) {
             return err;
         }
@@ -662,7 +773,11 @@ static esp_err_t modem_a7670_consume_concat_sms_locked(
     }
 
     for (size_t i = 0U; i < index_count; ++i) {
-        err = modem_a7670_delete_sms_locked(indexes[i], response, response_len, timeout_ms);
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            return ESP_ERR_TIMEOUT;
+        }
+        err = modem_a7670_delete_sms_locked(indexes[i], response, response_len, remaining_timeout_ms);
         if (err != ESP_OK) {
             return err;
         }
@@ -676,7 +791,7 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
     const char *text,
     char *response,
     size_t response_len,
-    uint32_t timeout_ms
+    int64_t deadline_us
 ) {
     const uint8_t ctrl_z = 0x1AU;
     const bool use_gsm7_units = modem_a7670_sms_can_use_gsm7_units(text);
@@ -686,17 +801,40 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
     esp_err_t err = ESP_OK;
     const char *destination_number = number;
     const bool use_ucs2 = modem_a7670_sms_requires_ucs2(text);
+    uint32_t remaining_timeout_ms = 0U;
 
     if (total_segments < 2U || total_segments > MODEM_A7670_SMS_MAX_SEGMENTS) {
         return ESP_ERR_INVALID_SIZE;
     }
 
-    err = modem_a7670_sms_set_charset_locked(use_ucs2 ? "UCS2" : "IRA", response, response_len, timeout_ms);
+    remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+    if (remaining_timeout_ms == 0U) {
+        return ESP_ERR_TIMEOUT;
+    }
+    err = modem_a7670_sms_set_charset_locked(use_ucs2 ? "UCS2" : "IRA", response, response_len, remaining_timeout_ms);
     if (err == ESP_OK) {
-        err = modem_a7670_sms_set_text_mode_params_locked(17U, 167U, 0U, use_ucs2 ? 8U : 0U, response, response_len, timeout_ms);
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            err = ESP_ERR_TIMEOUT;
+        } else {
+            err = modem_a7670_sms_set_text_mode_params_locked(
+                17U,
+                167U,
+                0U,
+                use_ucs2 ? 8U : 0U,
+                response,
+                response_len,
+                remaining_timeout_ms
+            );
+        }
     }
     if (err == ESP_OK) {
-        err = modem_a7670_send_command_locked("AT+CMGF=1", response, response_len, timeout_ms, false);
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            err = ESP_ERR_TIMEOUT;
+        } else {
+            err = modem_a7670_sms_set_text_mode_locked(response, response_len, remaining_timeout_ms);
+        }
     }
     for (size_t segment_index = 0U; err == ESP_OK && segment_index < total_segments; ++segment_index) {
         const size_t segment_len = use_gsm7_units
@@ -733,7 +871,12 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
             return ESP_FAIL;
         }
 
-        err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            err = ESP_ERR_TIMEOUT;
+            break;
+        }
+        err = modem_a7670_send_command_locked(command, response, response_len, remaining_timeout_ms, true);
         if (err != ESP_OK) {
             break;
         }
@@ -745,13 +888,13 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
             break;
         }
 
-        err = modem_a7670_read_response_locked(response, response_len, timeout_ms, false);
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            err = ESP_ERR_TIMEOUT;
+            break;
+        }
+        err = modem_a7670_read_response_locked(response, response_len, remaining_timeout_ms, false);
         segment_cursor += segment_len;
-    }
-
-    if (use_ucs2) {
-        (void)modem_a7670_sms_set_text_mode_params_locked(17U, 167U, 0U, 0U, response, response_len, timeout_ms);
-        (void)modem_a7670_sms_set_charset_locked("IRA", response, response_len, timeout_ms);
     }
 
     return err;
@@ -765,6 +908,8 @@ esp_err_t modem_a7670_send_sms_multipart(
     uint32_t timeout_ms
 ) {
     esp_err_t err = ESP_FAIL;
+    int64_t deadline_us = 0;
+    uint32_t remaining_timeout_ms = 0U;
 
     if (!number || !text || !response || response_len == 0U || number[0] == '\0' || text[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
@@ -776,11 +921,13 @@ esp_err_t modem_a7670_send_sms_multipart(
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+    deadline_us = modem_a7670_timeout_deadline_us(timeout_ms);
+    remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+    if (remaining_timeout_ms == 0U || xSemaphoreTake(s_lock, pdMS_TO_TICKS(remaining_timeout_ms)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
-    err = modem_a7670_send_sms_multipart_locked(number, text, response, response_len, timeout_ms);
+    err = modem_a7670_send_sms_multipart_locked(number, text, response, response_len, deadline_us);
 
     xSemaphoreGive(s_lock);
     return err;
@@ -801,6 +948,8 @@ esp_err_t modem_a7670_send_sms(
     char encoded_text[MODEM_A7670_SMS_UCS2_TEXT_LEN] = {0};
     const char *destination_number = number;
     const char *message_text = text;
+    int64_t deadline_us = 0;
+    uint32_t remaining_timeout_ms = 0U;
 
     if (!number || !text || !response || response_len == 0 || number[0] == '\0' || text[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
@@ -812,7 +961,9 @@ esp_err_t modem_a7670_send_sms(
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+    deadline_us = modem_a7670_timeout_deadline_us(timeout_ms);
+    remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+    if (remaining_timeout_ms == 0U || xSemaphoreTake(s_lock, pdMS_TO_TICKS(remaining_timeout_ms)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
@@ -828,20 +979,48 @@ esp_err_t modem_a7670_send_sms(
     }
 
     if (total_segments > 1U) {
-        err = modem_a7670_send_sms_multipart_locked(number, text, response, response_len, timeout_ms);
+        err = modem_a7670_send_sms_multipart_locked(number, text, response, response_len, deadline_us);
     } else {
-        err = modem_a7670_sms_set_charset_locked(use_ucs2 ? "UCS2" : "IRA", response, response_len, timeout_ms);
-        if (err == ESP_OK) {
-            err = modem_a7670_sms_set_text_mode_params_locked(17U, 167U, 0U, use_ucs2 ? 8U : 0U, response, response_len, timeout_ms);
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            err = ESP_ERR_TIMEOUT;
+        } else {
+            err = modem_a7670_sms_set_charset_locked(use_ucs2 ? "UCS2" : "IRA", response, response_len, remaining_timeout_ms);
         }
         if (err == ESP_OK) {
-            err = modem_a7670_send_command_locked("AT+CMGF=1", response, response_len, timeout_ms, false);
+            remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+            if (remaining_timeout_ms == 0U) {
+                err = ESP_ERR_TIMEOUT;
+            } else {
+                err = modem_a7670_sms_set_text_mode_params_locked(
+                    17U,
+                    167U,
+                    0U,
+                    use_ucs2 ? 8U : 0U,
+                    response,
+                    response_len,
+                    remaining_timeout_ms
+                );
+            }
+        }
+        if (err == ESP_OK) {
+            remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+            if (remaining_timeout_ms == 0U) {
+                err = ESP_ERR_TIMEOUT;
+            } else {
+                err = modem_a7670_sms_set_text_mode_locked(response, response_len, remaining_timeout_ms);
+            }
         }
         if (err == ESP_OK) {
             err = modem_a7670_prepare_command(command, sizeof(command), "AT+CMGS=\"", destination_number, "\"");
         }
         if (err == ESP_OK) {
-            err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
+            remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+            if (remaining_timeout_ms == 0U) {
+                err = ESP_ERR_TIMEOUT;
+            } else {
+                err = modem_a7670_send_command_locked(command, response, response_len, remaining_timeout_ms, true);
+            }
         }
         if (err == ESP_OK) {
             response[0] = '\0';
@@ -849,12 +1028,13 @@ esp_err_t modem_a7670_send_sms(
                 uart_write_bytes((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT, (const char *)&ctrl_z, 1) < 0) {
                 err = ESP_FAIL;
             } else {
-                err = modem_a7670_read_response_locked(response, response_len, timeout_ms, false);
+                remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+                if (remaining_timeout_ms == 0U) {
+                    err = ESP_ERR_TIMEOUT;
+                } else {
+                    err = modem_a7670_read_response_locked(response, response_len, remaining_timeout_ms, false);
+                }
             }
-        }
-        if (use_ucs2) {
-            (void)modem_a7670_sms_set_text_mode_params_locked(17U, 167U, 0U, 0U, response, response_len, timeout_ms);
-            (void)modem_a7670_sms_set_charset_locked("IRA", response, response_len, timeout_ms);
         }
     }
 
@@ -1024,18 +1204,35 @@ esp_err_t modem_a7670_read_sms(int storage_index, unified_sms_payload_t *out_pay
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+    int64_t deadline_us = modem_a7670_timeout_deadline_us(timeout_ms);
+    uint32_t remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+
+    if (remaining_timeout_ms == 0U || xSemaphoreTake(s_lock, pdMS_TO_TICKS(remaining_timeout_ms)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
-    err = modem_a7670_sms_set_charset_locked("UCS2", response, sizeof(response), timeout_ms);
-    if (err == ESP_OK) {
-        err = modem_a7670_send_command_locked("AT+CMGF=1", response, sizeof(response), timeout_ms, false);
+    remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+    if (remaining_timeout_ms == 0U) {
+        err = ESP_ERR_TIMEOUT;
+    } else {
+        err = modem_a7670_sms_set_charset_locked("UCS2", response, sizeof(response), remaining_timeout_ms);
     }
     if (err == ESP_OK) {
-        err = modem_a7670_read_sms_locked(storage_index, out_payload, response, sizeof(response), timeout_ms, true);
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            err = ESP_ERR_TIMEOUT;
+        } else {
+            err = modem_a7670_sms_set_text_mode_locked(response, sizeof(response), remaining_timeout_ms);
+        }
     }
-    (void)modem_a7670_sms_set_charset_locked("IRA", response, sizeof(response), timeout_ms);
+    if (err == ESP_OK) {
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            err = ESP_ERR_TIMEOUT;
+        } else {
+            err = modem_a7670_read_sms_locked(storage_index, out_payload, response, sizeof(response), deadline_us, true);
+        }
+    }
 
     xSemaphoreGive(s_lock);
     return err;
@@ -1056,27 +1253,54 @@ esp_err_t modem_a7670_consume_pending_sms(unified_sms_payload_t *out_payload, ui
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+    int64_t deadline_us = modem_a7670_timeout_deadline_us(timeout_ms);
+    uint32_t remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+
+    if (remaining_timeout_ms == 0U || xSemaphoreTake(s_lock, pdMS_TO_TICKS(remaining_timeout_ms)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
-    err = modem_a7670_sms_set_charset_locked("UCS2", response, sizeof(response), timeout_ms);
-    if (err == ESP_OK) {
-        err = modem_a7670_send_command_locked("AT+CMGF=1", response, sizeof(response), timeout_ms, false);
+    remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+    if (remaining_timeout_ms == 0U) {
+        err = ESP_ERR_TIMEOUT;
+    } else {
+        err = modem_a7670_sms_set_charset_locked("UCS2", response, sizeof(response), remaining_timeout_ms);
     }
     if (err == ESP_OK) {
-        err = modem_a7670_consume_concat_sms_locked(out_payload, response, sizeof(response), timeout_ms);
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            err = ESP_ERR_TIMEOUT;
+        } else {
+            err = modem_a7670_sms_set_text_mode_locked(response, sizeof(response), remaining_timeout_ms);
+        }
+    }
+    if (err == ESP_OK) {
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            err = ESP_ERR_TIMEOUT;
+        } else {
+            err = modem_a7670_consume_concat_sms_locked(out_payload, response, sizeof(response), deadline_us);
+        }
         if (err == ESP_ERR_NOT_FOUND) {
             response[0] = '\0';
-            err = modem_a7670_send_command_locked("AT+CMGL=\"REC UNREAD\"", response, sizeof(response), timeout_ms, false);
+            remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+            if (remaining_timeout_ms == 0U) {
+                err = ESP_ERR_TIMEOUT;
+            } else {
+                err = modem_a7670_send_command_locked("AT+CMGL=\"REC UNREAD\"", response, sizeof(response), remaining_timeout_ms, false);
+            }
             if (err == ESP_OK && modem_a7670_parse_sms_list_index(response, &sms_index)) {
-                err = modem_a7670_read_sms_locked(sms_index, out_payload, response, sizeof(response), timeout_ms, true);
+                remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+                if (remaining_timeout_ms == 0U) {
+                    err = ESP_ERR_TIMEOUT;
+                } else {
+                    err = modem_a7670_read_sms_locked(sms_index, out_payload, response, sizeof(response), deadline_us, true);
+                }
             } else if (err == ESP_OK) {
                 err = ESP_ERR_NOT_FOUND;
             }
         }
     }
-    (void)modem_a7670_sms_set_charset_locked("IRA", response, sizeof(response), timeout_ms);
 
     xSemaphoreGive(s_lock);
     return err;

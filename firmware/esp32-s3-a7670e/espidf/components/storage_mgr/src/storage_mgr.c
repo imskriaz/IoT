@@ -41,6 +41,10 @@
 #define CONFIG_UNIFIED_STORAGE_TASK_STACK_SIZE  16384
 #endif
 
+#ifndef CONFIG_UNIFIED_STORAGE_SMS_HISTORY_MAX_ENTRIES
+#define CONFIG_UNIFIED_STORAGE_SMS_HISTORY_MAX_ENTRIES  8
+#endif
+
 #define STORAGE_USAGE_REFRESH_INTERVAL_MS 30000U
 
 #define STORAGE_NAMESPACE      "storage_mgr"
@@ -83,6 +87,7 @@ static bool s_usage_dirty;
 static uint32_t s_last_usage_refresh_ms;
 
 static size_t storage_mgr_snapshot_records(storage_mgr_record_t *out_records, size_t max_records);
+static void storage_mgr_escape_json(const char *input, char *output, size_t output_len);
 
 static void storage_mgr_notify_task(void) {
     if (s_task_handle) {
@@ -837,6 +842,86 @@ esp_err_t storage_mgr_append_sms(const unified_sms_payload_t *payload) {
     }
 
     return err == ESP_OK ? sd_err : err;
+}
+
+esp_err_t storage_mgr_build_sms_history_json(char *buffer, size_t buffer_len, uint16_t max_entries) {
+    storage_mgr_record_t records[CONFIG_UNIFIED_STORAGE_RECORD_CAPACITY] = {0};
+    size_t record_count = 0U;
+    size_t sms_count = 0U;
+    size_t written = 0U;
+    size_t included = 0U;
+    uint16_t effective_max_entries = max_entries;
+
+    if (!buffer || buffer_len == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    buffer[0] = '\0';
+    if (effective_max_entries == 0U || effective_max_entries > CONFIG_UNIFIED_STORAGE_SMS_HISTORY_MAX_ENTRIES) {
+        effective_max_entries = CONFIG_UNIFIED_STORAGE_SMS_HISTORY_MAX_ENTRIES;
+    }
+
+    record_count = storage_mgr_snapshot_records(records, CONFIG_UNIFIED_STORAGE_RECORD_CAPACITY);
+    for (size_t index = 0U; index < record_count; ++index) {
+        if (records[index].type == STORAGE_MGR_RECORD_SMS) {
+            sms_count++;
+        }
+    }
+
+    written = (size_t)snprintf(
+        buffer,
+        buffer_len,
+        "{\"count\":%u,\"entries\":[",
+        (unsigned)((sms_count < effective_max_entries) ? sms_count : effective_max_entries)
+    );
+    if (written >= buffer_len) {
+        buffer[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    for (size_t index = record_count; index > 0U && included < effective_max_entries; --index) {
+        const storage_mgr_record_t *record = &records[index - 1U];
+        char from[sizeof(record->sms.from) * 2U] = {0};
+        char text[sizeof(record->sms.text) * 2U] = {0};
+        char detail[sizeof(record->sms.detail) * 2U] = {0};
+        int append_result = 0;
+
+        if (record->type != STORAGE_MGR_RECORD_SMS) {
+            continue;
+        }
+
+        storage_mgr_escape_json(record->sms.from, from, sizeof(from));
+        storage_mgr_escape_json(record->sms.text, text, sizeof(text));
+        storage_mgr_escape_json(record->sms.detail, detail, sizeof(detail));
+        append_result = snprintf(
+            buffer + written,
+            buffer_len - written,
+            "%s{\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp_ms\":%" PRIu32 ",\"outgoing\":%s}",
+            included > 0U ? "," : "",
+            from,
+            text,
+            detail,
+            (unsigned)record->sms.sim_slot,
+            record->sms.timestamp_ms,
+            record->sms.outgoing ? "true" : "false"
+        );
+        if (append_result < 0 || (size_t)append_result >= (buffer_len - written)) {
+            buffer[0] = '\0';
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        written += (size_t)append_result;
+        included++;
+    }
+
+    if (written + 3U > buffer_len) {
+        buffer[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+    buffer[written++] = ']';
+    buffer[written++] = '}';
+    buffer[written] = '\0';
+    return ESP_OK;
 }
 
 void storage_mgr_get_status(storage_mgr_status_t *out_status) {

@@ -21,6 +21,7 @@
 #include "modem_a7670.h"
 #include "sms_service.h"
 #include "status_watch.h"
+#include "storage_mgr.h"
 #include "unified_runtime.h"
 #include "wifi_mgr.h"
 
@@ -261,6 +262,46 @@ static unified_action_response_t api_bridge_execute_get_status(
         ESP_OK,
         UNIFIED_FEATURE_REASON_NONE,
         "status_snapshot"
+    );
+}
+
+static unified_action_response_t api_bridge_execute_get_sms_history(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    uint16_t max_entries = request ? request->max_entries : 0U;
+    esp_err_t err = ESP_OK;
+
+    if (!payload || payload_len == 0U) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_INVALID_ARG,
+            UNIFIED_FEATURE_REASON_NONE,
+            "invalid_sms_history_request"
+        );
+    }
+
+    err = storage_mgr_build_sms_history_json(payload, payload_len, max_entries);
+    if (err != ESP_OK) {
+        payload[0] = '\0';
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            err,
+            UNIFIED_FEATURE_REASON_NONE,
+            "sms_history_payload_failed"
+        );
+    }
+
+    return api_bridge_build_response(
+        action,
+        UNIFIED_ACTION_RESULT_COMPLETED,
+        ESP_OK,
+        UNIFIED_FEATURE_REASON_NONE,
+        "sms_history_snapshot"
     );
 }
 
@@ -1077,6 +1118,8 @@ static unified_action_response_t api_bridge_dispatch_action(
     switch (action->command) {
         case UNIFIED_ACTION_CMD_GET_STATUS:
             return api_bridge_execute_get_status(action, payload, payload_len);
+        case UNIFIED_ACTION_CMD_GET_SMS_HISTORY:
+            return api_bridge_execute_get_sms_history(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_CONFIG_SET:
             return api_bridge_execute_config_set(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_WIFI_RECONNECT:

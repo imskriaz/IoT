@@ -718,6 +718,21 @@ function getWifiPasswordForBrowserTransport() {
     return value;
 }
 
+function normalizeWifiReasonText(reasonText) {
+    return String(reasonText || '').trim().toLowerCase();
+}
+
+function isWifiAuthFailureReason(reasonText) {
+    const normalized = normalizeWifiReasonText(reasonText);
+    return normalized === 'auth_expire'
+        || normalized === 'auth_fail'
+        || normalized === 'handshake_timeout'
+        || normalized === '4way_handshake_timeout'
+        || normalized === 'group_key_update_timeout'
+        || normalized === 'assoc_fail'
+        || normalized === 'connection_fail';
+}
+
 function renderWifiMismatchHint(device) {
     const hint = document.getElementById('deviceWifiMismatchHint');
     if (!hint) return;
@@ -747,6 +762,24 @@ function renderWifiMismatchHint(device) {
     if (targetVisible === false && disconnectText) {
         hint.style.display = '';
         hint.innerHTML = `<strong>Wi-Fi warning:</strong> device is configured for <code>${configured}</code>, but the target SSID was not visible. Current disconnect reason: <code>${disconnectText}</code>.`;
+        return;
+    }
+
+    if (targetVisible === true && disconnectText === 'no_ap_found') {
+        hint.style.display = '';
+        hint.innerHTML = `<strong>Wi-Fi join warning:</strong> device can see <code>${configured}</code> in the latest scan, but it still failed to join it. Keep the hotspot on <code>2.4 GHz</code>, stay close to the phone, and re-check hotspot security if this keeps repeating.`;
+        return;
+    }
+
+    if (targetVisible === true && disconnectText === 'no_ap_with_compatible_security') {
+        hint.style.display = '';
+        hint.innerHTML = `<strong>Wi-Fi security warning:</strong> device can see <code>${configured}</code>, but the hotspot security is not compatible. Keep the hotspot on <code>2.4 GHz</code> and prefer <code>WPA2</code>, then Apply to Device again if you changed the password.`;
+        return;
+    }
+
+    if (targetVisible === true && isWifiAuthFailureReason(disconnectText)) {
+        hint.style.display = '';
+        hint.innerHTML = `<strong>Wi-Fi authentication warning:</strong> device can see <code>${configured}</code>, but authentication is failing (<code>${disconnectText}</code>). Re-check the hotspot password, keep the hotspot on <code>2.4 GHz</code>/<code>WPA2</code>, then Apply to Device again if the saved password is stale.`;
         return;
     }
 

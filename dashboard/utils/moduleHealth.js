@@ -1,3 +1,63 @@
+function normalizeWifiReasonText(reasonText) {
+    return String(reasonText || '').trim().toLowerCase();
+}
+
+function isWifiAuthFailure(reasonCode, reasonText) {
+    const normalized = normalizeWifiReasonText(reasonText);
+    return normalized === 'auth_expire'
+        || normalized === 'auth_fail'
+        || normalized === 'handshake_timeout'
+        || normalized === '4way_handshake_timeout'
+        || normalized === 'group_key_update_timeout'
+        || normalized === 'assoc_fail'
+        || normalized === 'connection_fail'
+        || Number(reasonCode || 0) === 2
+        || Number(reasonCode || 0) === 15
+        || Number(reasonCode || 0) === 16
+        || Number(reasonCode || 0) === 202
+        || Number(reasonCode || 0) === 203
+        || Number(reasonCode || 0) === 204
+        || Number(reasonCode || 0) === 205;
+}
+
+function buildWifiWarningMessage(wifi = {}) {
+    const reasonText = normalizeWifiReasonText(wifi.lastDisconnectReasonText);
+    const reasonCode = Number(wifi.lastDisconnectReason || 0);
+    const configuredSsid = String(wifi.ssid || '').trim();
+    const hotspotVisible = wifi.lastScanTargetVisible === true;
+
+    if (reasonText === 'no_ap_found') {
+        if (configuredSsid && hotspotVisible) {
+            return `Hotspot ${configuredSsid} was seen in scan, but the device still could not join it`;
+        }
+        return configuredSsid
+            ? `Configured for ${configuredSsid}, access point not visible`
+            : 'Configured Wi-Fi access point not visible';
+    }
+
+    if (reasonText === 'no_ap_with_compatible_security') {
+        return configuredSsid
+            ? `Configured for ${configuredSsid}, hotspot security is not compatible`
+            : 'Hotspot security is not compatible';
+    }
+
+    if (isWifiAuthFailure(reasonCode, reasonText)) {
+        if (configuredSsid && hotspotVisible) {
+            return `Authentication failed for ${configuredSsid}; check hotspot password or security`;
+        }
+        if (configuredSsid) {
+            return `Authentication failed for ${configuredSsid}`;
+        }
+        return 'Wi-Fi authentication failed';
+    }
+
+    if (reasonText) {
+        return `Disconnected (${reasonText})`;
+    }
+
+    return reasonCode ? `Disconnected (reason ${reasonCode})` : 'Wi-Fi disconnected';
+}
+
 const MODULE_DEFINITIONS = {
     mqtt: { label: 'MQTT' },
     modem: { label: 'Modem' },
@@ -237,21 +297,12 @@ function getBaseEntry(moduleKey, caps = {}, mqttConnected = false, live = {}) {
         }
 
         if (live.online && wifi && Object.keys(wifi).length > 0) {
-            const reasonText = wifi.lastDisconnectReasonText || null;
-            const reasonCode = wifi.lastDisconnectReason || 0;
-            const configuredSsid = String(wifi.ssid || '').trim();
             return {
                 moduleKey,
                 label: definition.label,
                 supported: true,
                 state: 'warning',
-                message: reasonText === 'no_ap_found'
-                    ? (configuredSsid
-                        ? `Configured for ${configuredSsid}, access point not visible`
-                        : 'Configured Wi-Fi access point not visible')
-                    : (reasonText
-                        ? `Disconnected (${reasonText})`
-                        : (reasonCode ? `Disconnected (reason ${reasonCode})` : 'Wi-Fi disconnected')),
+                message: buildWifiWarningMessage(wifi),
                 lastSuccessAt: null,
                 lastFailureAt: live.lastSeen || null,
                 updatedAt: live.lastSeen || null,

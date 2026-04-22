@@ -827,6 +827,16 @@
         const activeSource = String(currentStatus?.internet?.activeSource || '').trim().toLowerCase();
         const savedProfile = getSavedWifiProfile();
         const hasSavedProfile = Boolean(String(savedProfile.ssid || '').trim());
+        const reasonText = String(wifi.lastDisconnectReasonText || '').trim().toLowerCase();
+        const authFailure = reasonText === 'auth_expire'
+            || reasonText === 'auth_fail'
+            || reasonText === 'handshake_timeout'
+            || reasonText === '4way_handshake_timeout'
+            || reasonText === 'group_key_update_timeout'
+            || reasonText === 'assoc_fail'
+            || reasonText === 'connection_fail';
+        const visibleButJoinFailed = reasonText === 'no_ap_found' && wifi.lastScanTargetVisible === true;
+        const securityFailure = reasonText === 'no_ap_with_compatible_security';
         const hasWifiProfile = Boolean(
             wifi.configured
             || wifi.started
@@ -854,6 +864,30 @@
                 label: 'Disabled',
                 badgeClass: 'badge bg-secondary',
                 iconClass: 'bi bi-wifi text-secondary'
+            };
+        }
+
+        if (visibleButJoinFailed) {
+            return {
+                label: 'Join failed',
+                badgeClass: 'badge bg-warning text-dark',
+                iconClass: 'bi bi-wifi-off text-warning'
+            };
+        }
+
+        if (securityFailure && wifi.lastScanTargetVisible === true) {
+            return {
+                label: 'Security mismatch',
+                badgeClass: 'badge bg-danger',
+                iconClass: 'bi bi-shield-exclamation text-danger'
+            };
+        }
+
+        if (authFailure && wifi.lastScanTargetVisible === true) {
+            return {
+                label: 'Auth failed',
+                badgeClass: 'badge bg-danger',
+                iconClass: 'bi bi-wifi-off text-danger'
             };
         }
 
@@ -912,6 +946,17 @@
         const reconnects = Number(wifi.reconnectCount || 0);
         const visibleCount = Number(wifi.lastScanVisibleCount || 0);
         const selectedSsid = getSelectedWifiSsid();
+        const normalizedReason = String(wifi.lastDisconnectReasonText || '').trim().toLowerCase();
+        const authFailure = normalizedReason === 'auth_expire'
+            || normalizedReason === 'auth_fail'
+            || normalizedReason === 'handshake_timeout'
+            || normalizedReason === '4way_handshake_timeout'
+            || normalizedReason === 'group_key_update_timeout'
+            || normalizedReason === 'assoc_fail'
+            || normalizedReason === 'connection_fail';
+        const visibleButJoinFailed = normalizedReason === 'no_ap_found' && wifi.lastScanTargetVisible === true;
+        const securityFailure = normalizedReason === 'no_ap_with_compatible_security';
+        const selectedOrConfiguredSsid = selectedSsid || String(wifi.ssid || '').trim();
 
         if (selectedSsid) {
             detailBits.push(`Selected network: ${selectedSsid}`);
@@ -930,6 +975,14 @@
         if (attempts > 0 || reconnects > 0) {
             detailBits.push(`Attempts: ${attempts} | Reconnects: ${reconnects}`);
         }
+        if (visibleButJoinFailed) {
+            detailBits.push(`Guidance: ${selectedOrConfiguredSsid || 'Target hotspot'} is visible in scan, but the device still could not join it. Stay close to the hotspot and re-check its security settings.`);
+        }
+        if (securityFailure && wifi.lastScanTargetVisible === true) {
+            detailBits.push(`Guidance: ${selectedOrConfiguredSsid || 'Target hotspot'} is visible, but its security is not compatible. Use 2.4 GHz and WPA2.`);
+        } else if (authFailure && wifi.lastScanTargetVisible === true) {
+            detailBits.push(`Guidance: ${selectedOrConfiguredSsid || 'Target hotspot'} is visible, but authentication is failing. Check the saved password and hotspot security.`);
+        }
 
         if (!detailBits.length) {
             elements.wifiClientDiagnostics.className = 'alert alert-warning small mt-3 mb-0 d-none';
@@ -937,7 +990,9 @@
             return;
         }
 
-        const tone = presentation.label === 'Available'
+        const tone = (authFailure && wifi.lastScanTargetVisible === true) || (securityFailure && wifi.lastScanTargetVisible === true)
+            ? 'danger'
+            : presentation.label === 'Available'
             ? 'info'
             : 'warning';
         elements.wifiClientDiagnostics.className = `alert alert-${tone} small mt-3 mb-0`;

@@ -236,6 +236,60 @@ describe('moduleHealth live snapshot preference', () => {
         }));
     });
 
+    test('surfaces Wi-Fi authentication failures as credential or security issues', async () => {
+        const moduleHealth = await getDeviceModuleHealth(null, 'dev-1', { wifi: true }, {
+            mqttConnected: true,
+            live: {
+                online: true,
+                lastSeen: '2026-04-22T09:19:03.404Z',
+                wifi: {
+                    connected: false,
+                    ssid: 'RiazM',
+                    lastDisconnectReason: 2,
+                    lastDisconnectReasonText: 'auth_expire',
+                    lastScanTargetVisible: true
+                }
+            }
+        });
+
+        const wifi = moduleHealth.find(entry => entry.moduleKey === 'wifi');
+
+        expect(wifi.state).toBe('warning');
+        expect(wifi.message).toBe('Authentication failed for RiazM; check hotspot password or security');
+        expect(wifi.details).toEqual(expect.objectContaining({
+            ssid: 'RiazM',
+            lastDisconnectReasonText: 'auth_expire',
+            lastScanTargetVisible: true
+        }));
+    });
+
+    test('does not claim the access point is invisible when the latest scan saw it', async () => {
+        const moduleHealth = await getDeviceModuleHealth(null, 'dev-1', { wifi: true }, {
+            mqttConnected: true,
+            live: {
+                online: true,
+                lastSeen: '2026-04-22T09:22:13.677Z',
+                wifi: {
+                    connected: false,
+                    ssid: 'RiazM',
+                    lastDisconnectReason: 201,
+                    lastDisconnectReasonText: 'no_ap_found',
+                    lastScanTargetVisible: true
+                }
+            }
+        });
+
+        const wifi = moduleHealth.find(entry => entry.moduleKey === 'wifi');
+
+        expect(wifi.state).toBe('warning');
+        expect(wifi.message).toBe('Hotspot RiazM was seen in scan, but the device still could not join it');
+        expect(wifi.details).toEqual(expect.objectContaining({
+            ssid: 'RiazM',
+            lastDisconnectReasonText: 'no_ap_found',
+            lastScanTargetVisible: true
+        }));
+    });
+
     test('treats live wifi and storage snapshots as supported even when capability metadata is stale', async () => {
         const moduleHealth = await getDeviceModuleHealth(null, 'dev-1', { wifi: false, storage: false }, {
             mqttConnected: true,
