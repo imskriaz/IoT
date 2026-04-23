@@ -754,7 +754,7 @@ class MQTTHandlers {
         }
 
         const candidates = await db.all(
-            `SELECT id, external_id, status, timestamp, sim_slot
+            `SELECT id, conversation_id, external_id, status, timestamp, sim_slot
              FROM sms
              WHERE device_id = ?
                AND type = 'outgoing'
@@ -809,9 +809,11 @@ class MQTTHandlers {
         this.toDevice(normalizedDeviceId, 'sms:delivered', {
             deviceId: normalizedDeviceId,
             id: match.id,
+            conversationId: Number(match.conversation_id || 0) || null,
             messageId: match.external_id || null,
             to: normalizedFrom,
             evidence: 'incoming_sms_match',
+            status: 'delivered',
             timestamp: incomingTimestamp || new Date().toISOString()
         });
 
@@ -1247,6 +1249,7 @@ class MQTTHandlers {
             const messageId = String(data?.messageId || data?.action_id || '').trim();
             const successful = data?.success !== false
                 && !['failed', 'rejected', 'timeout'].includes(String(data?.result || '').trim().toLowerCase());
+            let smsRow = null;
 
             try {
                 const db = this.app.locals.db;
@@ -1264,6 +1267,15 @@ class MQTTHandlers {
                             messageId
                         ]
                     );
+                    smsRow = await db.get(
+                        `SELECT id, conversation_id, to_number, external_id, sim_slot
+                         FROM sms
+                         WHERE device_id = ?
+                           AND external_id = ?
+                         ORDER BY id DESC
+                         LIMIT 1`,
+                        [deviceId, messageId]
+                    );
                 }
             } catch (error) {
                 logger.error('Error syncing SMS action result:', error);
@@ -1271,8 +1283,12 @@ class MQTTHandlers {
 
             this.toDevice(deviceId, successful ? 'sms:sent' : 'sms:send-failed', {
                 deviceId,
-                messageId,
-                to: data?.number || data?.to || data?.payload?.number || data?.payload?.to || null,
+                id: Number(smsRow?.id || 0) || null,
+                conversationId: Number(smsRow?.conversation_id || 0) || null,
+                messageId: smsRow?.external_id || messageId || null,
+                to: smsRow?.to_number || data?.number || data?.to || data?.payload?.number || data?.payload?.to || null,
+                sim_slot: smsRow?.sim_slot ?? null,
+                status: successful ? 'sent' : 'failed',
                 error: successful ? null : (data?.error || data?.message || data?.detail || 'SMS send failed'),
                 timestamp: new Date().toISOString()
             });
@@ -1349,22 +1365,13 @@ class MQTTHandlers {
                         return;
                     }
 
-                    await attachSmsToConversation(db, {
+                    const conversationId = await attachSmsToConversation(db, {
                         id: result.lastID,
                         device_id: deviceId,
                         from_number: isOutgoing ? null : decodedFrom,
                         to_number: isOutgoing ? decodedTo : (decodedTo || null),
                         type: isOutgoing ? 'outgoing' : 'incoming'
                     });
-
-                    if (!isOutgoing) {
-                        await this.reconcileOutgoingSmsFromIncoming(deviceId, {
-                            from: decodedFrom,
-                            message: decodedMessage,
-                            timestamp: smsTimestamp,
-                            simSlot: simScope.simSlot
-                        });
-                    }
 
                     // Update in-memory unread count for this device.
                     if (!isOutgoing) smsCache.increment(deviceId);
@@ -1380,6 +1387,7 @@ class MQTTHandlers {
 
                     this.toDevice(deviceId, 'sms:received', {
                         deviceId,
+                        conversationId: Number(conversationId || 0) || null,
                         sync: Boolean(data.sync),
                         from: isOutgoing ? null : decodedFrom,
                         from_number: isOutgoing ? null : decodedFrom,
@@ -1388,11 +1396,21 @@ class MQTTHandlers {
                         message: decodedMessage,
                         text: decodedMessage,
                         id: result.lastID,
+                        type: isOutgoing ? 'outgoing' : 'incoming',
+                        status: isOutgoing ? 'sent' : 'received',
                         unreadCount: smsCache.get(deviceId),
                         timestamp: smsTimestamp
                     });
 
                     if (!isOutgoing && !data.sync) {
+                        this.reconcileOutgoingSmsFromIncoming(deviceId, {
+                            from: decodedFrom,
+                            message: decodedMessage,
+                            timestamp: smsTimestamp,
+                            simSlot: simScope.simSlot
+                        }).catch((reconcileError) => {
+                            logger.error('Error reconciling outgoing SMS from incoming evidence:', reconcileError);
+                        });
                         // Fire notification + webhooks (non-blocking)
                         notificationService.notifySms(fromNumber, decodedMessage).catch(() => {});
                         pushNotificationService.notifyLinkedDevices(deviceId, {

@@ -853,9 +853,10 @@ describe('mqttService durable SMS queue', () => {
         svc.disconnect();
         delete global.app;
         delete global.io;
+        delete global.modemService;
     });
 
-    test('durable send-sms publishes once and waits for later action result', async () => {
+    test('durable send-sms waits for the immediate firmware action result and completes the queue row', async () => {
         const db = {
             run: jest.fn().mockResolvedValue({ changes: 1 }),
             get: jest.fn().mockResolvedValue(null),
@@ -893,7 +894,7 @@ describe('mqttService durable SMS queue', () => {
             expect.objectContaining({
                 status: 'waiting_response',
                 attempt_count: 1,
-                next_attempt_at: expect.any(String)
+                next_attempt_at: null
             })
         );
         expect(svc._publishCommandNow).toHaveBeenCalledWith(
@@ -904,15 +905,307 @@ describe('mqttService durable SMS queue', () => {
                 message: 'hello',
                 smsId: 41
             }),
-            false,
+            true,
             60000,
             expect.objectContaining({
                 messageId: 'send-sms_test',
                 source: 'dashboard-sms'
             })
         );
+        expect(svc._markPersistentQueueCompleted).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'queue-1',
+                command: 'send-sms',
+                message_id: 'send-sms_test'
+            }),
+            expect.objectContaining({
+                topic: 'device/device-1/command/send-sms',
+                messageId: 'send-sms_test'
+            })
+        );
+        expect(svc._markPersistentQueueRetry).not.toHaveBeenCalled();
+    });
+
+    test('durable queued SMS stays pending until device command subscription is ready', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 1 }),
+            get: jest.fn().mockResolvedValue(null),
+            all: jest.fn().mockResolvedValue([])
+        };
+        global.app.locals.db = db;
+
+        svc.deviceStatus.set('device-1', {
+            lastSeen: new Date().toISOString(),
+            online: true,
+            lastStatus: {
+                mqtt_connected: true,
+                mqtt_subscribed: false
+            }
+        });
+
+        svc.enqueueDeviceCommand = jest.fn((_deviceId, task) => task());
+        svc._updatePersistentQueueRow = jest.fn().mockResolvedValue();
+        svc._syncSmsStatusFromQueueRow = jest.fn().mockResolvedValue();
+        svc._emitDeviceQueueState = jest.fn().mockResolvedValue();
+        svc._markPersistentQueueCompleted = jest.fn().mockResolvedValue();
+        svc._markPersistentQueueRetry = jest.fn().mockResolvedValue();
+        svc._publishCommandNow = jest.fn().mockResolvedValue({
+            topic: 'device/device-1/command/send-sms',
+            messageId: 'send-sms_wait_subscribed'
+        });
+
+        await svc._processPersistentQueueRow({
+            id: 'queue-pending-subscribe',
+            device_id: 'device-1',
+            command: 'send-sms',
+            payload: JSON.stringify({ to: '+8801628301525', message: 'hello', smsId: 75 }),
+            message_id: 'send-sms_wait_subscribed',
+            requires_response: 1,
+            attempt_count: 0,
+            timeout_ms: 60000,
+            source: 'dashboard-sms'
+        });
+
+        expect(svc._updatePersistentQueueRow).toHaveBeenCalledWith(
+            'queue-pending-subscribe',
+            expect.objectContaining({
+                status: 'pending',
+                last_error: 'Device MQTT connected but command subscription is not ready'
+            })
+        );
+        expect(svc._publishCommandNow).not.toHaveBeenCalled();
         expect(svc._markPersistentQueueCompleted).not.toHaveBeenCalled();
         expect(svc._markPersistentQueueRetry).not.toHaveBeenCalled();
+    });
+
+    test('durable queued SMS dispatch prefers fresh modemService command readiness over stale raw snapshot', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 1 }),
+            get: jest.fn().mockResolvedValue(null),
+            all: jest.fn().mockResolvedValue([])
+        };
+        global.app.locals.db = db;
+        global.modemService = {
+            isDeviceOnline: jest.fn().mockReturnValue(true),
+            getDeviceStatus: jest.fn().mockReturnValue({
+                online: true,
+                mqtt: {
+                    connected: true,
+                    subscribed: true
+                },
+                transport: {
+                    mqttCommandAccepting: true
+                }
+            })
+        };
+
+        svc.deviceStatus.set('device-1', {
+            lastSeen: new Date().toISOString(),
+            online: true,
+            lastStatus: {
+                mqtt_connected: true,
+                mqtt_subscribed: false
+            }
+        });
+
+        svc.enqueueDeviceCommand = jest.fn((_deviceId, task) => task());
+        svc._updatePersistentQueueRow = jest.fn().mockResolvedValue();
+        svc._syncSmsStatusFromQueueRow = jest.fn().mockResolvedValue();
+        svc._emitDeviceQueueState = jest.fn().mockResolvedValue();
+        svc._markPersistentQueueCompleted = jest.fn().mockResolvedValue();
+        svc._markPersistentQueueRetry = jest.fn().mockResolvedValue();
+        svc._publishCommandNow = jest.fn().mockResolvedValue({
+            topic: 'device/device-1/command/send-sms',
+            messageId: 'send-sms_fresh_live_status'
+        });
+
+        await svc._processPersistentQueueRow({
+            id: 'queue-fresh-live-status',
+            device_id: 'device-1',
+            command: 'send-sms',
+            payload: JSON.stringify({ to: '+8801628301525', message: 'hello', smsId: 76 }),
+            message_id: 'send-sms_fresh_live_status',
+            requires_response: 1,
+            attempt_count: 0,
+            timeout_ms: 60000,
+            source: 'dashboard-sms'
+        });
+
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(svc._publishCommandNow).toHaveBeenCalledWith(
+            'device-1',
+            'send-sms',
+            expect.objectContaining({
+                to: '+8801628301525',
+                message: 'hello',
+                smsId: 76
+            }),
+            true,
+            60000,
+            expect.objectContaining({
+                messageId: 'send-sms_fresh_live_status'
+            })
+        );
+    });
+
+    test('send-sms publish injects the command timeout into the firmware payload', async () => {
+        await svc._publishCommandNow(
+            'device-1',
+            'send-sms',
+            {
+                to: '+8801628301525',
+                message: 'hello'
+            },
+            false,
+            60000,
+            {
+                messageId: 'send-sms_timeout_payload',
+                source: 'dashboard-sms'
+            }
+        );
+
+        const published = JSON.parse(svc.client.publish.mock.calls[0][1]);
+        expect(published).toEqual(expect.objectContaining({
+            action_id: 'send-sms_timeout_payload',
+            command: 'send_sms',
+            number: '+8801628301525',
+            text: 'hello',
+            timeout: 60000
+        }));
+    });
+
+    test('non-replay-safe SMS command timeouts become ambiguous instead of being retried', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 1 }),
+            get: jest.fn().mockResolvedValue({ id: 'queue-timeout', status: 'ambiguous' }),
+            all: jest.fn().mockResolvedValue([])
+        };
+        global.app.locals.db = db;
+
+        svc.enqueueDeviceCommand = jest.fn((_deviceId, task) => task());
+        svc._updatePersistentQueueRow = jest.fn().mockResolvedValue();
+        svc._syncSmsStatusFromQueueRow = jest.fn().mockResolvedValue();
+        svc._emitDeviceQueueState = jest.fn().mockResolvedValue();
+        svc._markPersistentQueueCompleted = jest.fn().mockResolvedValue();
+        svc._markPersistentQueueAmbiguous = jest.fn().mockResolvedValue();
+        svc._publishCommandNow = jest.fn().mockRejectedValue(new Error('Command timeout after 60000ms'));
+
+        await svc._processPersistentQueueRow({
+            id: 'queue-timeout',
+            device_id: 'device-1',
+            command: 'send-sms',
+            payload: JSON.stringify({ to: '+8801628301525', message: 'hello', smsId: 70 }),
+            message_id: 'send-sms_timeout_test',
+            requires_response: 1,
+            replay_safe: 0,
+            attempt_count: 0,
+            timeout_ms: 60000,
+            source: 'dashboard-sms'
+        });
+
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(svc._markPersistentQueueAmbiguous).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'queue-timeout',
+                command: 'send-sms',
+                replay_safe: 0
+            }),
+            expect.objectContaining({
+                message: 'Command timeout after 60000ms'
+            })
+        );
+        expect(svc._markPersistentQueueCompleted).not.toHaveBeenCalled();
+    });
+
+    test('action/result settles a queued SMS row as sent by message id', async () => {
+        global.app.locals.db = {
+            get: jest.fn().mockResolvedValue({
+                id: 'queue-1b',
+                device_id: 'device-1',
+                command: 'send-sms',
+                message_id: 'send-sms_action_1',
+                status: 'waiting_response',
+                payload: JSON.stringify({ to: '+8801628301525', smsId: 67 })
+            }),
+            all: jest.fn().mockResolvedValue([])
+        };
+
+        svc._markPersistentQueueCompleted = jest.fn().mockResolvedValue();
+
+        svc.handleMessage(
+            'device/device-1/action/result',
+            Buffer.from(JSON.stringify({
+                action_id: 'send-sms_action_1',
+                command: 'send_sms',
+                result: 'completed',
+                detail: 'sms_send_completed',
+                success: true,
+                payload: {
+                    sms_id: 67,
+                    to: '+8801628301525'
+                }
+            }))
+        );
+
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(svc._markPersistentQueueCompleted).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'queue-1b',
+                command: 'send-sms',
+                message_id: 'send-sms_action_1'
+            }),
+            expect.objectContaining({
+                action_id: 'send-sms_action_1',
+                command: 'send_sms',
+                result: 'completed',
+                success: true
+            })
+        );
+    });
+
+    test('late action/result can settle an ambiguous SMS row by message id', async () => {
+        global.app.locals.db = {
+            get: jest.fn().mockResolvedValue({
+                id: 'queue-1c',
+                device_id: 'device-1',
+                command: 'send-sms',
+                message_id: 'send-sms_action_2',
+                status: 'ambiguous',
+                payload: JSON.stringify({ to: '+8801628301525', smsId: 68 })
+            }),
+            all: jest.fn().mockResolvedValue([])
+        };
+
+        svc._markPersistentQueueCompleted = jest.fn().mockResolvedValue();
+
+        svc.handleMessage(
+            'device/device-1/action/result',
+            Buffer.from(JSON.stringify({
+                action_id: 'send-sms_action_2',
+                command: 'send_sms',
+                result: 'completed',
+                detail: 'sms_send_completed',
+                success: true
+            }))
+        );
+
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(svc._markPersistentQueueCompleted).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'queue-1c',
+                command: 'send-sms',
+                status: 'ambiguous'
+            }),
+            expect.objectContaining({
+                action_id: 'send-sms_action_2',
+                result: 'completed',
+                success: true
+            })
+        );
     });
 
     test('expired published SMS rows become ambiguous instead of being replayed', async () => {

@@ -475,7 +475,7 @@ describe('MQTTHandlers SMS storage', () => {
         const handlers = new MQTTHandlers(mqttService, io, app);
         handlers.setupSMSHandlers();
 
-        return { mqttService, db, io, room };
+        return { mqttService, db, io, room, handlers };
     }
 
     async function flushAsync() {
@@ -532,6 +532,79 @@ describe('MQTTHandlers SMS storage', () => {
             'test-device-1',
             expect.objectContaining({
                 title: 'New SMS received'
+            })
+        );
+    });
+
+    test('emits sms:received before outgoing reconciliation finishes', async () => {
+        const { mqttService, room, handlers } = buildSmsSubject();
+
+        let releaseReconcile;
+        handlers.reconcileOutgoingSmsFromIncoming = jest.fn().mockImplementation(() => new Promise((resolve) => {
+            releaseReconcile = resolve;
+        }));
+
+        mqttService.emit('sms:incoming', 'test-device-1', {
+            from: '+8801555123456',
+            message: 'latency-sensitive inbound',
+            timestamp: '2026-04-23T10:00:00.000Z'
+        });
+
+        await flushAsync();
+
+        expect(room.emit).toHaveBeenCalledWith(
+            'sms:received',
+            expect.objectContaining({
+                deviceId: 'test-device-1',
+                message: 'latency-sensitive inbound'
+            })
+        );
+
+        releaseReconcile(null);
+        await flushAsync();
+    });
+
+    test('emits sms:sent with stored row metadata for instant dashboard updates', async () => {
+        const { mqttService, db, room } = buildSmsSubject();
+
+        db.get.mockImplementation(async (sql) => {
+            const query = String(sql);
+            if (query.includes('SELECT id FROM devices')) {
+                return { id: 'test-device-1' };
+            }
+            if (query.includes('FROM sms') && query.includes('external_id')) {
+                return {
+                    id: 31,
+                    conversation_id: 9,
+                    to_number: '+8801555123456',
+                    external_id: 'send-sms_123',
+                    sim_slot: 1
+                };
+            }
+            return null;
+        });
+
+        mqttService.emit('action:result', 'test-device-1', {
+            command: 'send-sms',
+            messageId: 'send-sms_123',
+            success: true,
+            payload: {
+                to: '+8801555123456'
+            }
+        });
+
+        await flushAsync();
+
+        expect(room.emit).toHaveBeenCalledWith(
+            'sms:sent',
+            expect.objectContaining({
+                deviceId: 'test-device-1',
+                id: 31,
+                conversationId: 9,
+                messageId: 'send-sms_123',
+                to: '+8801555123456',
+                sim_slot: 1,
+                status: 'sent'
             })
         );
     });

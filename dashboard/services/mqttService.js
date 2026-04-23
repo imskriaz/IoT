@@ -4,6 +4,7 @@ const EventEmitter = require('events');
 const crypto = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
 const { resolveSmsCommand } = require('../utils/smsLimits');
+const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
 
 function hasEnv(name) {
     return Object.prototype.hasOwnProperty.call(process.env, name);
@@ -21,6 +22,15 @@ function resolveClientId(clientId) {
 function parsePort(value, fallback) {
     const parsed = parseInt(value, 10);
     return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function firstDefinedBoolean(...values) {
+    for (const value of values) {
+        if (typeof value === 'boolean') {
+            return value;
+        }
+    }
+    return undefined;
 }
 
 function buildSimScopedPayload(payload = {}, options = {}) {
@@ -170,10 +180,10 @@ const ACK_REQUIRED_DURABLE_COMMANDS = new Set([
     'gps-configure'
 ]);
 
-const ASYNC_RESULT_DURABLE_COMMANDS = new Set([
-    'send-sms',
-    'send-sms-multipart'
-]);
+// SMS send is confirmed by the firmware action/result after the modem reports send success.
+// Do not treat it as a deferred durable result, or dashboard rows can drift into "ambiguous"
+// even when the device has already produced a concrete modem outcome.
+const ASYNC_RESULT_DURABLE_COMMANDS = new Set([]);
 
 const NON_REPLAY_SAFE_COMMANDS = new Set([
     'send-sms',
@@ -210,6 +220,7 @@ const SYSTEM_COMMANDS = new Set([
 ]);
 
 const BACKGROUND_COMMAND_COALESCE_WINDOW_MS = 1500;
+const COMMAND_CHANNEL_RETRY_DELAY_MS = 2000;
 
 class MQTTService extends EventEmitter {
     constructor() {
@@ -636,6 +647,85 @@ class MQTTService extends EventEmitter {
         setImmediate(() => {
             this.emit(eventName, deviceId, payload);
         });
+    }
+
+    _deviceCommandChannelState(deviceId) {
+        const entry = this.deviceStatus.get(deviceId) || {};
+        const snapshot = entry.lastStatus && typeof entry.lastStatus === 'object'
+            ? entry.lastStatus
+            : null;
+        const liveStatus = global.modemService?.getDeviceStatus?.(deviceId) || null;
+        const online = Boolean(
+            liveStatus?.online === true ||
+            entry.online === true ||
+            snapshot?.online === true ||
+            this.isDeviceOnline(deviceId) ||
+            global.modemService?.isDeviceOnline?.(deviceId) === true
+        );
+        const normalized = snapshot && typeof snapshot === 'object'
+            ? buildDashboardDeviceStatus(snapshot, online)
+            : null;
+        const connected = firstDefinedBoolean(
+            liveStatus?.transport?.mqttCommandAccepting === true ? true : undefined,
+            liveStatus?.mqtt?.connected,
+            liveStatus?.status?.mqtt?.connected,
+            normalized?.mqtt?.connected,
+            snapshot?.status?.mqtt?.connected,
+            snapshot?.mqtt?.connected,
+            snapshot?.mqtt_connected
+        );
+        const subscribed = firstDefinedBoolean(
+            liveStatus?.transport?.mqttCommandAccepting === true ? true : undefined,
+            liveStatus?.mqtt?.subscribed,
+            liveStatus?.status?.mqtt?.subscribed,
+            normalized?.mqtt?.subscribed,
+            snapshot?.status?.mqtt?.subscribed,
+            snapshot?.mqtt?.subscribed,
+            snapshot?.mqtt_subscribed
+        );
+        const acceptsCommands = firstDefinedBoolean(
+            liveStatus?.transport?.mqttCommandAccepting,
+            liveStatus?.status?.transport?.mqttCommandAccepting,
+            normalized?.transport?.mqttCommandAccepting,
+            snapshot?.status?.transport?.mqttCommandAccepting,
+            snapshot?.transport?.mqttCommandAccepting,
+            snapshot?.mqttCommandAccepting,
+            snapshot?.mqtt_command_accepting
+        );
+        const hasEvidence = [connected, subscribed, acceptsCommands].some((value) => typeof value === 'boolean');
+
+        return {
+            online,
+            connected: connected === true,
+            subscribed: subscribed === true,
+            acceptsCommands: hasEvidence
+                ? (acceptsCommands === true || (connected === true && subscribed === true))
+                : true,
+            hasEvidence
+        };
+    }
+
+    _deviceCommandChannelPendingReason(deviceId) {
+        const state = this._deviceCommandChannelState(deviceId);
+        if (!state.hasEvidence) {
+            return null;
+        }
+        if (state.acceptsCommands) {
+            return null;
+        }
+        if (!state.online) {
+            return 'Device is offline';
+        }
+        if (state.connected && !state.subscribed) {
+            return 'Device MQTT connected but command subscription is not ready';
+        }
+        if (state.connected && !state.acceptsCommands) {
+            return 'Device MQTT connected but not accepting commands yet';
+        }
+        if (!state.connected) {
+            return 'Device MQTT command channel is not connected';
+        }
+        return 'Device command channel is not ready';
     }
 
     _maybeHandleCompatibilityCommand(deviceId, command, messageId, options = {}) {
@@ -1425,6 +1515,11 @@ class MQTTService extends EventEmitter {
         }
 
         const normalizedPayload = normalizeMqttContractPayload(payload);
+        const normalizedCommand = String(command || '').trim().toLowerCase();
+        if ((normalizedCommand === 'send-sms' || normalizedCommand === 'send-sms-multipart') &&
+            (!Number.isFinite(Number(normalizedPayload.timeout)) || Number(normalizedPayload.timeout) <= 0)) {
+            normalizedPayload.timeout = Number(timeout || 30000);
+        }
         const topic = `device/${deviceId}/command/${command}`;
         const messageId = options.messageId || this._generateCommandMessageId(command);
         const compatibilityResponse = this._maybeHandleCompatibilityCommand(deviceId, command, messageId, options);
@@ -1723,7 +1818,7 @@ class MQTTService extends EventEmitter {
              FROM device_command_queue
              WHERE device_id = ?
                AND message_id = ?
-               AND status IN ('pending', 'dispatching', 'waiting_response', 'failed')
+               AND status IN ('pending', 'dispatching', 'waiting_response', 'failed', 'ambiguous')
              ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC
              LIMIT 1`,
             [normalizedDeviceId, correlationId]
@@ -1777,7 +1872,7 @@ class MQTTService extends EventEmitter {
                  WHERE device_id = ?
                    AND command IN ('send-sms', 'send-sms-multipart')
                    AND message_id = ?
-                   AND status IN ('pending', 'dispatching', 'waiting_response', 'failed')
+                   AND status IN ('pending', 'dispatching', 'waiting_response', 'failed', 'ambiguous')
                  ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC
                  LIMIT 1`,
                 [normalizedDeviceId, correlationId]
@@ -1793,14 +1888,15 @@ class MQTTService extends EventEmitter {
              FROM device_command_queue
              WHERE device_id = ?
                AND command IN ('send-sms', 'send-sms-multipart')
-               AND status IN ('pending', 'dispatching', 'waiting_response', 'failed')
+               AND status IN ('pending', 'dispatching', 'waiting_response', 'failed', 'ambiguous')
              ORDER BY
                 CASE
                     WHEN status = 'waiting_response' THEN 0
                     WHEN status = 'dispatching' THEN 1
                     WHEN status = 'pending' THEN 2
                     WHEN status = 'failed' THEN 3
-                    ELSE 4
+                    WHEN status = 'ambiguous' THEN 4
+                    ELSE 5
                 END,
                 datetime(updated_at) DESC,
                 datetime(created_at) DESC
@@ -1861,6 +1957,11 @@ class MQTTService extends EventEmitter {
 
     async _markPersistentQueueRetry(row, error) {
         const db = this._db();
+        const detail = error?.message || String(error);
+        if (Number(row?.replay_safe || 0) === 0 && /Command timeout after \d+ms/i.test(detail)) {
+            await this._markPersistentQueueAmbiguous(row, error);
+            return;
+        }
         const attempts = Number(row.attempt_count || 0) + 1;
         const nextAttempt = this._sqlTimestamp(Date.now() + Math.min(30000, Math.max(2000, attempts * 5000)));
 
@@ -1868,13 +1969,13 @@ class MQTTService extends EventEmitter {
             await this._updatePersistentQueueRow(row.id, {
                 status: 'failed',
                 completed_at: this._sqlTimestamp(),
-                last_error: error.message || String(error)
+                last_error: detail
             });
             await this._syncSmsStatusFromQueueRow({
                 ...row,
                 status: 'failed',
-                last_error: error.message || String(error)
-            }, 'failed', error.message || String(error));
+                last_error: detail
+            }, 'failed', detail);
             const failed = db ? await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id]) : null;
             if (failed) {
                 await this._resolvePersistentQueueWaiter(failed);
@@ -1883,12 +1984,12 @@ class MQTTService extends EventEmitter {
             await this._updatePersistentQueueRow(row.id, {
                 status: 'pending',
                 next_attempt_at: nextAttempt,
-                last_error: error.message || String(error)
+                last_error: detail
             });
             await this._syncSmsStatusFromQueueRow({
                 ...row,
                 status: 'pending',
-                last_error: error.message || String(error)
+                last_error: detail
             }, 'queued', null);
         }
         await this._emitDeviceQueueState(row.device_id);
@@ -1925,6 +2026,22 @@ class MQTTService extends EventEmitter {
             if (!db) return;
             try {
                 if (!this.connected) throw new Error('MQTT not connected');
+                const commandChannelReason = this._deviceCommandChannelPendingReason(row.device_id);
+                if (commandChannelReason) {
+                    const nextAttempt = this._sqlTimestamp(Date.now() + COMMAND_CHANNEL_RETRY_DELAY_MS);
+                    await this._updatePersistentQueueRow(row.id, {
+                        status: 'pending',
+                        next_attempt_at: nextAttempt,
+                        last_error: commandChannelReason
+                    });
+                    await this._syncSmsStatusFromQueueRow({
+                        ...row,
+                        status: 'pending',
+                        last_error: commandChannelReason
+                    }, 'queued', null);
+                    await this._emitDeviceQueueState(row.device_id);
+                    return;
+                }
 
                 const payload = row.payload ? JSON.parse(row.payload) : {};
                 const usesAsyncResult = Boolean(row.requires_response) && this._usesAsyncDurableResult(row.command);

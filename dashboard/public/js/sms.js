@@ -5,7 +5,7 @@
     // State
     let contacts = [];
     let pageCtrl = null;
-    let liveSmsHandler = null;
+    let liveSmsHandlers = {};
     let smsSyncStartedHandler = null;
     let smsSyncCompletedHandler = null;
     let smsSyncHideTimer = null;
@@ -658,28 +658,53 @@
     function attachLiveSmsUpdates() {
         if (!window.socket || typeof window.socket.on !== 'function') return;
 
-        if (liveSmsHandler && typeof window.socket.off === 'function') {
-            window.socket.off('sms:received', liveSmsHandler);
-            window.socket.off('sms:queued', liveSmsHandler);
-            window.socket.off('sms:sent', liveSmsHandler);
-            window.socket.off('sms:delivered', liveSmsHandler);
-            window.socket.off('sms:send-failed', liveSmsHandler);
-            window.socket.off('sms:read', liveSmsHandler);
-            window.socket.off('sms:deleted', liveSmsHandler);
-            window.socket.off('sms:bulk-read', liveSmsHandler);
-            window.socket.off('sms:bulk-deleted', liveSmsHandler);
+        if (Object.keys(liveSmsHandlers).length && typeof window.socket.off === 'function') {
+            Object.entries(liveSmsHandlers).forEach(function (entry) {
+                window.socket.off(entry[0], entry[1]);
+            });
         }
         if (smsSyncStartedHandler && typeof window.socket.off === 'function') {
             window.socket.off('sms:sync-started', smsSyncStartedHandler);
             window.socket.off('sms:sync-completed', smsSyncCompletedHandler);
         }
-        liveSmsHandler = function (data) {
+
+        function handleLiveSmsEvent(eventName, data) {
             if (!matchesSmsScope(data)) return;
             if (data?.sync) return;
 
-            scheduleSmsRefresh();
-            scheduleThreadRefresh(180);
-        };
+            if (eventName === 'sms:read' || eventName === 'sms:deleted' || eventName === 'sms:bulk-read' || eventName === 'sms:bulk-deleted') {
+                if (data?.unreadCount !== undefined && data?.unreadCount !== null) {
+                    updateUnreadBadge(data.unreadCount);
+                }
+                scheduleSmsRefresh(80);
+                scheduleThreadRefresh(80);
+                return;
+            }
+
+            if (eventName === 'sms:sent' || eventName === 'sms:delivered' || eventName === 'sms:send-failed') {
+                const updated = updateThreadMessageStatus(data, eventName);
+                scheduleSmsRefresh(updated ? 60 : 80);
+                if (!updated) {
+                    scheduleThreadRefresh(80);
+                }
+                return;
+            }
+
+            const liveMessage = buildLiveThreadMessage(data, eventName);
+            const applied = liveMessage
+                && isLiveSmsCurrentThread(data, eventName)
+                && upsertThreadMessage(liveMessage);
+
+            if (data?.unreadCount !== undefined && data?.unreadCount !== null) {
+                updateUnreadBadge(data.unreadCount);
+            }
+
+            scheduleSmsRefresh(applied ? 60 : 80);
+            if (!applied) {
+                scheduleThreadRefresh(80);
+            }
+        }
+
         smsSyncStartedHandler = function (data) {
             if (!matchesSmsScope(data)) return;
             setSmsSyncOverlay(true, data);
@@ -687,34 +712,34 @@
         smsSyncCompletedHandler = function (data) {
             if (!matchesSmsScope(data)) return;
             setSmsSyncOverlay(false, data);
-            scheduleSmsRefresh(100);
-            scheduleThreadRefresh(180);
+            scheduleSmsRefresh(80);
+            scheduleThreadRefresh(80);
+        };
+        liveSmsHandlers = {
+            'sms:received': function (data) { handleLiveSmsEvent('sms:received', data); },
+            'sms:queued': function (data) { handleLiveSmsEvent('sms:queued', data); },
+            'sms:sent': function (data) { handleLiveSmsEvent('sms:sent', data); },
+            'sms:delivered': function (data) { handleLiveSmsEvent('sms:delivered', data); },
+            'sms:send-failed': function (data) { handleLiveSmsEvent('sms:send-failed', data); },
+            'sms:read': function (data) { handleLiveSmsEvent('sms:read', data); },
+            'sms:deleted': function (data) { handleLiveSmsEvent('sms:deleted', data); },
+            'sms:bulk-read': function (data) { handleLiveSmsEvent('sms:bulk-read', data); },
+            'sms:bulk-deleted': function (data) { handleLiveSmsEvent('sms:bulk-deleted', data); }
         };
 
-        window.socket.on('sms:received', liveSmsHandler);
-        window.socket.on('sms:queued', liveSmsHandler);
-        window.socket.on('sms:sent', liveSmsHandler);
-        window.socket.on('sms:delivered', liveSmsHandler);
-        window.socket.on('sms:send-failed', liveSmsHandler);
-        window.socket.on('sms:read', liveSmsHandler);
-        window.socket.on('sms:deleted', liveSmsHandler);
-        window.socket.on('sms:bulk-read', liveSmsHandler);
-        window.socket.on('sms:bulk-deleted', liveSmsHandler);
+        Object.entries(liveSmsHandlers).forEach(function (entry) {
+            window.socket.on(entry[0], entry[1]);
+        });
         window.socket.on('sms:sync-started', smsSyncStartedHandler);
         window.socket.on('sms:sync-completed', smsSyncCompletedHandler);
         window.addEventListener('beforeunload', function cleanupLiveSms() {
             if (refreshTimer) clearTimeout(refreshTimer);
-            window.socket?.off?.('sms:received', liveSmsHandler);
-            window.socket?.off?.('sms:queued', liveSmsHandler);
-            window.socket?.off?.('sms:sent', liveSmsHandler);
-            window.socket?.off?.('sms:delivered', liveSmsHandler);
-            window.socket?.off?.('sms:send-failed', liveSmsHandler);
-            window.socket?.off?.('sms:read', liveSmsHandler);
-            window.socket?.off?.('sms:deleted', liveSmsHandler);
-            window.socket?.off?.('sms:bulk-read', liveSmsHandler);
-            window.socket?.off?.('sms:bulk-deleted', liveSmsHandler);
+            Object.entries(liveSmsHandlers).forEach(function (entry) {
+                window.socket?.off?.(entry[0], entry[1]);
+            });
             window.socket?.off?.('sms:sync-started', smsSyncStartedHandler);
             window.socket?.off?.('sms:sync-completed', smsSyncCompletedHandler);
+            liveSmsHandlers = {};
             window.removeEventListener('beforeunload', cleanupLiveSms);
         });
     }
@@ -935,7 +960,7 @@
         }
     }
 
-    function scheduleSmsRefresh(delayMs = 400) {
+    function scheduleSmsRefresh(delayMs = 120) {
         if (refreshTimer) clearTimeout(refreshTimer);
         refreshTimer = setTimeout(() => {
             refreshSmsPageData();
@@ -950,7 +975,7 @@
         return Boolean(modalEl && modalEl.classList.contains('show'));
     }
 
-    function scheduleThreadRefresh(delayMs = 250) {
+    function scheduleThreadRefresh(delayMs = 80) {
         if (!threadState.number || !isThreadModalOpen()) return;
         if (threadRefreshTimer) clearTimeout(threadRefreshTimer);
         threadRefreshTimer = setTimeout(() => {
@@ -961,6 +986,150 @@
                 silent: true
             });
         }, delayMs);
+    }
+
+    function getLiveSmsConversationId(data) {
+        const conversationId = Math.max(0, Number(data?.conversationId ?? data?.conversation_id) || 0);
+        return conversationId || null;
+    }
+
+    function getLiveSmsThreadNumber(data, eventName = '') {
+        const normalizedEvent = String(eventName || '').trim().toLowerCase();
+        const type = String(data?.type || '').trim().toLowerCase();
+        const outgoing = normalizedEvent === 'sms:queued'
+            || normalizedEvent === 'sms:sent'
+            || normalizedEvent === 'sms:delivered'
+            || normalizedEvent === 'sms:send-failed'
+            || type === 'outgoing'
+            || data?.outgoing === true;
+        const primary = outgoing
+            ? (data?.to || data?.to_number || data?.number || '')
+            : (data?.from || data?.from_number || data?.number || data?.to || data?.to_number || '');
+        return String(primary || '').trim();
+    }
+
+    function isLiveSmsCurrentThread(data, eventName = '') {
+        const conversationId = getLiveSmsConversationId(data);
+        if (conversationId && threadState.conversationId) {
+            return conversationId === threadState.conversationId;
+        }
+        const number = getLiveSmsThreadNumber(data, eventName);
+        return Boolean(number) && number === threadState.number;
+    }
+
+    function sortThreadMessages(messages) {
+        return (Array.isArray(messages) ? messages : []).slice().sort(function (left, right) {
+            const timeDelta = new Date(left?.timestamp || 0).getTime() - new Date(right?.timestamp || 0).getTime();
+            if (timeDelta !== 0) return timeDelta;
+            return Number(left?.id || 0) - Number(right?.id || 0);
+        });
+    }
+
+    function upsertThreadMessage(message) {
+        if (!message) return false;
+
+        let updated = false;
+        const nextMessages = [];
+        const targetId = Number(message.id || 0) || null;
+        const targetExternalId = String(message.external_id || '').trim();
+
+        (Array.isArray(threadState.messages) ? threadState.messages : []).forEach(function (entry) {
+            const entryId = Number(entry?.id || 0) || null;
+            const entryExternalId = String(entry?.external_id || '').trim();
+            const sameMessage = (targetId && entryId === targetId)
+                || (targetExternalId && entryExternalId === targetExternalId);
+            if (sameMessage) {
+                nextMessages.push({ ...entry, ...message });
+                updated = true;
+                return;
+            }
+            nextMessages.push(entry);
+        });
+
+        if (!updated) {
+            nextMessages.push(message);
+        }
+
+        threadState.messages = sortThreadMessages(nextMessages);
+        renderThreadMessages(threadState.messages, threadState.number, threadState.title);
+        return true;
+    }
+
+    function updateThreadMessageStatus(data, eventName = '') {
+        if (!isLiveSmsCurrentThread(data, eventName)) {
+            return false;
+        }
+
+        const targetId = Number(data?.id || 0) || null;
+        const targetExternalId = String(data?.messageId || data?.external_id || '').trim();
+        if (!targetId && !targetExternalId) {
+            return false;
+        }
+
+        let changed = false;
+        threadState.messages = (Array.isArray(threadState.messages) ? threadState.messages : []).map(function (entry) {
+            const entryId = Number(entry?.id || 0) || null;
+            const entryExternalId = String(entry?.external_id || '').trim();
+            const sameMessage = (targetId && entryId === targetId)
+                || (targetExternalId && entryExternalId === targetExternalId);
+            if (!sameMessage) {
+                return entry;
+            }
+
+            changed = true;
+            return {
+                ...entry,
+                status: String(data?.status || '').trim().toLowerCase() || entry.status,
+                error: data?.error || null,
+                timestamp: entry.timestamp
+            };
+        });
+
+        if (changed) {
+            renderThreadMessages(threadState.messages, threadState.number, threadState.title);
+        }
+
+        return changed;
+    }
+
+    function buildLiveThreadMessage(data, eventName = '') {
+        const number = getLiveSmsThreadNumber(data, eventName);
+        if (!number) {
+            return null;
+        }
+
+        const normalizedEvent = String(eventName || '').trim().toLowerCase();
+        const type = String(data?.type || '').trim().toLowerCase();
+        const outgoing = normalizedEvent === 'sms:queued'
+            || normalizedEvent === 'sms:sent'
+            || normalizedEvent === 'sms:delivered'
+            || normalizedEvent === 'sms:send-failed'
+            || type === 'outgoing'
+            || data?.outgoing === true;
+        const status = String(data?.status || '').trim().toLowerCase()
+            || (normalizedEvent === 'sms:send-failed'
+                ? 'failed'
+                : normalizedEvent === 'sms:delivered'
+                    ? 'delivered'
+                    : normalizedEvent === 'sms:sent'
+                        ? 'sent'
+                        : normalizedEvent === 'sms:queued'
+                            ? 'queued'
+                            : (outgoing ? 'sent' : 'received'));
+
+        return {
+            id: Number(data?.id || 0) || null,
+            conversation_id: getLiveSmsConversationId(data),
+            external_id: String(data?.messageId || data?.external_id || '').trim() || null,
+            from_number: outgoing ? 'self' : String(data?.from || data?.from_number || '').trim(),
+            to_number: outgoing ? number : String(data?.to || data?.to_number || '').trim() || null,
+            message: String(data?.message || data?.text || '').trim(),
+            timestamp: data?.timestamp || new Date().toISOString(),
+            read: outgoing ? 1 : 0,
+            type: outgoing ? 'outgoing' : 'incoming',
+            status,
+            error: data?.error || null
+        };
     }
 
     function formatTs(ts) {
@@ -3208,7 +3377,7 @@
                 if (sendMode === 'scheduled' && scheduleAtInput) {
                     scheduleAtInput.value = getDefaultScheduleValue();
                 }
-                scheduleSmsRefresh(250);
+                scheduleSmsRefresh(80);
                 const followUpThread = queuedCount === 1
                     ? buildComposerFollowUpThread(to, { conversationId: data?.conversationId })
                     : null;
@@ -3219,13 +3388,13 @@
                         .catch(function () {})
                         .finally(function () {
                             if (followUpThread?.number) {
-                                followUpComposerThread(followUpThread, 120);
+                                followUpComposerThread(followUpThread, 40);
                             }
                         });
                     return;
                 }
                 if (followUpThread?.number) {
-                    followUpComposerThread(followUpThread, data.queued ? 120 : 180);
+                    followUpComposerThread(followUpThread, data.queued ? 40 : 80);
                 }
             })
             .catch(function (error) {
@@ -3334,11 +3503,11 @@
                         refreshSmsPageData();
                         if (followUpThread?.number) {
                             setPhoneFieldValue('smsChatTo', to);
-                            followUpComposerThread(followUpThread, data.queued ? 80 : 140);
+                            followUpComposerThread(followUpThread, data.queued ? 20 : 60);
                         } else {
                             setPhoneFieldValue('smsChatTo', '');
                         }
-                    }, data.queued ? 500 : 800);
+                    }, data.queued ? 80 : 120);
                 } else {
                     showToast('Failed to send SMS: ' + (data.message || 'Unknown error'), 'danger');
                 }

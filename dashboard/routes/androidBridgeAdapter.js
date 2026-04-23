@@ -247,7 +247,7 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
         );
 
         if (Number(result?.changes || 0) > 0) {
-            await attachSmsToConversation(db, {
+            const conversationId = await attachSmsToConversation(db, {
                 id: result.lastID,
                 device_id: deviceId,
                 from_number: isOutgoing ? null : from,
@@ -257,10 +257,14 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
             emitDevice(deviceId, 'sms:received', {
                 deviceId,
                 id: result.lastID,
+                conversationId: Number(conversationId || 0) || null,
                 sync: Boolean(req.body.sync),
                 from: isOutgoing ? null : from,
                 from_number: isOutgoing ? null : from,
                 to_number: isOutgoing ? to : (to || null),
+                type: isOutgoing ? 'outgoing' : 'incoming',
+                status: isOutgoing ? 'sent' : 'received',
+                sim_slot: simScope.simSlot,
                 message: content,
                 text: content,
                 timestamp
@@ -375,14 +379,22 @@ router.post('/messages/:messageId/events', requireBoundDevice, async (req, res) 
         );
 
         const row = await db.get(
-            'SELECT device_id, to_number FROM sms WHERE external_id = ? AND device_id = ? LIMIT 1',
+            `SELECT id, device_id, to_number, conversation_id, sim_slot
+             FROM sms
+             WHERE external_id = ?
+               AND device_id = ?
+             LIMIT 1`,
             [messageId, boundDeviceId]
         );
         if (row?.device_id) {
             emitDevice(row.device_id, status === 'failed' ? 'sms:send-failed' : `sms:${status}`, {
                 deviceId: row.device_id,
+                id: Number(row.id || 0) || null,
+                conversationId: Number(row.conversation_id || 0) || null,
                 messageId,
                 to: row.to_number,
+                sim_slot: row.sim_slot ?? null,
+                status,
                 error: status === 'failed' ? reason || 'Android bridge failed' : null,
                 timestamp
             });

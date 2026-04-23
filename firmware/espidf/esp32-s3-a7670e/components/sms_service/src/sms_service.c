@@ -18,10 +18,11 @@
 #include "task_registry.h"
 #include "unified_runtime.h"
 
-#define SMS_SERVICE_FALLBACK_POLL_DIVISOR  12U
+#define SMS_SERVICE_FALLBACK_POLL_DIVISOR  2U
 #define SMS_SERVICE_FALLBACK_POLL_INTERVAL_MS \
     ((uint32_t)CONFIG_UNIFIED_TELEPHONY_POLL_INTERVAL_MS * SMS_SERVICE_FALLBACK_POLL_DIVISOR)
-#define SMS_SERVICE_URC_FALLBACK_GRACE_MS  (SMS_SERVICE_FALLBACK_POLL_INTERVAL_MS * 3U)
+#define SMS_SERVICE_URC_FALLBACK_GRACE_MS  (SMS_SERVICE_FALLBACK_POLL_INTERVAL_MS * 2U)
+#define SMS_SERVICE_EVENT_RETRY_DELAY_MS  750U
 #define SMS_SERVICE_SINGLE_SMS_TEXT_LEN_BYTES  160U
 #define SMS_SERVICE_UNICODE_SEND_TIMEOUT_MS  45000U
 #define SMS_SERVICE_MULTIPART_SEND_TIMEOUT_MS  60000U
@@ -459,7 +460,10 @@ static void sms_service_task(void *arg) {
             if (modem_status.runtime.running && modem_status.sim_ready) {
                 uint32_t idle_wait_ms = SMS_SERVICE_FALLBACK_POLL_INTERVAL_MS;
 
-                if (last_urc_success_ms != 0U && (now_ms - last_urc_success_ms) < SMS_SERVICE_URC_FALLBACK_GRACE_MS) {
+                if (saw_event && !event_consumed) {
+                    idle_wait_ms = SMS_SERVICE_EVENT_RETRY_DELAY_MS;
+                } else if (last_urc_success_ms != 0U &&
+                           (now_ms - last_urc_success_ms) < SMS_SERVICE_URC_FALLBACK_GRACE_MS) {
                     idle_wait_ms = SMS_SERVICE_URC_FALLBACK_GRACE_MS - (now_ms - last_urc_success_ms);
                 }
                 wait_ticks = pdMS_TO_TICKS(idle_wait_ms);

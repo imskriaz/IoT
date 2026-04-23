@@ -53,9 +53,9 @@ typedef struct {
 } modem_a7670_mqtt_message_t;
 
 typedef struct {
-    char task_urc_buffer[160];
+    char task_urc_buffer[MODEM_A7670_UART_PARSE_LINE_LEN];
     char probe_response[160];
-    char probe_urc_buffer[160];
+    char probe_urc_buffer[MODEM_A7670_UART_PARSE_LINE_LEN];
     char data_session_response[sizeof(((modem_a7670_status_t *)0)->last_response)];
     char data_session_ip_address[UNIFIED_IPV4_ADDR_LEN];
     char parse_line[MODEM_A7670_UART_PARSE_LINE_LEN];
@@ -92,6 +92,8 @@ static bool s_mqtt_rx_expect_topic;
 static bool s_mqtt_rx_expect_payload;
 static size_t s_mqtt_rx_expected_topic_len;
 static size_t s_mqtt_rx_expected_payload_len;
+static size_t s_mqtt_rx_topic_fragment_remaining;
+static size_t s_mqtt_rx_payload_fragment_remaining;
 static size_t s_mqtt_rx_topic_bytes;
 static size_t s_mqtt_rx_payload_bytes;
 static char s_mqtt_rx_topic[MODEM_A7670_MQTT_TOPIC_LEN];
@@ -148,6 +150,7 @@ void modem_a7670_arm_ussd_request_locked(uint32_t timeout_ms);
 static void modem_a7670_handle_ussd_request_timeout_locked(void);
 static bool modem_a7670_mqtt_rx_capture_active_locked(void);
 static size_t modem_a7670_parse_cmqttrx_length(const char *line);
+static bool modem_a7670_parse_cmqttrx_start_lengths(const char *line, size_t *topic_len, size_t *payload_len);
 static void modem_a7670_append_fragment(char *dest, size_t dest_len, const char *fragment);
 static bool modem_a7670_mqtt_topic_is_command(const char *topic);
 static bool modem_a7670_infer_mqtt_topic_from_payload_locked(char *topic, size_t topic_len, const char *payload);
@@ -213,8 +216,6 @@ static bool modem_a7670_refresh_due(uint32_t now_ms, uint32_t last_refresh_ms, u
 
 static bool modem_a7670_extract_quoted_field(const char *line, int field_index, char *out_value, size_t out_len) {
     const char *cursor = line;
-    const char *start = NULL;
-    const char *end = NULL;
     int current_index = 0;
 
     if (!line || !out_value || out_len == 0U || field_index < 0) {
@@ -222,20 +223,129 @@ static bool modem_a7670_extract_quoted_field(const char *line, int field_index, 
     }
 
     out_value[0] = '\0';
-    while ((start = strchr(cursor, '"')) != NULL) {
-        end = strchr(start + 1, '"');
-        if (!end) {
+    while ((cursor = strchr(cursor, '"')) != NULL) {
+        const char *scan = cursor + 1;
+        size_t written = 0U;
+        bool escape = false;
+
+        while (*scan != '\0') {
+            if (!escape && *scan == '\\') {
+                escape = true;
+                ++scan;
+                continue;
+            }
+            if (!escape && *scan == '"') {
+                if (current_index == field_index) {
+                    out_value[written] = '\0';
+                    return true;
+                }
+                current_index++;
+                cursor = scan + 1;
+                break;
+            }
+            if (current_index == field_index && written + 1U < out_len) {
+                char value = *scan;
+
+                if (escape) {
+                    switch (*scan) {
+                        case 'n':
+                            value = '\n';
+                            break;
+                        case 'r':
+                            value = '\r';
+                            break;
+                        case 't':
+                            value = '\t';
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                out_value[written++] = value;
+            }
+            escape = false;
+            ++scan;
+        }
+        if (*scan == '\0') {
             return false;
         }
-        if (current_index == field_index) {
-            snprintf(out_value, out_len, "%.*s", (int)(end - (start + 1)), start + 1);
-            return out_value[0] != '\0';
-        }
-        current_index++;
-        cursor = end + 1;
     }
 
     return false;
+}
+
+static bool modem_a7670_parse_cmqttrecv_line(
+    const char *line,
+    char *topic,
+    size_t topic_len,
+    char *payload,
+    size_t payload_len
+) {
+    const char *topic_start = NULL;
+    const char *topic_end = NULL;
+    const char *cursor = NULL;
+    const char *payload_start = NULL;
+    char *length_end = NULL;
+    long declared_payload_len = -1L;
+    size_t available_payload_len = 0U;
+    size_t copy_len = 0U;
+
+    if (!line || !topic || topic_len == 0U || !payload || payload_len == 0U) {
+        return false;
+    }
+
+    topic[0] = '\0';
+    payload[0] = '\0';
+    if (!modem_a7670_extract_quoted_field(line, 0, topic, topic_len) || topic[0] == '\0') {
+        return false;
+    }
+
+    topic_start = strchr(line, '"');
+    if (!topic_start) {
+        return false;
+    }
+    topic_end = strchr(topic_start + 1, '"');
+    if (!topic_end) {
+        return false;
+    }
+
+    cursor = topic_end + 1;
+    while (*cursor == ' ' || *cursor == ',') {
+        ++cursor;
+    }
+    if (*cursor >= '0' && *cursor <= '9') {
+        declared_payload_len = strtol(cursor, &length_end, 10);
+        if (length_end == cursor || declared_payload_len < 0L) {
+            return false;
+        }
+        cursor = length_end;
+        while (*cursor == ' ' || *cursor == ',') {
+            ++cursor;
+        }
+    }
+    if (*cursor != '"') {
+        return false;
+    }
+
+    payload_start = cursor + 1;
+    available_payload_len = strlen(payload_start);
+    if (available_payload_len > 0U && payload_start[available_payload_len - 1U] == '"') {
+        available_payload_len--;
+    }
+    if (declared_payload_len >= 0L) {
+        copy_len = (size_t)declared_payload_len;
+        if (copy_len > available_payload_len) {
+            return false;
+        }
+    } else {
+        copy_len = available_payload_len;
+    }
+    if (copy_len >= payload_len) {
+        copy_len = payload_len - 1U;
+    }
+    memcpy(payload, payload_start, copy_len);
+    payload[copy_len] = '\0';
+    return true;
 }
 
 static void modem_a7670_copy_digits_with_plus(const char *input, char *output, size_t output_len) {
@@ -372,6 +482,8 @@ static void modem_a7670_reset_mqtt_rx_locked(void) {
     s_mqtt_rx_expect_payload = false;
     s_mqtt_rx_expected_topic_len = 0U;
     s_mqtt_rx_expected_payload_len = 0U;
+    s_mqtt_rx_topic_fragment_remaining = 0U;
+    s_mqtt_rx_payload_fragment_remaining = 0U;
     s_mqtt_rx_topic_bytes = 0U;
     s_mqtt_rx_payload_bytes = 0U;
     s_mqtt_rx_topic[0] = '\0';
@@ -434,6 +546,24 @@ static size_t modem_a7670_parse_cmqttrx_length(const char *line) {
     }
 
     return (size_t)value;
+}
+
+static bool modem_a7670_parse_cmqttrx_start_lengths(const char *line, size_t *topic_len, size_t *payload_len) {
+    unsigned int parsed_topic_len = 0U;
+    unsigned int parsed_payload_len = 0U;
+    int client_index = 0;
+
+    if (!line || !topic_len || !payload_len) {
+        return false;
+    }
+
+    if (sscanf(line, "+CMQTTRXSTART: %d,%u,%u", &client_index, &parsed_topic_len, &parsed_payload_len) != 3) {
+        return false;
+    }
+
+    *topic_len = (size_t)parsed_topic_len;
+    *payload_len = (size_t)parsed_payload_len;
+    return true;
 }
 
 static void modem_a7670_append_fragment(char *dest, size_t dest_len, const char *fragment) {
@@ -949,31 +1079,48 @@ static void modem_a7670_parse_line_locked(const char *line) {
     }
 
     if (strncmp(line, "+CMQTTRXSTART:", 13) == 0) {
+        size_t topic_len = 0U;
+        size_t payload_len = 0U;
+
+        ESP_LOGI(TAG, "CMQTTRXSTART raw=%s", line);
         s_mqtt_service_started = true;
         s_mqtt_connected = true;
         modem_a7670_reset_mqtt_rx_locked();
+        if (modem_a7670_parse_cmqttrx_start_lengths(line, &topic_len, &payload_len)) {
+            s_mqtt_rx_expected_topic_len = topic_len;
+            s_mqtt_rx_expected_payload_len = payload_len;
+        } else {
+            ESP_LOGW(TAG, "CMQTTRXSTART parse failed raw=%s", line);
+        }
         return;
     }
 
     if (strncmp(line, "+CMQTTRXTOPIC:", 13) == 0) {
-        s_mqtt_rx_expected_topic_len = modem_a7670_parse_cmqttrx_length(line);
-        s_mqtt_rx_topic_bytes = 0U;
-        s_mqtt_rx_expect_topic = true;
+        const size_t fragment_len = modem_a7670_parse_cmqttrx_length(line);
+        ESP_LOGI(TAG, "CMQTTRXTOPIC raw=%s", line);
+        if (s_mqtt_rx_expected_topic_len == 0U) {
+            s_mqtt_rx_expected_topic_len = fragment_len;
+        }
+        s_mqtt_rx_topic_fragment_remaining = fragment_len;
+        s_mqtt_rx_expect_topic = fragment_len > 0U;
         s_mqtt_rx_expect_payload = false;
-        s_mqtt_rx_topic[0] = '\0';
         return;
     }
 
     if (strncmp(line, "+CMQTTRXPAYLOAD:", 15) == 0) {
-        s_mqtt_rx_expected_payload_len = modem_a7670_parse_cmqttrx_length(line);
-        s_mqtt_rx_payload_bytes = 0U;
+        const size_t fragment_len = modem_a7670_parse_cmqttrx_length(line);
+        ESP_LOGI(TAG, "CMQTTRXPAYLOAD raw=%s", line);
+        if (s_mqtt_rx_expected_payload_len == 0U) {
+            s_mqtt_rx_expected_payload_len = fragment_len;
+        }
+        s_mqtt_rx_payload_fragment_remaining = fragment_len;
         s_mqtt_rx_expect_topic = false;
-        s_mqtt_rx_expect_payload = true;
-        s_mqtt_rx_payload[0] = '\0';
+        s_mqtt_rx_expect_payload = fragment_len > 0U;
         return;
     }
 
     if (strncmp(line, "+CMQTTRXEND:", 11) == 0) {
+        ESP_LOGI(TAG, "CMQTTRXEND raw=%s topic=%s payload_len=%u", line, s_mqtt_rx_topic, (unsigned)s_mqtt_rx_payload_bytes);
         if (!modem_a7670_mqtt_topic_is_command(s_mqtt_rx_topic)) {
             s_mqtt_rx_topic[0] = '\0';
             (void)modem_a7670_infer_mqtt_topic_from_payload_locked(
@@ -986,6 +1133,19 @@ static void modem_a7670_parse_line_locked(const char *line) {
             modem_a7670_queue_mqtt_message_locked(s_mqtt_rx_topic, s_mqtt_rx_payload);
         }
         modem_a7670_reset_mqtt_rx_locked();
+        return;
+    }
+
+    if (strncmp(line, "+CMQTTRECV:", 11) == 0) {
+        char recv_topic[MODEM_A7670_MQTT_TOPIC_LEN] = {0};
+        char recv_payload[CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN] = {0};
+
+        ESP_LOGI(TAG, "CMQTTRECV raw=%s", line);
+        if (modem_a7670_parse_cmqttrecv_line(line, recv_topic, sizeof(recv_topic), recv_payload, sizeof(recv_payload))) {
+            modem_a7670_queue_mqtt_message_locked(recv_topic, recv_payload);
+        } else {
+            ESP_LOGW(TAG, "CMQTTRECV parse failed raw=%s", line);
+        }
         return;
     }
 
@@ -1222,9 +1382,11 @@ static esp_err_t modem_a7670_probe_uart_sideband(bool refresh_data_session) {
 
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
         if (modem_a7670_mqtt_rx_capture_active_locked()) {
-            /* Keep the UART idle while a CMQTTRX frame is still assembling so
-             * periodic AT probes do not interleave with inbound modem MQTT
-             * command delivery. */
+            /* Do not inject new AT probes while a CMQTTRX frame is still
+             * assembling, but keep draining the UART so the in-flight MQTT
+             * frame can complete even if no fresh UART event is posted. */
+            memset(urc_buffer, 0, sizeof(scratch->probe_urc_buffer));
+            (void)modem_a7670_read_until_quiet_locked(urc_buffer, sizeof(scratch->probe_urc_buffer), 50);
             s_status.runtime.running = s_status.data_session_open || s_status.ip_bearer_ready;
             modem_a7670_sync_state_modes_locked();
             modem_a7670_set_health_locked();
@@ -1645,21 +1807,19 @@ void modem_a7670_parse_response_locked(const char *response) {
         }
 
         capture_topic = s_mqtt_rx_expect_topic &&
-                        s_mqtt_rx_expected_topic_len > 0U &&
-                        s_mqtt_rx_topic_bytes < s_mqtt_rx_expected_topic_len;
+                        s_mqtt_rx_topic_fragment_remaining > 0U;
         capture_payload = s_mqtt_rx_expect_payload &&
-                          s_mqtt_rx_expected_payload_len > 0U &&
-                          s_mqtt_rx_payload_bytes < s_mqtt_rx_expected_payload_len;
+                          s_mqtt_rx_payload_fragment_remaining > 0U;
         if (capture_topic || capture_payload) {
             data_start = line_start;
             available = (fragment_used + copy_len) - data_start;
             if (capture_topic) {
-                remaining_expected = s_mqtt_rx_expected_topic_len - s_mqtt_rx_topic_bytes;
+                remaining_expected = s_mqtt_rx_topic_fragment_remaining;
                 dest = s_mqtt_rx_topic;
                 dest_len = sizeof(s_mqtt_rx_topic);
                 captured_bytes = &s_mqtt_rx_topic_bytes;
             } else {
-                remaining_expected = s_mqtt_rx_expected_payload_len - s_mqtt_rx_payload_bytes;
+                remaining_expected = s_mqtt_rx_payload_fragment_remaining;
                 dest = s_mqtt_rx_payload;
                 dest_len = sizeof(s_mqtt_rx_payload);
                 captured_bytes = &s_mqtt_rx_payload_bytes;
@@ -1676,12 +1836,18 @@ void modem_a7670_parse_response_locked(const char *response) {
                     dest[stored + store_len] = '\0';
                 }
                 *captured_bytes += consumed;
+                if (capture_topic) {
+                    s_mqtt_rx_topic_fragment_remaining -= consumed;
+                } else {
+                    s_mqtt_rx_payload_fragment_remaining -= consumed;
+                }
                 cursor = data_start + consumed;
             } else {
                 cursor = data_start;
             }
 
-            if (*captured_bytes < (capture_topic ? s_mqtt_rx_expected_topic_len : s_mqtt_rx_expected_payload_len)) {
+            if ((capture_topic && s_mqtt_rx_topic_fragment_remaining > 0U) ||
+                (capture_payload && s_mqtt_rx_payload_fragment_remaining > 0U)) {
                 break;
             }
 
@@ -2284,10 +2450,10 @@ static esp_err_t modem_a7670_mqtt_subscribe_locked(
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Some A76XX firmware accepts the two-step CMQTTSUBTOPIC flow but does not
-     * consistently deliver live publishes afterwards. The direct CMQTTSUB form
-     * keeps the broker ACK and topic write as one modem transaction. */
-    snprintf(command, sizeof(command), "AT+CMQTTSUB=0,%u,1", (unsigned)strlen(topic));
+    /* Prefer the vendor-documented two-step subscription flow. On this board,
+     * direct CMQTTSUB acks can look healthy while inbound publishes never
+     * surface as CMQTTRX frames afterwards. */
+    snprintf(command, sizeof(command), "AT+CMQTTSUBTOPIC=0,%u,1", (unsigned)strlen(topic));
     err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
     if (err == ESP_OK) {
         response[0] = '\0';
@@ -2297,12 +2463,43 @@ static esp_err_t modem_a7670_mqtt_subscribe_locked(
             err = modem_a7670_read_response_locked(response, response_len, timeout_ms, false);
         }
     }
-
+    if (err == ESP_OK) {
+        snprintf(command, sizeof(command), "%s", "AT+CMQTTSUB=0");
+        err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
+    }
     if (err == ESP_OK && !modem_a7670_response_has_phrase(response, "+CMQTTSUB:")) {
         err = modem_a7670_read_response_until_phrase_locked(response, response_len, timeout_ms, "+CMQTTSUB:");
     }
     if (err == ESP_OK && !modem_a7670_response_has_phrase(response, "+CMQTTSUB: 0,0")) {
         err = ESP_FAIL;
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGW(
+            TAG,
+            "CMQTTSUBTOPIC flow topic=%s failed err=%s response=%s; retrying with direct CMQTTSUB",
+            topic,
+            esp_err_to_name(err),
+            response[0] ? response : "<empty>"
+        );
+        response[0] = '\0';
+        snprintf(command, sizeof(command), "AT+CMQTTSUB=0,%u,1", (unsigned)strlen(topic));
+        err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
+        if (err == ESP_OK) {
+            response[0] = '\0';
+            if (uart_write_bytes((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT, topic, strlen(topic)) < 0) {
+                err = ESP_FAIL;
+            } else {
+                err = modem_a7670_read_response_locked(response, response_len, timeout_ms, false);
+            }
+        }
+
+        if (err == ESP_OK && !modem_a7670_response_has_phrase(response, "+CMQTTSUB:")) {
+            err = modem_a7670_read_response_until_phrase_locked(response, response_len, timeout_ms, "+CMQTTSUB:");
+        }
+        if (err == ESP_OK && !modem_a7670_response_has_phrase(response, "+CMQTTSUB: 0,0")) {
+            err = ESP_FAIL;
+        }
     }
 
     if (err != ESP_OK) {
@@ -2426,7 +2623,15 @@ esp_err_t modem_a7670_mqtt_connect(
     }
 
     (void)modem_a7670_send_command_locked("AT+CMQTTCFG=\"version\",0,4", response, response_len, timeout_ms, false);
-    (void)modem_a7670_send_command_locked("AT+CMQTTCFG=\"checkUTF8\",0,0", response, response_len, timeout_ms, false);
+    /* Dashboard command payloads are standard UTF-8 JSON. Leaving the modem in
+     * "not check UTF8" mode is intended for hex/non-UTF8 payload flows and can
+     * corrupt or drop Bangla/Unicode command bodies before they reach the
+     * automation bridge. */
+    (void)modem_a7670_send_command_locked("AT+CMQTTCFG=\"checkUTF8\",0,1", response, response_len, timeout_ms, false);
+    /* With argtopic enabled the A76XX emits inbound publishes as a single
+     * +CMQTTRECV URC carrying topic and payload. Force payload length on too so
+     * long JSON command bodies stay deterministic to parse. */
+    (void)modem_a7670_send_command_locked("AT+CMQTTCFG=\"argtopic\",0,1,1", response, response_len, timeout_ms, false);
 
     if (username && username[0] != '\0' && password && password[0] != '\0') {
         snprintf(
@@ -2552,33 +2757,28 @@ esp_err_t modem_a7670_mqtt_publish(
         return ESP_ERR_INVALID_STATE;
     }
 
-    snprintf(command, sizeof(command), "AT+CMQTTTOPIC=0,%u", (unsigned)strlen(topic));
+    /* The modem is configured in MQTT_EX argtopic mode, so publish through the
+     * matching one-command CMQTTPUB flow first. This keeps topic selection and
+     * payload upload in a single publish transaction and avoids the timeouts we
+     * were seeing with the legacy CMQTTTOPIC/CMQTTPAYLOAD sequence. */
+    snprintf(
+        command,
+        sizeof(command),
+        "AT+CMQTTPUB=0,\"%s\",%d,%u",
+        topic,
+        qos < 0 ? 0 : qos,
+        (unsigned)strlen(payload)
+    );
     err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
     if (err == ESP_OK) {
         response[0] = '\0';
-        if (uart_write_bytes((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT, topic, strlen(topic)) < 0) {
+        if (uart_write_bytes((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT, payload, strlen(payload)) < 0) {
             err = ESP_FAIL;
         } else {
             err = modem_a7670_read_response_locked(response, response_len, timeout_ms, false);
         }
     }
-
     if (err == ESP_OK) {
-        snprintf(command, sizeof(command), "AT+CMQTTPAYLOAD=0,%u", (unsigned)strlen(payload));
-        err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
-        if (err == ESP_OK) {
-            response[0] = '\0';
-            if (uart_write_bytes((uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT, payload, strlen(payload)) < 0) {
-                err = ESP_FAIL;
-            } else {
-                err = modem_a7670_read_response_locked(response, response_len, timeout_ms, false);
-            }
-        }
-    }
-
-    if (err == ESP_OK) {
-        snprintf(command, sizeof(command), "AT+CMQTTPUB=0,%d,60", qos < 0 ? 0 : qos);
-        err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
         if (!modem_a7670_response_has_phrase(response, "+CMQTTPUB:")) {
             err = modem_a7670_read_response_until_phrase_locked(response, response_len, timeout_ms, "+CMQTTPUB:");
         }

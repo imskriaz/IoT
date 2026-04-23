@@ -39,7 +39,7 @@ static const char *TAG = "mqtt_mgr";
 #define MQTT_MGR_ESP_START_INTERNAL_MARGIN_BYTES 1024U
 #define MQTT_MGR_WIFI_PRIMARY_MIN_RSSI_DBM   (-85)
 #define MQTT_MGR_ESP_CONNECT_GRACE_MS      20000U
-#define MQTT_MGR_MODEM_RESUBSCRIBE_MS      60000U
+#define MQTT_MGR_MODEM_RESUBSCRIBE_MS      10000U
 #define MQTT_MGR_ACTION_RESULT_BATCH_LIMIT     6U
 #define MQTT_MGR_TASK_STACK_LEN            5120U
 
@@ -409,17 +409,19 @@ static esp_err_t mqtt_mgr_start_esp_client_locked(void) {
 static esp_err_t mqtt_mgr_start_modem_client_locked(void) {
     char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
     esp_err_t err = ESP_OK;
+    esp_err_t subscribe_err = ESP_OK;
 
     if (!s_broker_host[0] || s_broker_port == 0U) {
         return ESP_ERR_INVALID_STATE;
     }
     if (modem_a7670_mqtt_is_connected()) {
-        (void)mqtt_mgr_subscribe_modem_command_topics_locked();
-        s_last_modem_subscribe_ms = unified_tick_now_ms();
         s_transport = MQTT_MGR_TRANSPORT_MODEM;
         s_status.connected = true;
-        s_status.subscribed = true;
+        s_status.subscribed = false;
         s_status.runtime.running = true;
+        subscribe_err = mqtt_mgr_subscribe_modem_command_topics_locked();
+        (void)subscribe_err;
+        s_last_modem_subscribe_ms = unified_tick_now_ms();
         return ESP_OK;
     }
 
@@ -448,14 +450,15 @@ static esp_err_t mqtt_mgr_start_modem_client_locked(void) {
 
     s_transport = MQTT_MGR_TRANSPORT_MODEM;
     s_status.connected = true;
-    s_status.subscribed = true;
+    s_status.subscribed = false;
     s_status.runtime.running = true;
     s_status.runtime.last_error = ESP_OK;
     s_status.runtime.last_error_text[0] = '\0';
     s_next_modem_connect_retry_ms = 0U;
     s_modem_connect_failure_count = 0U;
     s_modem_reset_pending = false;
-    (void)mqtt_mgr_subscribe_modem_command_topics_locked();
+    subscribe_err = mqtt_mgr_subscribe_modem_command_topics_locked();
+    (void)subscribe_err;
     s_last_modem_subscribe_ms = unified_tick_now_ms();
     return ESP_OK;
 }
@@ -523,8 +526,15 @@ static esp_err_t mqtt_mgr_subscribe_commands_locked(void) {
 }
 
 static esp_err_t mqtt_mgr_subscribe_modem_command_topics_locked(void) {
-    static const char *const command_suffixes[] = {
-        "command/+"
+    typedef struct {
+        const char *suffix;
+        bool primary;
+    } modem_command_topic_t;
+    static const modem_command_topic_t command_topics[] = {
+        { "command/get-status", true },
+        { "command/send-sms", true },
+        { "command/send-sms-multipart", true },
+        { "command/+", false }
     };
     char topic[160] = {0};
     char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
@@ -532,17 +542,17 @@ static esp_err_t mqtt_mgr_subscribe_modem_command_topics_locked(void) {
     size_t success_count = 0U;
     bool primary_command_topic_subscribed = false;
 
-    for (size_t index = 0U; index < sizeof(command_suffixes) / sizeof(command_suffixes[0]); ++index) {
+    for (size_t index = 0U; index < sizeof(command_topics) / sizeof(command_topics[0]); ++index) {
         topic[0] = '\0';
         response[0] = '\0';
-        if (mqtt_mgr_build_topic_locked(command_suffixes[index], topic, sizeof(topic)) != ESP_OK) {
+        if (mqtt_mgr_build_topic_locked(command_topics[index].suffix, topic, sizeof(topic)) != ESP_OK) {
             last_err = ESP_ERR_INVALID_SIZE;
             continue;
         }
         last_err = modem_a7670_mqtt_subscribe(topic, response, sizeof(response), 5000U);
         if (last_err == ESP_OK) {
             success_count++;
-            if (strcmp(command_suffixes[index], "command/+") == 0) {
+            if (command_topics[index].primary) {
                 primary_command_topic_subscribed = true;
             }
         }
@@ -1240,7 +1250,6 @@ static void mqtt_mgr_task(void *arg) {
                     } else if (mqtt_mgr_start_esp_client_locked() != ESP_OK) {
                         if (s_transport == MQTT_MGR_TRANSPORT_MODEM && modem_mqtt_connected) {
                             s_status.connected = true;
-                            s_status.subscribed = true;
                             s_status.runtime.running = true;
                         } else if (modem_fallback_ready) {
                             ESP_LOGW(TAG, "esp mqtt start failed on wifi; trying modem fallback");
@@ -1257,7 +1266,6 @@ static void mqtt_mgr_task(void *arg) {
                     }
                     if (s_transport == MQTT_MGR_TRANSPORT_MODEM && modem_mqtt_connected) {
                         s_status.connected = true;
-                        s_status.subscribed = true;
                         s_status.runtime.running = true;
                     } else {
                         if (s_transport == MQTT_MGR_TRANSPORT_MODEM) {
@@ -1321,7 +1329,6 @@ static void mqtt_mgr_task(void *arg) {
                 }
                 if (s_transport == MQTT_MGR_TRANSPORT_MODEM && modem_mqtt_connected) {
                     s_status.connected = true;
-                    s_status.subscribed = true;
                     s_status.runtime.running = true;
                 } else if (s_transport == MQTT_MGR_TRANSPORT_MODEM) {
                     s_status.connected = false;
@@ -1408,7 +1415,6 @@ static void mqtt_mgr_task(void *arg) {
                                         (now_ms - s_last_modem_subscribe_ms) >= MQTT_MGR_MODEM_RESUBSCRIBE_MS;
                     s_transport = MQTT_MGR_TRANSPORT_MODEM;
                     s_status.connected = true;
-                    s_status.subscribed = true;
                     s_status.runtime.running = true;
                 }
                 if (resubscribe_modem) {
