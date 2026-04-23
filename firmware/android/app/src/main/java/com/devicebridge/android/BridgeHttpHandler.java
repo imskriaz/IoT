@@ -22,7 +22,7 @@ final class BridgeHttpHandler {
         executor.execute(() -> {
             BridgeHttpClient.Result result = BridgeHttpClient.postStatus(service.currentConfig(), payload);
             if (!result.success) {
-                service.recordHttpFailure("HTTP status push failed");
+                service.recordHttpFailure("HTTP status push failed", result.detail);
                 return;
             }
             service.recordHttpStatusSuccess();
@@ -33,7 +33,7 @@ final class BridgeHttpHandler {
         executor.execute(() -> {
             BridgeHttpClient.Result result = BridgeHttpClient.postIncomingSms(service.currentConfig(), payload);
             if (!result.success) {
-                service.recordHttpFailure("HTTP incoming SMS push failed");
+                service.recordHttpFailure("HTTP incoming SMS push failed", result.detail);
                 return;
             }
             service.recordHttpIncomingSmsSuccess();
@@ -54,7 +54,7 @@ final class BridgeHttpHandler {
 
             BridgeHttpClient.Result result = BridgeHttpClient.postMessageEvent(service.currentConfig(), actionId, payload);
             if (!result.success) {
-                service.recordHttpFailure("HTTP message event failed: " + eventName);
+                service.recordHttpFailure("HTTP message event failed: " + eventName, result.detail);
                 return;
             }
             service.recordHttpMessageEventSuccess();
@@ -81,7 +81,7 @@ final class BridgeHttpHandler {
                 }
             }
         } catch (Exception error) {
-            service.recordHttpFailure("HTTP queue poll failed");
+            service.recordHttpFailure("HTTP queue poll failed", error == null ? "" : error.getMessage());
         }
     }
 }
