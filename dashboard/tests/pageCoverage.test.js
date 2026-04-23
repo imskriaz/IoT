@@ -849,6 +849,23 @@ describe('sidebar navigation coverage', () => {
         expect(js).toContain("threadState.messages = [];");
     });
 
+    test('sms live delivery events infer status even when the payload omits it', () => {
+        const js = fs.readFileSync(smsJsPath, 'utf8');
+
+        expect(js).toContain('function resolveLiveSmsStatus(data, eventName = \'\', fallbackStatus = \'\')');
+        expect(js).toContain("if (normalizedEvent === 'sms:delivered') {");
+        expect(js).toContain("return 'delivered';");
+        expect(js).toContain('const resolvedStatus = resolveLiveSmsStatus(data, eventName);');
+        expect(js).toContain("status: resolvedStatus || entry.status,");
+        expect(js).toContain("const status = resolveLiveSmsStatus(data, eventName, outgoing ? 'sent' : 'received');");
+        expect(js).toContain('function updateConversationItemStatus(data, eventName = \'\')');
+        expect(js).toContain('function updateRenderedThreadMessageStatus(data, eventName = \'\')');
+        expect(js).toContain('updateRenderedThreadMessageStatus(data, eventName);');
+        expect(js).toContain('updateConversationItemStatus(data, eventName);');
+        expect(js).toContain('data-thread-status-pill="1"');
+        expect(js).toContain('document.querySelector(`.sms-bubble[data-thread-sms-id="${targetId}"]`)');
+    });
+
     test('sms thread selection syncs for URL-driven and programmatic loads', () => {
         const js = fs.readFileSync(smsJsPath, 'utf8');
 

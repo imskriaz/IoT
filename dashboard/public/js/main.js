@@ -557,6 +557,7 @@ function updateSidebarSimSelector(status = latestDeviceStatus) {
     if (slots.length < 2) {
         hideElement(wrap);
         selector.innerHTML = '<option value="">Primary SIM</option>';
+        syncSidebarDeviceAwareLinks();
         return;
     }
 
@@ -569,6 +570,7 @@ function updateSidebarSimSelector(status = latestDeviceStatus) {
     selector.value = String(currentSlot?.slotIndex ?? slots[0].slotIndex);
     setStoredActiveSimSlot(selector.value, status?.deviceId || status?.device_id || '');
     showElement(wrap, 'block');
+    syncSidebarDeviceAwareLinks();
 }
 
 function isActiveDevicePayload(payload) {
@@ -2204,18 +2206,65 @@ function buildDeviceAwareHref(rawHref) {
     if (!href) return '';
 
     const url = new URL(href, window.location.origin);
+    if (url.origin !== window.location.origin || url.pathname.startsWith('/api/')) {
+        return `${url.pathname}${url.search}${url.hash}`;
+    }
+
     const deviceId = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
     const simContext = window.getActiveDeviceSimContext ? window.getActiveDeviceSimContext() : {
         simSlot: window.getActiveDeviceSimSlot ? window.getActiveDeviceSimSlot() : null
     };
     if (deviceId && url.pathname.startsWith('/devices/')) {
         url.searchParams.set('device', deviceId);
+    } else if (deviceId) {
+        url.searchParams.set('deviceId', deviceId);
     }
-    if (simContext.simSlot !== null && simContext.simSlot !== undefined && !url.pathname.startsWith('/api/')) {
+    if (simContext.simSlot !== null && simContext.simSlot !== undefined) {
         url.searchParams.set('simSlot', String(simContext.simSlot));
     }
+    url.searchParams.delete('simSubscriptionId');
+    url.searchParams.delete('subscription_id');
 
     return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function syncSidebarDeviceAwareLinks(root = document) {
+    const scope = root && typeof root.querySelectorAll === 'function' ? root : document;
+    scope.querySelectorAll('[data-device-nav="true"] a[href^="/"]:not([target="_blank"])').forEach((link) => {
+        const baseHref = String(
+            link.getAttribute('data-device-base-href')
+            || link.getAttribute('data-device-aware-href')
+            || link.getAttribute('href')
+            || ''
+        ).trim();
+        if (!baseHref || baseHref.startsWith('/api/')) {
+            return;
+        }
+
+        if (!link.hasAttribute('data-device-base-href')) {
+            link.setAttribute('data-device-base-href', baseHref);
+        }
+        link.setAttribute('data-device-aware-href', baseHref);
+
+        const scopedHref = buildDeviceAwareHref(baseHref);
+        if (scopedHref) {
+            link.setAttribute('href', scopedHref);
+        }
+    });
+}
+
+function syncCurrentLocationDeviceScope() {
+    if (!window.history?.replaceState) {
+        return;
+    }
+
+    const currentHref = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const scopedHref = buildDeviceAwareHref(currentHref);
+    if (!scopedHref || scopedHref === currentHref) {
+        return;
+    }
+
+    window.history.replaceState({}, '', scopedHref);
 }
 
 function navigateStatusPanelLink(linkTarget) {
@@ -2694,6 +2743,7 @@ function refreshSidebarDeviceNavigation() {
 
     updateSidebarSectionVisibility();
     saveSidebarVisibilitySnapshot(activeDeviceId);
+    syncSidebarDeviceAwareLinks();
 
     const simWrap = document.getElementById('sidebarSimSelectorWrap');
     if (simWrap && !shouldShowDeviceNav) {
@@ -2867,6 +2917,8 @@ window.addEventListener('device:changed', function () {
     scheduleDashboardSmsRefresh(150);
     scheduleDeviceEnvelopeRefresh(100);
     syncDashboardStatusDemand({ allowReconnect: false });
+    syncCurrentLocationDeviceScope();
+    syncSidebarDeviceAwareLinks();
 });
 window.addEventListener('device:sim-changed', function (event) {
     activeIncomingCallContext = null;
@@ -2894,6 +2946,7 @@ window.addEventListener('device:sim-changed', function (event) {
     if (window.history?.replaceState) {
         window.history.replaceState({}, '', nextHref);
     }
+    syncSidebarDeviceAwareLinks();
 });
 
 // Push notification helper
@@ -2911,6 +2964,7 @@ function pushNotify(title, body, icon) {
 }
 
 window.refreshSidebarDeviceNavigation = refreshSidebarDeviceNavigation;
+window.syncSidebarDeviceAwareLinks = syncSidebarDeviceAwareLinks;
 
 // Audio notification: synthesise short tones via Web Audio API (no file needed)
 const _audioCtx = typeof AudioContext !== 'undefined' ? new AudioContext() : null;

@@ -12,4 +12,16 @@ describe('main.js device HTTP helper export', () => {
         expect(source).toContain('return inferDeviceHttpOnline(latestDeviceStatus);');
         expect(source).not.toContain('return deviceHttpOnline(latestDeviceStatus);');
     });
+
+    test('keeps sidebar navigation scoped to the active device and SIM', () => {
+        const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'main.js'), 'utf8');
+
+        expect(source).toContain("url.searchParams.set('deviceId', deviceId);");
+        expect(source).toContain("url.searchParams.set('device', deviceId);");
+        expect(source).toContain("url.searchParams.set('simSlot', String(simContext.simSlot));");
+        expect(source).toContain("function syncSidebarDeviceAwareLinks(root = document) {");
+        expect(source).toContain("scope.querySelectorAll('[data-device-nav=\"true\"] a[href^=\"/\"]:not([target=\"_blank\"])')");
+        expect(source).toContain("window.history.replaceState({}, '', scopedHref);");
+        expect(source).toContain('window.syncSidebarDeviceAwareLinks = syncSidebarDeviceAwareLinks;');
+    });
 });
