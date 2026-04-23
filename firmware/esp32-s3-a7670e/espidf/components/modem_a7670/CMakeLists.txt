@@ -2,6 +2,7 @@ set(MODEM_A7670_REQUIRES
     board_bsp
     config_mgr
     diagnostics
+    heap
     health_monitor
     freertos
     log

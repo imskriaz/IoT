@@ -34,8 +34,11 @@ static const char *TAG = "mqtt_mgr";
 #define MQTT_MGR_MODEM_RESET_BACKOFF_MS   45000U
 #define MQTT_MGR_MODEM_RESET_THRESHOLD        3U
 #define MQTT_MGR_MODEM_RESPONSE_LEN          512U
+#define MQTT_MGR_ESP_START_RETRY_MS       15000U
+#define MQTT_MGR_ESP_START_INTERNAL_MARGIN_BYTES 1024U
 #define MQTT_MGR_WIFI_PRIMARY_MIN_RSSI_DBM   (-85)
 #define MQTT_MGR_ESP_CONNECT_GRACE_MS      20000U
+#define MQTT_MGR_MODEM_RESUBSCRIBE_MS      60000U
 #define MQTT_MGR_ACTION_RESULT_BATCH_LIMIT     6U
 #define MQTT_MGR_TASK_STACK_LEN            5120U
 
@@ -91,6 +94,7 @@ static bool s_disconnect_modem_after_esp_connected;
 static bool s_modem_connection_seen;
 static uint32_t s_last_modem_subscribe_ms;
 static uint32_t s_next_modem_connect_retry_ms;
+static uint32_t s_next_esp_start_retry_ms;
 static uint8_t s_modem_connect_failure_count;
 static bool s_modem_reset_pending;
 static unified_ussd_payload_t s_pending_ussd_result;
@@ -340,30 +344,53 @@ static bool mqtt_mgr_modem_fallback_ready(
 }
 
 static esp_err_t mqtt_mgr_start_esp_client_locked(void) {
+    uint32_t now_ms = unified_tick_now_ms();
+    uint32_t internal_largest = 0U;
+
     if (!s_client) {
         return ESP_ERR_INVALID_STATE;
     }
     if (s_client_started) {
         if (!s_status.connected && s_esp_connect_started_ms == 0U) {
-            s_esp_connect_started_ms = unified_tick_now_ms();
+            s_esp_connect_started_ms = now_ms;
         }
         if (s_status.connected || s_transport != MQTT_MGR_TRANSPORT_MODEM) {
             s_transport = MQTT_MGR_TRANSPORT_ESP;
         }
         return ESP_OK;
     }
+    if (s_next_esp_start_retry_ms != 0U && now_ms < s_next_esp_start_retry_ms) {
+        s_status.runtime.last_error = ESP_ERR_TIMEOUT;
+        snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "mqtt_esp_retry_wait");
+        return ESP_ERR_TIMEOUT;
+    }
+    internal_largest = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (internal_largest < (MQTT_MGR_TASK_STACK_LEN + MQTT_MGR_ESP_START_INTERNAL_MARGIN_BYTES)) {
+        s_next_esp_start_retry_ms = now_ms + MQTT_MGR_ESP_START_RETRY_MS;
+        s_status.runtime.last_error = ESP_ERR_NO_MEM;
+        snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "mqtt_esp_internal_heap_low");
+        ESP_LOGW(
+            TAG,
+            "skip esp mqtt start internal_largest=%" PRIu32 " required=%u",
+            internal_largest,
+            (unsigned)(MQTT_MGR_TASK_STACK_LEN + MQTT_MGR_ESP_START_INTERNAL_MARGIN_BYTES)
+        );
+        return ESP_ERR_NO_MEM;
+    }
     mqtt_mgr_log_internal_heap("before_start");
     ESP_LOGI(TAG, "starting client broker=%s", s_status.broker[0] != '\0' ? s_status.broker : "<unset>");
     if (esp_mqtt_client_start(s_client) != ESP_OK) {
         mqtt_mgr_log_internal_heap("start_failed");
+        s_next_esp_start_retry_ms = now_ms + MQTT_MGR_ESP_START_RETRY_MS;
         s_status.runtime.last_error = ESP_FAIL;
         snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "mqtt_start_failed");
         return ESP_FAIL;
     }
 
+    s_next_esp_start_retry_ms = 0U;
     mqtt_mgr_log_internal_heap("start_ok");
     s_client_started = true;
-    s_esp_connect_started_ms = unified_tick_now_ms();
+    s_esp_connect_started_ms = now_ms;
     s_status.runtime.running = true;
     if (s_transport != MQTT_MGR_TRANSPORT_MODEM) {
         s_transport = MQTT_MGR_TRANSPORT_ESP;
@@ -446,6 +473,7 @@ static esp_err_t mqtt_mgr_stop_transport_locked(void) {
     s_esp_connect_started_ms = 0U;
     s_last_modem_subscribe_ms = 0U;
     s_next_modem_connect_retry_ms = 0U;
+    s_next_esp_start_retry_ms = 0U;
     s_modem_connect_failure_count = 0U;
     s_modem_reset_pending = false;
     s_status.connected = false;
@@ -488,11 +516,7 @@ static esp_err_t mqtt_mgr_subscribe_commands_locked(void) {
 
 static esp_err_t mqtt_mgr_subscribe_modem_command_topics_locked(void) {
     static const char *const command_suffixes[] = {
-        "command/get-sms-history",
-        "command/send-sms",
-        "command/send-sms-multipart",
-        "command/#",
-        "cmd/#"
+        "command/send-sms"
     };
     char topic[160] = {0};
     char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
@@ -510,7 +534,7 @@ static esp_err_t mqtt_mgr_subscribe_modem_command_topics_locked(void) {
         last_err = modem_a7670_mqtt_subscribe(topic, response, sizeof(response), 5000U);
         if (last_err == ESP_OK) {
             success_count++;
-            if (strncmp(command_suffixes[index], "command/", 8) == 0) {
+            if (strcmp(command_suffixes[index], "command/send-sms") == 0) {
                 primary_command_topic_subscribed = true;
             }
         }
@@ -985,6 +1009,7 @@ static esp_err_t mqtt_mgr_refresh_config_locked(void) {
     s_transport = MQTT_MGR_TRANSPORT_NONE;
     s_client_started = false;
     s_disconnect_modem_after_esp_connected = false;
+    s_next_esp_start_retry_ms = 0U;
     s_status.connected = false;
     s_status.subscribed = false;
     s_status.runtime.running = false;
@@ -1363,13 +1388,16 @@ static void mqtt_mgr_task(void *arg) {
             bool process_modem_messages = true;
             bool resubscribe_modem = false;
             if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+                uint32_t now_ms = unified_tick_now_ms();
                 if (!s_modem_connection_seen) {
                     s_modem_connection_seen = true;
                 }
                 if (s_transport == MQTT_MGR_TRANSPORT_ESP && s_status.connected) {
                     process_modem_messages = false;
                 } else {
-                    resubscribe_modem = s_last_modem_subscribe_ms == 0U || !s_status.subscribed;
+                    resubscribe_modem = s_last_modem_subscribe_ms == 0U ||
+                                        !s_status.subscribed ||
+                                        (now_ms - s_last_modem_subscribe_ms) >= MQTT_MGR_MODEM_RESUBSCRIBE_MS;
                     s_transport = MQTT_MGR_TRANSPORT_MODEM;
                     s_status.connected = true;
                     s_status.subscribed = true;

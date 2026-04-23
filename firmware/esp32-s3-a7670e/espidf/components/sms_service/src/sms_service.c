@@ -7,6 +7,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "esp_heap_caps.h"
 #include "esp_timer.h"
 
 #include "health_monitor.h"
@@ -22,11 +23,28 @@
 #define SMS_SERVICE_SINGLE_SMS_TEXT_LEN_BYTES  160U
 #define SMS_SERVICE_MULTIPART_SEND_TIMEOUT_MS  60000U
 #define SMS_SERVICE_BACKGROUND_MODEM_TIMEOUT_MS  2500U
+#define SMS_SERVICE_MODEM_RESPONSE_LEN  1024U
 
 static sms_service_status_t s_status;
 static SemaphoreHandle_t s_lock;
 static bool s_ready;
 static TaskHandle_t s_task_handle;
+
+static void *sms_service_alloc_zeroed(size_t size) {
+    void *buffer = heap_caps_calloc(1U, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    if (!buffer) {
+        buffer = heap_caps_calloc(1U, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+
+    return buffer;
+}
+
+static void sms_service_free(void *buffer) {
+    if (buffer) {
+        heap_caps_free(buffer);
+    }
+}
 
 static uint32_t sms_service_effective_send_timeout_ms(const char *text, uint32_t timeout_ms, bool force_multipart) {
     uint32_t effective_timeout_ms = timeout_ms > 0U ? timeout_ms : CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS;
@@ -131,7 +149,7 @@ static unified_action_response_t sms_service_send_with_transport(
 ) {
     modem_a7670_status_t modem_status = {0};
     unified_sms_payload_t outgoing = {0};
-    char modem_response[256] = {0};
+    char *modem_response = NULL;
     esp_err_t err = ESP_FAIL;
     const uint32_t effective_timeout_ms = sms_service_effective_send_timeout_ms(text, timeout_ms, force_multipart);
     const unified_action_command_t command = force_multipart
@@ -153,9 +171,21 @@ static unified_action_response_t sms_service_send_with_transport(
         return sms_service_build_response(command, UNIFIED_ACTION_RESULT_REJECTED, ESP_ERR_INVALID_STATE, "modem_not_ready");
     }
 
+    modem_response = sms_service_alloc_zeroed(SMS_SERVICE_MODEM_RESPONSE_LEN);
+    if (!modem_response) {
+        return sms_service_build_response(command, UNIFIED_ACTION_RESULT_FAILED, ESP_ERR_NO_MEM, "sms_response_alloc_failed");
+    }
+
     err = force_multipart
-        ? modem_a7670_send_sms_multipart(number, text, modem_response, sizeof(modem_response), effective_timeout_ms)
-        : modem_a7670_send_sms(number, text, modem_response, sizeof(modem_response), effective_timeout_ms);
+        ? modem_a7670_send_sms_multipart(number, text, modem_response, SMS_SERVICE_MODEM_RESPONSE_LEN, effective_timeout_ms)
+        : modem_a7670_send_sms(number, text, modem_response, SMS_SERVICE_MODEM_RESPONSE_LEN, effective_timeout_ms);
+    if (err != ESP_OK) {
+        printf(
+            "sms_service_send_failed err=%s response=%s\n",
+            esp_err_to_name(err),
+            modem_response[0] ? modem_response : "<empty>"
+        );
+    }
     snprintf(outgoing.from, sizeof(outgoing.from), "%s", number);
     snprintf(outgoing.text, sizeof(outgoing.text), "%s", text);
     snprintf(
@@ -182,13 +212,16 @@ static unified_action_response_t sms_service_send_with_transport(
     }
 
     if (err == ESP_OK) {
+        sms_service_free(modem_response);
         return sms_service_build_response(command, UNIFIED_ACTION_RESULT_COMPLETED, ESP_OK, success_detail);
     }
 
     if (err == ESP_ERR_TIMEOUT) {
+        sms_service_free(modem_response);
         return sms_service_build_response(command, UNIFIED_ACTION_RESULT_TIMEOUT, err, timeout_detail);
     }
 
+    sms_service_free(modem_response);
     return sms_service_build_response(command, UNIFIED_ACTION_RESULT_FAILED, err, failed_detail);
 }
 

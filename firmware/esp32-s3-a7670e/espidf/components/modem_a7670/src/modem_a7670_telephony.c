@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "driver/uart.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "unified_runtime.h"
@@ -17,6 +18,11 @@
 #define MODEM_A7670_SMS_COMMAND_LEN             192U
 #define MODEM_A7670_SMS_UCS2_NUMBER_LEN        (UNIFIED_TEXT_SHORT_LEN * 4U + 1U)
 #define MODEM_A7670_SMS_UCS2_TEXT_LEN          (UNIFIED_SMS_TEXT_MAX_LEN * 4U + 1U)
+#define MODEM_A7670_SMS_TEXT_FO                  17U
+#define MODEM_A7670_SMS_TEXT_VP_DEFAULT         167U
+#define MODEM_A7670_SMS_TEXT_PID                  0U
+#define MODEM_A7670_SMS_TEXT_DCS_GSM              0U
+#define MODEM_A7670_SMS_TEXT_DCS_UCS2             8U
 #define MODEM_A7670_USSD_CANCEL_URC_WAIT_MS      3000U
 #define MODEM_A7670_USSD_CANCEL_POLL_QUIET_MS     250U
 #define MODEM_A7670_USSD_CANCEL_IDLE_SLICE_MS     100U
@@ -37,6 +43,22 @@ static modem_a7670_sms_runtime_state_t s_sms_runtime_state;
 
 static bool modem_a7670_sms_decode_ucs2_hex(const char *input, char *output, size_t output_len);
 static bool modem_a7670_sms_next_utf8_char(const char *text, size_t *out_len);
+
+static void *modem_a7670_sms_alloc_zeroed(size_t size) {
+    void *buffer = heap_caps_calloc(1U, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    if (!buffer) {
+        buffer = heap_caps_calloc(1U, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+
+    return buffer;
+}
+
+static void modem_a7670_sms_free(void *buffer) {
+    if (buffer) {
+        heap_caps_free(buffer);
+    }
+}
 
 static int64_t modem_a7670_timeout_deadline_us(uint32_t timeout_ms) {
     return esp_timer_get_time() + ((int64_t)timeout_ms * 1000LL);
@@ -801,31 +823,42 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
     esp_err_t err = ESP_OK;
     const char *destination_number = number;
     const bool use_ucs2 = modem_a7670_sms_requires_ucs2(text);
+    char encoded_number[MODEM_A7670_SMS_UCS2_NUMBER_LEN] = {0};
+    char *encoded_segment = NULL;
+    char *segment_buffer = NULL;
     uint32_t remaining_timeout_ms = 0U;
 
     if (total_segments < 2U || total_segments > MODEM_A7670_SMS_MAX_SEGMENTS) {
         return ESP_ERR_INVALID_SIZE;
     }
+    if (use_ucs2) {
+        encoded_segment = modem_a7670_sms_alloc_zeroed(MODEM_A7670_SMS_UCS2_TEXT_LEN);
+        segment_buffer = modem_a7670_sms_alloc_zeroed(UNIFIED_SMS_TEXT_MAX_LEN + 1U);
+        if (!encoded_segment || !segment_buffer) {
+            modem_a7670_sms_free(encoded_segment);
+            modem_a7670_sms_free(segment_buffer);
+            return ESP_ERR_NO_MEM;
+        }
+        if (!modem_a7670_sms_encode_utf8_to_ucs2_hex(number, encoded_number, sizeof(encoded_number))) {
+            modem_a7670_sms_free(encoded_segment);
+            modem_a7670_sms_free(segment_buffer);
+            return ESP_ERR_INVALID_ARG;
+        }
+        destination_number = encoded_number;
+    }
 
     remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
     if (remaining_timeout_ms == 0U) {
-        return ESP_ERR_TIMEOUT;
+        err = ESP_ERR_TIMEOUT;
+        goto cleanup;
     }
-    err = modem_a7670_sms_set_charset_locked(use_ucs2 ? "UCS2" : "IRA", response, response_len, remaining_timeout_ms);
+    err = modem_a7670_sms_set_text_mode_locked(response, response_len, remaining_timeout_ms);
     if (err == ESP_OK) {
         remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
         if (remaining_timeout_ms == 0U) {
             err = ESP_ERR_TIMEOUT;
         } else {
-            err = modem_a7670_sms_set_text_mode_params_locked(
-                17U,
-                167U,
-                0U,
-                use_ucs2 ? 8U : 0U,
-                response,
-                response_len,
-                remaining_timeout_ms
-            );
+            err = modem_a7670_sms_set_charset_locked("IRA", response, response_len, remaining_timeout_ms);
         }
     }
     if (err == ESP_OK) {
@@ -833,7 +866,23 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
         if (remaining_timeout_ms == 0U) {
             err = ESP_ERR_TIMEOUT;
         } else {
-            err = modem_a7670_sms_set_text_mode_locked(response, response_len, remaining_timeout_ms);
+            err = modem_a7670_sms_set_text_mode_params_locked(
+                MODEM_A7670_SMS_TEXT_FO,
+                MODEM_A7670_SMS_TEXT_VP_DEFAULT,
+                MODEM_A7670_SMS_TEXT_PID,
+                use_ucs2 ? MODEM_A7670_SMS_TEXT_DCS_UCS2 : MODEM_A7670_SMS_TEXT_DCS_GSM,
+                response,
+                response_len,
+                remaining_timeout_ms
+            );
+        }
+    }
+    if (err == ESP_OK && use_ucs2) {
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            err = ESP_ERR_TIMEOUT;
+        } else {
+            err = modem_a7670_sms_set_charset_locked("UCS2", response, response_len, remaining_timeout_ms);
         }
     }
     for (size_t segment_index = 0U; err == ESP_OK && segment_index < total_segments; ++segment_index) {
@@ -841,19 +890,19 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
             ? modem_a7670_sms_segment_length(segment_cursor, MODEM_A7670_SMS_SEGMENT_TEXT_LEN_BYTES)
             : modem_a7670_sms_unicode_segment_length(segment_cursor, MODEM_A7670_SMS_UCS2_SEGMENT_TEXT_LEN);
         char command[MODEM_A7670_SMS_COMMAND_LEN] = {0};
-        char encoded_segment[MODEM_A7670_SMS_UCS2_TEXT_LEN] = {0};
         const char *segment_text = segment_cursor;
 
         if (segment_len == 0U) {
-            return ESP_ERR_INVALID_SIZE;
+            err = ESP_ERR_INVALID_SIZE;
+            break;
         }
 
         if (use_ucs2) {
-            char segment_buffer[UNIFIED_SMS_TEXT_MAX_LEN] = {0};
-
+            memset(encoded_segment, 0, MODEM_A7670_SMS_UCS2_TEXT_LEN);
+            memset(segment_buffer, 0, UNIFIED_SMS_TEXT_MAX_LEN + 1U);
             memcpy(segment_buffer, segment_cursor, segment_len);
             segment_buffer[segment_len] = '\0';
-            if (!modem_a7670_sms_encode_utf8_to_ucs2_hex(segment_buffer, encoded_segment, sizeof(encoded_segment))) {
+            if (!modem_a7670_sms_encode_utf8_to_ucs2_hex(segment_buffer, encoded_segment, MODEM_A7670_SMS_UCS2_TEXT_LEN)) {
                 err = ESP_ERR_INVALID_ARG;
                 break;
             }
@@ -868,7 +917,8 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
                 (unsigned int)message_reference,
                 (unsigned int)(segment_index + 1U),
                 (unsigned int)total_segments) < 0) {
-            return ESP_FAIL;
+            err = ESP_FAIL;
+            break;
         }
 
         remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
@@ -897,6 +947,9 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
         segment_cursor += segment_len;
     }
 
+cleanup:
+    modem_a7670_sms_free(encoded_segment);
+    modem_a7670_sms_free(segment_buffer);
     return err;
 }
 
@@ -945,7 +998,8 @@ esp_err_t modem_a7670_send_sms(
     const uint8_t ctrl_z = 0x1AU;
     const size_t total_segments = modem_a7670_sms_segment_count(text);
     const bool use_ucs2 = modem_a7670_sms_requires_ucs2(text);
-    char encoded_text[MODEM_A7670_SMS_UCS2_TEXT_LEN] = {0};
+    char *encoded_text = NULL;
+    char encoded_number[MODEM_A7670_SMS_UCS2_NUMBER_LEN] = {0};
     const char *destination_number = number;
     const char *message_text = text;
     int64_t deadline_us = 0;
@@ -968,10 +1022,20 @@ esp_err_t modem_a7670_send_sms(
     }
 
     if (use_ucs2) {
-        /* SIMCom text-mode UCS2 requires the message body as UCS2 hex, but the
-         * destination phone number remains the normal dial string. Encoding the
-         * number into UCS2 breaks non-ASCII sends such as Bangla SMS. */
-        if (!modem_a7670_sms_encode_utf8_to_ucs2_hex(text, encoded_text, sizeof(encoded_text))) {
+        /* With CSCS=UCS2, both destination address strings and message body
+         * text are passed to the modem as UCS2 hex. */
+        if (!modem_a7670_sms_encode_utf8_to_ucs2_hex(number, encoded_number, sizeof(encoded_number))) {
+            xSemaphoreGive(s_lock);
+            return ESP_ERR_INVALID_ARG;
+        }
+        destination_number = encoded_number;
+        encoded_text = modem_a7670_sms_alloc_zeroed(MODEM_A7670_SMS_UCS2_TEXT_LEN);
+        if (!encoded_text) {
+            xSemaphoreGive(s_lock);
+            return ESP_ERR_NO_MEM;
+        }
+        if (!modem_a7670_sms_encode_utf8_to_ucs2_hex(text, encoded_text, MODEM_A7670_SMS_UCS2_TEXT_LEN)) {
+            modem_a7670_sms_free(encoded_text);
             xSemaphoreGive(s_lock);
             return ESP_ERR_INVALID_ARG;
         }
@@ -985,22 +1049,14 @@ esp_err_t modem_a7670_send_sms(
         if (remaining_timeout_ms == 0U) {
             err = ESP_ERR_TIMEOUT;
         } else {
-            err = modem_a7670_sms_set_charset_locked(use_ucs2 ? "UCS2" : "IRA", response, response_len, remaining_timeout_ms);
+            err = modem_a7670_sms_set_text_mode_locked(response, response_len, remaining_timeout_ms);
         }
         if (err == ESP_OK) {
             remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
             if (remaining_timeout_ms == 0U) {
                 err = ESP_ERR_TIMEOUT;
             } else {
-                err = modem_a7670_sms_set_text_mode_params_locked(
-                    17U,
-                    167U,
-                    0U,
-                    use_ucs2 ? 8U : 0U,
-                    response,
-                    response_len,
-                    remaining_timeout_ms
-                );
+                err = modem_a7670_sms_set_charset_locked("IRA", response, response_len, remaining_timeout_ms);
             }
         }
         if (err == ESP_OK) {
@@ -1008,7 +1064,23 @@ esp_err_t modem_a7670_send_sms(
             if (remaining_timeout_ms == 0U) {
                 err = ESP_ERR_TIMEOUT;
             } else {
-                err = modem_a7670_sms_set_text_mode_locked(response, response_len, remaining_timeout_ms);
+                err = modem_a7670_sms_set_text_mode_params_locked(
+                    MODEM_A7670_SMS_TEXT_FO,
+                    MODEM_A7670_SMS_TEXT_VP_DEFAULT,
+                    MODEM_A7670_SMS_TEXT_PID,
+                    use_ucs2 ? MODEM_A7670_SMS_TEXT_DCS_UCS2 : MODEM_A7670_SMS_TEXT_DCS_GSM,
+                    response,
+                    response_len,
+                    remaining_timeout_ms
+                );
+            }
+        }
+        if (err == ESP_OK && use_ucs2) {
+            remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+            if (remaining_timeout_ms == 0U) {
+                err = ESP_ERR_TIMEOUT;
+            } else {
+                err = modem_a7670_sms_set_charset_locked("UCS2", response, response_len, remaining_timeout_ms);
             }
         }
         if (err == ESP_OK) {
@@ -1039,6 +1111,7 @@ esp_err_t modem_a7670_send_sms(
     }
 
     xSemaphoreGive(s_lock);
+    modem_a7670_sms_free(encoded_text);
     return err;
 }
 
