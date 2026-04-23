@@ -1,6 +1,8 @@
 package com.devicebridge.android;
 
 import android.app.Activity;
+import android.Manifest;
+import android.content.pm.PackageManager;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -75,6 +77,39 @@ final class BridgeTestLab {
 
             BridgeEventLog.append(activity, "Test Lab queue pickup: " + detail);
             finish(activity, callback, "Queue Pickup Test", detail);
+        }).start();
+    }
+
+    static void runSelfSendTest(Activity activity, Callback callback) {
+        new Thread(() -> {
+            if (activity.checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+                finish(activity, callback, "Self SMS Test", "Self-send blocked. " + SmsSender.describeDetail("sms_permission_denied"));
+                return;
+            }
+
+            String selfNumber = SmsSender.resolveSelfNumber(activity);
+            if (selfNumber.isEmpty()) {
+                String detail = "Self-send needs the phone's own number. Grant phone-state/phone-number access or store the SIM line number on the device.";
+                BridgeEventLog.append(activity, "Test Lab self SMS blocked: no self number");
+                finish(activity, callback, "Self SMS Test", detail);
+                return;
+            }
+
+            long now = System.currentTimeMillis();
+            String actionId = "self_test_" + now;
+            String body = "Device Bridge self-test " + now;
+            SmsSender.SendResult result = SmsSender.send(activity, actionId, selfNumber, body, 90000, null, null);
+            if (!result.accepted) {
+                String detail = "Self-send rejected: " + SmsSender.describeDetail(result.detail);
+                BridgeEventLog.append(activity, "Test Lab self SMS rejected: " + result.detail);
+                finish(activity, callback, "Self SMS Test", detail);
+                return;
+            }
+
+            BridgeSmsStore.recordOutgoing(activity, actionId, selfNumber, body, now, "self_test");
+            String detail = "Self-send queued to " + selfNumber + ". Wait for sent/delivered callbacks and the inbound copy to confirm the full SMS loop.";
+            BridgeEventLog.append(activity, "Test Lab self SMS queued to " + selfNumber);
+            finish(activity, callback, "Self SMS Test", detail);
         }).start();
     }
 

@@ -1,6 +1,8 @@
 package com.devicebridge.android;
 
 import android.app.Activity;
+import android.content.Context;
+import android.os.Bundle;
 import android.telephony.SmsManager;
 
 import java.util.Map;
@@ -13,44 +15,76 @@ final class SmsSendTracker {
     }
 
     static void register(String actionId, String number, int partCount, int timeoutMs) {
+        pruneExpired();
         String key = key(actionId);
-        STATES.put(key, new State(actionId, number, Math.max(partCount, 1), sanitizeTimeout(timeoutMs)));
+        STATES.put(key, new State(actionId, number, Math.max(partCount, 1), sanitizeTimeout(timeoutMs), System.currentTimeMillis()));
     }
 
     static void remove(String actionId) {
         STATES.remove(key(actionId));
     }
 
-    static void markSent(String actionId, String number, int resultCode) {
+    static void markSent(Context context, String actionId, String number, int resultCode, Bundle extras) {
+        pruneExpired();
         String key = key(actionId);
         State state = STATES.get(key);
         if (state == null) {
-            state = new State(actionId, number, 1, 90000);
+            state = new State(actionId, number, 1, 90000, System.currentTimeMillis());
             STATES.put(key, state);
         }
 
         if (resultCode != Activity.RESULT_OK) {
-            if (!state.finished) {
-                state.finished = true;
+            if (!state.sendPublished) {
+                state.sendPublished = true;
                 STATES.remove(key);
-                MqttBridgeService.publishSentResult(actionId, state.number, state.totalParts, state.timeoutMs, false, detailFor(resultCode));
+                String detail = detailFor(resultCode, extras);
+                BridgeSmsStore.updateOutgoingStatus(context, actionId, "failed");
+                MqttBridgeService.publishSentResult(actionId, state.number, state.totalParts, state.timeoutMs, false, detail);
             }
             return;
         }
 
         state.sentParts++;
-        if (state.sentParts >= state.totalParts && !state.finished) {
-            state.finished = true;
-            STATES.remove(key);
+        if (state.sentParts >= state.totalParts && !state.sendPublished) {
+            state.sendPublished = true;
+            BridgeSmsStore.updateOutgoingStatus(context, actionId, "sent");
             MqttBridgeService.publishSentResult(actionId, state.number, state.totalParts, state.timeoutMs, true, "sms_sent");
+            if (state.deliveryPublished || state.totalParts <= 0) {
+                STATES.remove(key);
+            }
         }
     }
 
-    static void markDelivered(String actionId, String number) {
-        MqttBridgeService.publishDelivered(actionId, number);
+    static void markDelivered(Context context, String actionId, String number) {
+        pruneExpired();
+        String key = key(actionId);
+        State state = STATES.get(key);
+        if (state == null) {
+            BridgeSmsStore.updateOutgoingStatus(context, actionId, "delivered");
+            MqttBridgeService.publishDelivered(actionId, number);
+            return;
+        }
+
+        state.deliveredParts++;
+        if (state.deliveredParts >= state.totalParts && !state.deliveryPublished) {
+            state.deliveryPublished = true;
+            BridgeSmsStore.updateOutgoingStatus(context, actionId, "delivered");
+            MqttBridgeService.publishDelivered(actionId, state.number);
+            if (state.sendPublished) {
+                STATES.remove(key);
+            }
+        }
     }
 
-    private static String detailFor(int resultCode) {
+    private static void pruneExpired() {
+        long now = System.currentTimeMillis();
+        STATES.entrySet().removeIf(entry -> entry.getValue() == null || entry.getValue().isExpired(now));
+    }
+
+    private static String detailFor(int resultCode, Bundle extras) {
+        if (extras != null && extras.getBoolean("noDefault", false)) {
+            return "sms_default_sim_required";
+        }
         switch (resultCode) {
             case SmsManager.RESULT_ERROR_GENERIC_FAILURE:
                 return "sms_send_failed";
@@ -78,14 +112,23 @@ final class SmsSendTracker {
         final String number;
         final int totalParts;
         final int timeoutMs;
+        final long createdAtMs;
         int sentParts;
-        boolean finished;
+        int deliveredParts;
+        boolean sendPublished;
+        boolean deliveryPublished;
 
-        State(String actionId, String number, int totalParts, int timeoutMs) {
+        State(String actionId, String number, int totalParts, int timeoutMs, long createdAtMs) {
             this.actionId = actionId;
             this.number = number;
             this.totalParts = totalParts;
             this.timeoutMs = timeoutMs;
+            this.createdAtMs = createdAtMs;
+        }
+
+        boolean isExpired(long now) {
+            long maxAgeMs = Math.max(timeoutMs, 90000) + 60000L;
+            return createdAtMs > 0L && now - createdAtMs > maxAgeMs;
         }
     }
 }

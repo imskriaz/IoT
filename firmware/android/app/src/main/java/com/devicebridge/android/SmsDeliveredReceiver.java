@@ -12,7 +12,7 @@ public class SmsDeliveredReceiver extends BroadcastReceiver {
         }
         String actionId = intent.getStringExtra(SmsSender.EXTRA_ACTION_ID);
         String number = intent.getStringExtra(SmsSender.EXTRA_NUMBER);
-        SmsSendTracker.markDelivered(actionId, number);
+        SmsSendTracker.markDelivered(context, actionId, number);
     }
 }
 

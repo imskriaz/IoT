@@ -124,6 +124,32 @@ describe('moduleHealth live snapshot preference', () => {
         }));
     });
 
+    test('suppresses MQTT health errors for HTTP bridge devices', async () => {
+        const moduleHealth = await getDeviceModuleHealth(null, 'dev-1', {
+            transport_mode: 'http',
+            http: true,
+            mqtt: false
+        }, {
+            mqttConnected: true,
+            live: {
+                online: true,
+                activePath: 'http',
+                lastSeen: '2026-04-23T16:38:17.278Z',
+                mqtt: {
+                    connected: false,
+                    subscribed: true,
+                    publishedCount: 33
+                }
+            }
+        });
+
+        const mqtt = moduleHealth.find(entry => entry.moduleKey === 'mqtt');
+
+        expect(mqtt.supported).toBe(false);
+        expect(mqtt.state).toBe('unsupported');
+        expect(mqtt.message).toBe('HTTP bridge active on this device');
+    });
+
     test('prefers live modem, wifi, and storage state over stale stored success rows', async () => {
         const db = {
             all: jest.fn().mockResolvedValue([

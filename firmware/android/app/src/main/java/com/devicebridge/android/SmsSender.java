@@ -12,6 +12,7 @@ import android.telephony.SubscriptionManager;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 final class SmsSender {
     static final String ACTION_SENT = "com.devicebridge.android.SMS_SENT";
@@ -37,10 +38,11 @@ final class SmsSender {
             return SendResult.rejected("sms_permission_denied");
         }
 
-        SmsManager smsManager = getSmsManager(context, preferredSimSlot, preferredSubscriptionId);
-        if (smsManager == null) {
-            return SendResult.rejected("sms_sim_not_available");
+        SmsManagerSelection selection = getSmsManager(context, preferredSimSlot, preferredSubscriptionId);
+        if (selection.smsManager == null) {
+            return SendResult.rejected(selection.detail);
         }
+        SmsManager smsManager = selection.smsManager;
         ArrayList<String> parts = smsManager.divideMessage(cleanText);
         if (parts == null || parts.isEmpty()) {
             parts = new ArrayList<>();
@@ -75,24 +77,97 @@ final class SmsSender {
         }
     }
 
-    private static SmsManager getSmsManager(Context context, Integer preferredSimSlot, Integer preferredSubscriptionId) {
+    static String describeDetail(String detail) {
+        String value = detail == null ? "" : detail.trim().toLowerCase(Locale.US);
+        switch (value) {
+            case "sms_permission_denied":
+                return "Send SMS permission is missing.";
+            case "sms_number_required":
+                return "A recipient number is required.";
+            case "sms_text_required":
+                return "The SMS body is empty.";
+            case "sms_invalid_request":
+                return "The SMS request is invalid.";
+            case "sms_sim_not_available":
+                return "No usable SIM is available for SMS.";
+            case "sms_default_sim_required":
+                return "Choose a default SMS SIM or grant phone-state access so the app can route SMS.";
+            case "sms_no_service":
+                return "The phone is not registered on a cellular network.";
+            case "sms_radio_off":
+                return "Cellular radio is off.";
+            case "sms_null_pdu":
+                return "Android rejected the SMS payload.";
+            case "sms_send_failed":
+                return "Android failed to send the SMS.";
+            default:
+                if (value.startsWith("sms_send_failed_")) {
+                    return "Android reported SMS send failure (" + value.substring("sms_send_failed_".length()) + ").";
+                }
+                return value.isEmpty() ? "Unknown SMS error." : value.replace('_', ' ');
+        }
+    }
+
+    static String resolveSelfNumber(Context context) {
+        if (context == null) {
+            return "";
+        }
+        for (SubscriptionInfo info : activeSubscriptions(context)) {
+            String number = safePhoneNumber(info == null ? null : info.getNumber());
+            if (!number.isEmpty()) {
+                return number;
+            }
+        }
+        if (context.checkSelfPermission(Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED
+                || context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+            try {
+                android.telephony.TelephonyManager telephonyManager = context.getSystemService(android.telephony.TelephonyManager.class);
+                if (telephonyManager != null) {
+                    String lineNumber = safePhoneNumber(telephonyManager.getLine1Number());
+                    if (!lineNumber.isEmpty()) {
+                        return lineNumber;
+                    }
+                }
+            } catch (SecurityException ignored) {
+                return "";
+            } catch (RuntimeException ignored) {
+                return "";
+            }
+        }
+        return "";
+    }
+
+    private static SmsManagerSelection getSmsManager(Context context, Integer preferredSimSlot, Integer preferredSubscriptionId) {
         Integer subscriptionId = normalizeSubscriptionId(preferredSubscriptionId);
         if (subscriptionId == null) {
             subscriptionId = resolveSubscriptionIdForSlot(context, preferredSimSlot);
         }
+        if (subscriptionId == null) {
+            subscriptionId = normalizeSubscriptionId(safeDefaultSmsSubscriptionId());
+        }
+        if (subscriptionId == null) {
+            subscriptionId = normalizeSubscriptionId(safeDefaultVoiceSubscriptionId());
+        }
+        if (subscriptionId == null) {
+            subscriptionId = normalizeSubscriptionId(resolveFirstActiveSubscriptionId(context));
+        }
         if (subscriptionId != null && Build.VERSION.SDK_INT >= 22) {
             try {
-                return SmsManager.getSmsManagerForSubscriptionId(subscriptionId);
+                return SmsManagerSelection.resolved(SmsManager.getSmsManagerForSubscriptionId(subscriptionId));
             } catch (RuntimeException ignored) {
             }
         }
         if (Build.VERSION.SDK_INT >= 31) {
             SmsManager manager = context.getSystemService(SmsManager.class);
             if (manager != null) {
-                return manager;
+                return SmsManagerSelection.resolved(manager);
             }
         }
-        return SmsManager.getDefault();
+        try {
+            return SmsManagerSelection.resolved(SmsManager.getDefault());
+        } catch (RuntimeException ignored) {
+            return SmsManagerSelection.failed("sms_sim_not_available");
+        }
     }
 
     private static Integer normalizeSubscriptionId(Integer preferredSubscriptionId) {
@@ -131,6 +206,83 @@ final class SmsSender {
             return null;
         }
         return null;
+    }
+
+    private static Integer resolveFirstActiveSubscriptionId(Context context) {
+        List<SubscriptionInfo> subscriptions = activeSubscriptions(context);
+        if (subscriptions.isEmpty()) {
+            return null;
+        }
+        int defaultSmsSubscriptionId = safeDefaultSmsSubscriptionId();
+        if (defaultSmsSubscriptionId >= 0) {
+            for (SubscriptionInfo info : subscriptions) {
+                if (info != null && info.getSubscriptionId() == defaultSmsSubscriptionId) {
+                    return info.getSubscriptionId();
+                }
+            }
+        }
+        int defaultVoiceSubscriptionId = safeDefaultVoiceSubscriptionId();
+        if (defaultVoiceSubscriptionId >= 0) {
+            for (SubscriptionInfo info : subscriptions) {
+                if (info != null && info.getSubscriptionId() == defaultVoiceSubscriptionId) {
+                    return info.getSubscriptionId();
+                }
+            }
+        }
+        for (SubscriptionInfo info : subscriptions) {
+            if (info != null && info.getSubscriptionId() >= 0) {
+                return info.getSubscriptionId();
+            }
+        }
+        return null;
+    }
+
+    private static List<SubscriptionInfo> activeSubscriptions(Context context) {
+        List<SubscriptionInfo> subscriptions = new ArrayList<>();
+        if (context == null || Build.VERSION.SDK_INT < 22) {
+            return subscriptions;
+        }
+        if (context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+            return subscriptions;
+        }
+        try {
+            SubscriptionManager manager = context.getSystemService(SubscriptionManager.class);
+            List<SubscriptionInfo> active = manager == null ? null : manager.getActiveSubscriptionInfoList();
+            if (active != null) {
+                subscriptions.addAll(active);
+            }
+        } catch (SecurityException ignored) {
+            return subscriptions;
+        } catch (RuntimeException ignored) {
+            return subscriptions;
+        }
+        return subscriptions;
+    }
+
+    private static int safeDefaultSmsSubscriptionId() {
+        if (Build.VERSION.SDK_INT < 22) {
+            return -1;
+        }
+        try {
+            return SubscriptionManager.getDefaultSmsSubscriptionId();
+        } catch (RuntimeException ignored) {
+            return -1;
+        }
+    }
+
+    private static int safeDefaultVoiceSubscriptionId() {
+        if (Build.VERSION.SDK_INT < 24) {
+            return -1;
+        }
+        try {
+            return SubscriptionManager.getDefaultVoiceSubscriptionId();
+        } catch (RuntimeException ignored) {
+            return -1;
+        }
+    }
+
+    private static String safePhoneNumber(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private static PendingIntent pendingBroadcast(
@@ -174,6 +326,24 @@ final class SmsSender {
 
         static SendResult rejected(String detail) {
             return new SendResult(false, 0, detail);
+        }
+    }
+
+    private static final class SmsManagerSelection {
+        final SmsManager smsManager;
+        final String detail;
+
+        private SmsManagerSelection(SmsManager smsManager, String detail) {
+            this.smsManager = smsManager;
+            this.detail = detail == null || detail.trim().isEmpty() ? "sms_sim_not_available" : detail;
+        }
+
+        static SmsManagerSelection resolved(SmsManager smsManager) {
+            return new SmsManagerSelection(smsManager, "sms_queued");
+        }
+
+        static SmsManagerSelection failed(String detail) {
+            return new SmsManagerSelection(null, detail);
         }
     }
 }

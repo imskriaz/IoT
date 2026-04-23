@@ -44,7 +44,7 @@ function deviceOnline() {
     return inferStatusOnline(latestDeviceStatus);
 }
 
-function deviceHttpOnline(status = latestDeviceStatus) {
+function inferDeviceHttpOnline(status = latestDeviceStatus) {
     if (!status || !matchesActiveDeviceStatus(status)) {
         return false;
     }
@@ -3486,7 +3486,7 @@ window.getActiveDeviceSimContext = function () {
     return resolveActiveDeviceSimContext();
 };
 window.deviceHttpOnline = function () {
-    return deviceHttpOnline(latestDeviceStatus);
+    return inferDeviceHttpOnline(latestDeviceStatus);
 };
 window.switchActiveSim = function (slotIndex) {
     const activeDeviceId = getStatusActiveDeviceId();

@@ -3,7 +3,10 @@
 const express = require('express');
 const router = express.Router();
 const logger = require('../utils/logger');
-const { attachSmsToConversation } = require('../services/smsConversations');
+const {
+    attachSmsToConversation,
+    refreshSmsConversationBySmsId
+} = require('../services/smsConversations');
 const { formatPhoneNumber } = require('../utils/phoneNumber');
 const { syncDeviceSimInventory } = require('../services/simInventoryService');
 const { updateLatestActiveCall } = require('../services/mqttHandlers');
@@ -387,6 +390,7 @@ router.post('/messages/:messageId/events', requireBoundDevice, async (req, res) 
             [messageId, boundDeviceId]
         );
         if (row?.device_id) {
+            await refreshSmsConversationBySmsId(db, row.id).catch(() => {});
             emitDevice(row.device_id, status === 'failed' ? 'sms:send-failed' : `sms:${status}`, {
                 deviceId: row.device_id,
                 id: Number(row.id || 0) || null,

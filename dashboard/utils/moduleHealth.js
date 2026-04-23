@@ -174,6 +174,16 @@ function parseRow(row) {
 function getBaseEntry(moduleKey, caps = {}, mqttConnected = false, live = {}) {
     const definition = MODULE_DEFINITIONS[moduleKey] || { label: moduleKey };
     let supported = isSupported(moduleKey, caps);
+    const transportMode = String(
+        caps?.transport_mode
+        || live?.transport?.mode
+        || live?.transport_mode
+        || live?.bridge_transport
+        || live?.activePath
+        || live?.active_path
+        || ''
+    ).trim().toLowerCase();
+    const usesHttpTransport = transportMode === 'http';
 
     if (moduleKey === 'wifi' && live.wifi && Object.keys(live.wifi).length > 0) {
         supported = true;
@@ -184,6 +194,20 @@ function getBaseEntry(moduleKey, caps = {}, mqttConnected = false, live = {}) {
     }
 
     if (moduleKey === 'mqtt') {
+        if (usesHttpTransport) {
+            return {
+                moduleKey,
+                label: definition.label,
+                supported: false,
+                state: 'unsupported',
+                message: 'HTTP bridge active on this device',
+                lastSuccessAt: null,
+                lastFailureAt: null,
+                updatedAt: live.lastSeen || null,
+                details: null
+            };
+        }
+
         const hasLiveMqttState = live?.mqtt && Object.prototype.hasOwnProperty.call(live.mqtt, 'connected');
         const hasRecentDeviceTelemetry = live && (live.online === true || live.online === false || live.lastSeen);
         const deviceMqttConnected = hasLiveMqttState ? Boolean(live.mqtt.connected) : false;

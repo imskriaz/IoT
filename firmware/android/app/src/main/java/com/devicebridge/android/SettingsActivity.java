@@ -268,22 +268,28 @@ public class SettingsActivity extends Activity {
         LinearLayout rowOne = BridgeUi.horizontalRow(this);
         Button statusButton = BridgeUi.smallButton(this, "Test Status Push", "#0d6efd", Color.WHITE);
         statusButton.setOnClickListener(v -> BridgeTestLab.runStatusPushTest(this, this::updateTestLabResult));
-        Button queueButton = BridgeUi.smallButton(this, "Test Queue", "#198754", Color.WHITE);
-        queueButton.setOnClickListener(v -> BridgeTestLab.runQueuePickupTest(this, this::updateTestLabResult));
+        Button selfSmsButton = BridgeUi.smallButton(this, "Self SMS Test", "#ea580c", Color.WHITE);
+        selfSmsButton.setOnClickListener(v -> BridgeTestLab.runSelfSendTest(this, this::updateTestLabResult));
         rowOne.addView(statusButton, BridgeUi.weightedWidth());
         rowOne.addView(BridgeUi.spacer(this));
-        rowOne.addView(queueButton, BridgeUi.weightedWidth());
+        rowOne.addView(selfSmsButton, BridgeUi.weightedWidth());
         card.addView(rowOne, BridgeUi.fullWidth(this));
 
         LinearLayout rowTwo = BridgeUi.horizontalRow(this);
+        Button queueButton = BridgeUi.smallButton(this, "Test Queue", "#198754", Color.WHITE);
+        queueButton.setOnClickListener(v -> BridgeTestLab.runQueuePickupTest(this, this::updateTestLabResult));
         Button permissionProbeButton = BridgeUi.smallButton(this, "Probe Permissions", "#111827", Color.WHITE);
         permissionProbeButton.setOnClickListener(v -> BridgeTestLab.runPermissionProbe(this, this::updateTestLabResult));
+        rowTwo.addView(queueButton, BridgeUi.weightedWidth());
+        rowTwo.addView(BridgeUi.spacer(this));
+        rowTwo.addView(permissionProbeButton, BridgeUi.weightedWidth());
+        card.addView(rowTwo, BridgeUi.fullWidth(this));
+
+        LinearLayout rowThree = BridgeUi.horizontalRow(this);
         Button recoveryProbeButton = BridgeUi.smallButton(this, "Probe Recovery", "#e2e8f0", Color.parseColor("#0f172a"));
         recoveryProbeButton.setOnClickListener(v -> BridgeTestLab.runRecoveryProbe(this, this::updateTestLabResult));
-        rowTwo.addView(permissionProbeButton, BridgeUi.weightedWidth());
-        rowTwo.addView(BridgeUi.spacer(this));
-        rowTwo.addView(recoveryProbeButton, BridgeUi.weightedWidth());
-        card.addView(rowTwo, BridgeUi.fullWidth(this));
+        rowThree.addView(recoveryProbeButton, BridgeUi.fullWidth(this));
+        card.addView(rowThree, BridgeUi.fullWidth(this));
         return card;
     }
 
