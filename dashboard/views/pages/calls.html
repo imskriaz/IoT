@@ -255,190 +255,168 @@
     
 </div>
 
-<!-- Dialer Modal -->
-<div class="modal fade" id="dialerModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-dialpad me-2"></i>Dial Number
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <!-- Device Offline Warning -->
-                <div id="dialerOfflineWarning" class="alert alert-warning py-2 d-none">
-                    <i class="bi bi-exclamation-triangle me-2"></i>
-                    <small>Device is offline. Calls cannot be made.</small>
-                </div>
-
-                <!-- Number Display -->
-                <div class="mb-4">
-                    <input type="tel" class="form-control form-control-lg text-center" 
-                           id="dialerNumber" placeholder="Enter number" data-intl-tel-input>
-                    <div class="d-flex justify-content-between mt-2">
-                        <small class="text-muted" id="numberHint">Choose a country or paste a full number</small>
-                        <small class="text-muted" id="dialerContactName"></small>
-                    </div>
-                </div>
-
-                <!-- Dialer Pad -->
-                <div class="dialer-grid mb-4">
-                    <div class="row g-2">
-                        <!-- Row 1 -->
-                        <div class="col-4">
-                            <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="1">
-                                <span class="fs-4 fw-bold">1</span>
-                            </button>
-                        </div>
-                        <div class="col-4">
-                            <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="2">
-                                <span class="fs-4 fw-bold">2</span>
-                                <small class="d-block text-muted">ABC</small>
-                            </button>
-                        </div>
-                        <div class="col-4">
-                            <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="3">
-                                <span class="fs-4 fw-bold">3</span>
-                                <small class="d-block text-muted">DEF</small>
-                            </button>
-                        </div>
-
-                        <!-- Row 2 -->
-                        <div class="col-4">
-                            <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="4">
-                                <span class="fs-4 fw-bold">4</span>
-                                <small class="d-block text-muted">GHI</small>
-                            </button>
-                        </div>
-                        <div class="col-4">
-                            <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="5">
-                                <span class="fs-4 fw-bold">5</span>
-                                <small class="d-block text-muted">JKL</small>
-                            </button>
-                        </div>
-                        <div class="col-4">
-                            <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="6">
-                                <span class="fs-4 fw-bold">6</span>
-                                <small class="d-block text-muted">MNO</small>
-                            </button>
-                        </div>
-
-                        <!-- Row 3 -->
-                        <div class="col-4">
-                            <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="7">
-                                <span class="fs-4 fw-bold">7</span>
-                                <small class="d-block text-muted">PQRS</small>
-                            </button>
-                        </div>
-                        <div class="col-4">
-                            <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="8">
-                                <span class="fs-4 fw-bold">8</span>
-                                <small class="d-block text-muted">TUV</small>
-                            </button>
-                        </div>
-                        <div class="col-4">
-                            <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="9">
-                                <span class="fs-4 fw-bold">9</span>
-                                <small class="d-block text-muted">WXYZ</small>
-                            </button>
-                        </div>
-
-                        <!-- Row 4 -->
-                        <div class="col-4">
-                            <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="*">
-                                <span class="fs-4 fw-bold">*</span>
-                            </button>
-                        </div>
-                        <div class="col-4">
-                            <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="0">
-                                <span class="fs-4 fw-bold">0</span>
-                                <small class="d-block text-muted">+</small>
-                            </button>
-                        </div>
-                        <div class="col-4">
-                            <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="#">
-                                <span class="fs-4 fw-bold">#</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Action Buttons -->
-                <div class="d-flex gap-2">
-                    <button class="btn btn-outline-danger flex-fill" id="clearNumber">
-                        <i class="bi bi-backspace"></i> Clear
-                    </button>
-                    <button class="btn btn-success flex-fill" id="makeCall">
-                        <i class="bi bi-telephone"></i> Call
-                    </button>
-                </div>
-
-                <!-- Quick Contacts -->
-                <div class="mt-3">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <small class="text-muted">Quick Contacts</small>
-                        <button class="btn btn-sm btn-link" onclick="openContactsModal()">View all</button>
-                    </div>
-                    <div class="d-flex gap-2 flex-wrap" id="quickContacts">
-                        <!-- Populated by JavaScript -->
-                    </div>
-                </div>
-            </div>
+<div class="card mb-4" id="callWorkspaceCard">
+    <div class="card-header bg-white py-3 d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3">
+        <div>
+            <h5 class="mb-1"><i class="bi bi-headset me-2"></i>Call Workspace</h5>
+            <p class="text-muted mb-0 small">Dial, pick contacts, and manage the active call without blocking the rest of the page.</p>
+        </div>
+        <div class="btn-group btn-group-sm" role="group" aria-label="Call workspace view">
+            <button class="btn btn-outline-primary active" type="button" id="callWorkspaceDialerTab" onclick="openDialerModal()">
+                <i class="bi bi-dialpad me-1"></i>Dial Pad
+            </button>
+            <button class="btn btn-outline-primary" type="button" id="callWorkspaceContactsTab" onclick="openContactsModal()">
+                <i class="bi bi-person-lines-fill me-1"></i>Contacts
+            </button>
         </div>
     </div>
-</div>
+    <div class="card-body">
+        <div class="row g-4">
+            <div class="col-12 col-xl-5">
+                <section id="callWorkspaceDialerSection">
+                    <div id="dialerOfflineWarning" class="alert alert-warning py-2 d-none">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        <small>Device is offline. Calls cannot be made.</small>
+                    </div>
 
-<!-- Contacts Modal (for full contact selection) -->
-<div class="modal fade" id="contactsModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-person-lines-fill me-2"></i>Select Contact
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <!-- Search and filters -->
-                <div class="row g-2 mb-3">
-                    <div class="col-12 col-md-8">
-                        <div class="input-group">
-                            <span class="input-group-text bg-white">
-                                <i class="bi bi-search"></i>
-                            </span>
-                            <input type="text" class="form-control" id="modalContactSearch" placeholder="Search contacts by name or number...">
+                    <div class="mb-4">
+                        <input type="tel" class="form-control form-control-lg text-center"
+                               id="dialerNumber" placeholder="Enter number" data-intl-tel-input>
+                        <div class="d-flex justify-content-between mt-2 gap-2">
+                            <small class="text-muted" id="numberHint">Choose a country or paste a full number</small>
+                            <small class="text-muted text-end" id="dialerContactName"></small>
                         </div>
                     </div>
-                    <div class="col-6 col-md-4">
-                        <select class="form-select" id="modalContactCompany">
-                            <option value="">All Companies</option>
-                            <!-- Populated by JavaScript -->
-                        </select>
-                    </div>
-                </div>
 
-                <!-- Contact stats -->
-                <div class="d-flex gap-3 mb-3 flex-wrap">
-                    <span class="badge bg-primary" id="totalContacts">Loading...</span>
-                    <span class="badge bg-warning" id="favoriteContacts">Loading...</span>
-                </div>
-
-                <!-- Contacts list -->
-                <div class="list-group" id="modalContactsList" style="max-height: 400px; overflow-y: auto;">
-                    <!-- Populated by JavaScript -->
-                    <div class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
+                    <div class="dialer-grid mb-4">
+                        <div class="row g-2">
+                            <div class="col-4">
+                                <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="1">
+                                    <span class="fs-4 fw-bold">1</span>
+                                </button>
+                            </div>
+                            <div class="col-4">
+                                <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="2">
+                                    <span class="fs-4 fw-bold">2</span>
+                                    <small class="d-block text-muted">ABC</small>
+                                </button>
+                            </div>
+                            <div class="col-4">
+                                <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="3">
+                                    <span class="fs-4 fw-bold">3</span>
+                                    <small class="d-block text-muted">DEF</small>
+                                </button>
+                            </div>
+                            <div class="col-4">
+                                <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="4">
+                                    <span class="fs-4 fw-bold">4</span>
+                                    <small class="d-block text-muted">GHI</small>
+                                </button>
+                            </div>
+                            <div class="col-4">
+                                <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="5">
+                                    <span class="fs-4 fw-bold">5</span>
+                                    <small class="d-block text-muted">JKL</small>
+                                </button>
+                            </div>
+                            <div class="col-4">
+                                <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="6">
+                                    <span class="fs-4 fw-bold">6</span>
+                                    <small class="d-block text-muted">MNO</small>
+                                </button>
+                            </div>
+                            <div class="col-4">
+                                <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="7">
+                                    <span class="fs-4 fw-bold">7</span>
+                                    <small class="d-block text-muted">PQRS</small>
+                                </button>
+                            </div>
+                            <div class="col-4">
+                                <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="8">
+                                    <span class="fs-4 fw-bold">8</span>
+                                    <small class="d-block text-muted">TUV</small>
+                                </button>
+                            </div>
+                            <div class="col-4">
+                                <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="9">
+                                    <span class="fs-4 fw-bold">9</span>
+                                    <small class="d-block text-muted">WXYZ</small>
+                                </button>
+                            </div>
+                            <div class="col-4">
+                                <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="*">
+                                    <span class="fs-4 fw-bold">*</span>
+                                </button>
+                            </div>
+                            <div class="col-4">
+                                <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="0">
+                                    <span class="fs-4 fw-bold">0</span>
+                                    <small class="d-block text-muted">+</small>
+                                </button>
+                            </div>
+                            <div class="col-4">
+                                <button class="btn btn-outline-secondary w-100 py-3 dialer-btn" data-number="#">
+                                    <span class="fs-4 fw-bold">#</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
+
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-outline-danger flex-fill" id="clearNumber">
+                            <i class="bi bi-backspace"></i> Clear
+                        </button>
+                        <button class="btn btn-success flex-fill" id="makeCall">
+                            <i class="bi bi-telephone"></i> Call
+                        </button>
+                    </div>
+
+                    <div class="mt-4">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <small class="text-muted">Quick Contacts</small>
+                            <button class="btn btn-sm btn-link px-0" type="button" onclick="openContactsModal()">Browse all</button>
+                        </div>
+                        <div class="d-flex gap-2 flex-wrap" id="quickContacts"></div>
+                    </div>
+                </section>
             </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-primary" onclick="showAddContactModal()">
-                    <i class="bi bi-person-plus me-2"></i>Add New Contact
-                </button>
+
+            <div class="col-12 col-xl-7">
+                <section id="callWorkspaceContactsSection" class="call-workspace-section d-none">
+                    <div class="row g-2 mb-3">
+                        <div class="col-12 col-md-8">
+                            <div class="input-group">
+                                <span class="input-group-text bg-white">
+                                    <i class="bi bi-search"></i>
+                                </span>
+                                <input type="text" class="form-control" id="modalContactSearch" placeholder="Search contacts by name or number...">
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <select class="form-select" id="modalContactCompany">
+                                <option value="">All Companies</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
+                        <div class="d-flex gap-2 flex-wrap">
+                            <span class="badge bg-primary" id="totalContacts">Loading...</span>
+                            <span class="badge bg-warning text-dark" id="favoriteContacts">Loading...</span>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-primary" onclick="showAddContactModal()">
+                            <i class="bi bi-person-plus me-1"></i>Add Contact
+                        </button>
+                    </div>
+
+                    <div class="list-group call-contact-list" id="modalContactsList">
+                        <div class="text-center py-4">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </div>
         </div>
     </div>
@@ -607,6 +585,25 @@
     margin-bottom: 0.5rem;
 }
 
+#callWorkspaceCard {
+    scroll-margin-top: 78px;
+}
+
+.call-contact-list {
+    max-height: 560px;
+    overflow-y: auto;
+}
+
+.call-workspace-section {
+    min-height: 100%;
+}
+
+#callWorkspaceContactsSection .list-group-item {
+    border-radius: 0.75rem;
+    margin-bottom: 0.6rem;
+    border: 1px solid var(--bs-border-color);
+}
+
 #activeCallBanner {
     border-left: 4px solid #28a745;
     animation: pulse 2s infinite;
@@ -625,6 +622,10 @@
     .contact-chip {
         padding: 0.4rem 0.75rem;
         font-size: 0.9rem;
+    }
+
+    .call-contact-list {
+        max-height: 360px;
     }
 }
 </style>

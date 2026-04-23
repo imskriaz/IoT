@@ -30,6 +30,7 @@
     let isDeviceConnected = false;
     let callStatusInterval = null;
     let companies = [];
+    let activeWorkspaceMode = 'dialer';
 
     // DOM Elements
     const elements = {
@@ -66,7 +67,12 @@
         activeCallNumber: document.getElementById('activeCallNumber'),
         activeCallDuration: document.getElementById('activeCallDuration'),
         deviceOfflineWarning: document.getElementById('deviceOfflineWarning'),
-        dialerOfflineWarning: document.getElementById('dialerOfflineWarning')
+        dialerOfflineWarning: document.getElementById('dialerOfflineWarning'),
+        callWorkspaceCard: document.getElementById('callWorkspaceCard'),
+        callWorkspaceDialerSection: document.getElementById('callWorkspaceDialerSection'),
+        callWorkspaceContactsSection: document.getElementById('callWorkspaceContactsSection'),
+        callWorkspaceDialerTab: document.getElementById('callWorkspaceDialerTab'),
+        callWorkspaceContactsTab: document.getElementById('callWorkspaceContactsTab')
     };
 
     function getCallsActiveDeviceId() {
@@ -186,6 +192,47 @@
         return { ok: true, value, message: '' };
     }
 
+    function focusDialerInput() {
+        if (!elements.dialerNumber) return;
+        elements.dialerNumber.focus();
+        elements.dialerNumber.select?.();
+    }
+
+    function scrollWorkspaceIntoView() {
+        elements.callWorkspaceCard?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function setCallWorkspaceMode(mode = 'dialer', options = {}) {
+        activeWorkspaceMode = mode === 'contacts' ? 'contacts' : 'dialer';
+
+        if (elements.callWorkspaceDialerSection) {
+            elements.callWorkspaceDialerSection.classList.toggle('d-none', activeWorkspaceMode !== 'dialer');
+        }
+        if (elements.callWorkspaceContactsSection) {
+            elements.callWorkspaceContactsSection.classList.toggle('d-none', activeWorkspaceMode !== 'contacts');
+        }
+        if (elements.callWorkspaceDialerTab) {
+            elements.callWorkspaceDialerTab.classList.toggle('active', activeWorkspaceMode === 'dialer');
+        }
+        if (elements.callWorkspaceContactsTab) {
+            elements.callWorkspaceContactsTab.classList.toggle('active', activeWorkspaceMode === 'contacts');
+        }
+
+        if (activeWorkspaceMode === 'contacts') {
+            displayModalContacts(contacts);
+        }
+
+        if (options.scroll !== false) {
+            scrollWorkspaceIntoView();
+        }
+
+        if (options.focusDialer) {
+            focusDialerInput();
+        } else if (activeWorkspaceMode === 'contacts' && elements.modalContactSearch) {
+            elements.modalContactSearch.focus();
+        }
+    }
+
     // Initialize
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
@@ -217,6 +264,7 @@
         attachDeviceChangeHandler();
         updateCallsExportHref();
         syncCallsHttpRequiredUi();
+        setCallWorkspaceMode(activeWorkspaceMode, { scroll: false });
         prefillDialerFromQuery();
     }
 
@@ -254,7 +302,10 @@
 
     // ==================== DEVICE CONNECTION ====================
     function applyDeviceConnectionState(connected) {
-        isDeviceConnected = Boolean(connected);
+        const httpBridgeOnline = getCallsTransportMode() === 'http'
+            && typeof window.deviceHttpOnline === 'function'
+            && Boolean(window.deviceHttpOnline());
+        isDeviceConnected = Boolean(connected || httpBridgeOnline);
 
         if (elements.deviceOfflineWarning) {
             elements.deviceOfflineWarning.classList.add('d-none');
@@ -807,10 +858,7 @@
 
         updateNumberHint(target);
 
-        const dialerModalEl = document.getElementById('dialerModal');
-        if (dialerModalEl && window.bootstrap) {
-            bootstrap.Modal.getOrCreateInstance(dialerModalEl).show();
-        }
+        setCallWorkspaceMode('dialer', { focusDialer: true });
 
         const cleanUrl = new URL(window.location.href);
         cleanUrl.searchParams.delete('to');
@@ -949,16 +997,14 @@
                 if (data.success) {
                     showToast(data.message || 'Call initiated', 'success');
 
-                    // Close modal
-                    const modal = bootstrap.Modal.getInstance(document.getElementById('dialerModal'));
-                    if (modal) modal.hide();
-
                     // Clear dialer
                     setPhoneFieldValue('dialerNumber', '');
                     if (elements.dialerContactName) {
                         elements.dialerContactName.textContent = '';
                         elements.dialerContactName.classList.remove('text-success');
                     }
+                    updateNumberHint('');
+                    setCallWorkspaceMode('dialer', { scroll: false, focusDialer: true });
                 } else {
                     showToast(data.message || 'Failed to make call', 'danger');
                 }
@@ -1187,7 +1233,13 @@
             const activeDeviceId = getCallsActiveDeviceId();
             if (status?.deviceId && activeDeviceId && String(status.deviceId) !== activeDeviceId) return;
             if (typeof status?.online !== 'undefined') {
-                applyDeviceConnectionState(Boolean(status.online));
+                if (Boolean(status.online)) {
+                    applyDeviceConnectionState(true);
+                } else if (getCallsTransportMode() === 'http') {
+                    checkDeviceConnection();
+                } else {
+                    applyDeviceConnectionState(false);
+                }
             }
         });
 
@@ -1434,31 +1486,15 @@
             });
         }
 
-        // Contacts modal
-        const contactsModal = document.getElementById('contactsModal');
-        if (contactsModal) {
-            contactsModal.addEventListener('show.bs.modal', function() {
-                displayModalContacts(contacts);
-            });
-        }
+        displayModalContacts(contacts);
     }
 
     window.openContactsModal = function() {
-        const dialerModal = bootstrap.Modal.getInstance(document.getElementById('dialerModal'));
-        if (dialerModal) {
-            dialerModal.hide();
-        }
-        
-        setTimeout(() => {
-            const contactsModal = new bootstrap.Modal(document.getElementById('contactsModal'));
-            contactsModal.show();
-            displayModalContacts(contacts);
-        }, 300);
+        setCallWorkspaceMode('contacts');
     };
 
     window.openDialerModal = function() {
-        const modal = new bootstrap.Modal(document.getElementById('dialerModal'));
-        modal.show();
+        setCallWorkspaceMode('dialer', { focusDialer: true });
     };
 
     window.selectContact = function(phone, name) {
@@ -1468,14 +1504,7 @@
             elements.dialerContactName.classList.add('text-success');
         }
         updateNumberHint(phone);
-
-        const contactsModal = bootstrap.Modal.getInstance(document.getElementById('contactsModal'));
-        if (contactsModal) contactsModal.hide();
-
-        setTimeout(() => {
-            const dialerModal = new bootstrap.Modal(document.getElementById('dialerModal'));
-            dialerModal.show();
-        }, 300);
+        setCallWorkspaceMode('dialer', { focusDialer: true });
 
         showToast(`Selected: ${name}`, 'success');
     };

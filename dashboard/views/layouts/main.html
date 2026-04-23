@@ -113,30 +113,30 @@
     <!-- Toast Container -->
     <%- include('../partials/toast.html') %>
 
-    <!-- Incoming Call Modal -->
-    <div class="modal fade" id="incomingCallModal" tabindex="-1" data-bs-backdrop="static" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered modal-sm">
-            <div class="modal-content border-0 shadow-lg">
-                <div class="modal-header bg-success text-white py-2">
-                    <span class="fw-bold"><i class="bi bi-telephone-inbound-fill me-2"></i>Incoming Call</span>
-                </div>
-                <div class="modal-body text-center py-4">
-                    <div class="mb-3">
-                        <div class="incoming-call-avatar rounded-circle bg-success bg-opacity-10 d-inline-flex align-items-center justify-content-center">
-                            <i class="bi bi-person-fill fs-2 text-success"></i>
-                        </div>
+    <div id="incomingCallPanel" class="incoming-call-panel d-none" role="status" aria-live="assertive">
+        <div class="incoming-call-card border-0 shadow-lg">
+            <div class="incoming-call-card__header">
+                <span class="fw-bold"><i class="bi bi-telephone-inbound-fill me-2"></i>Incoming Call</span>
+                <button type="button" class="btn btn-sm btn-link text-white p-0" onclick="dismissIncomingCallPanel()" aria-label="Dismiss incoming call panel">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="incoming-call-card__body text-center">
+                <div class="mb-3">
+                    <div class="incoming-call-avatar rounded-circle bg-success bg-opacity-10 d-inline-flex align-items-center justify-content-center">
+                        <i class="bi bi-person-fill fs-2 text-success"></i>
                     </div>
-                    <h5 id="incomingCallNumber" class="mb-1">Unknown</h5>
-                    <small class="text-muted" id="incomingCallTime"></small>
                 </div>
-                <div class="modal-footer justify-content-center border-0 pt-0 pb-3 gap-3">
-                    <button type="button" class="btn btn-success btn-lg px-4 rounded-pill" onclick="answerIncomingCall()">
-                        <i class="bi bi-telephone-fill me-2"></i>Answer
-                    </button>
-                    <button type="button" class="btn btn-danger btn-lg px-4 rounded-pill" onclick="rejectIncomingCall()">
-                        <i class="bi bi-telephone-x-fill me-2"></i>Reject
-                    </button>
-                </div>
+                <h5 id="incomingCallNumber" class="mb-1">Unknown</h5>
+                <small class="text-muted d-block" id="incomingCallTime"></small>
+            </div>
+            <div class="incoming-call-card__actions">
+                <button type="button" class="btn btn-success rounded-pill" id="incomingCallAnswerBtn" onclick="answerIncomingCall()">
+                    <i class="bi bi-telephone-fill me-2"></i>Answer
+                </button>
+                <button type="button" class="btn btn-danger rounded-pill" id="incomingCallRejectBtn" onclick="rejectIncomingCall()">
+                    <i class="bi bi-telephone-x-fill me-2"></i>Reject
+                </button>
             </div>
         </div>
     </div>

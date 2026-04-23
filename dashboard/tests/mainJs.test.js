@@ -24,4 +24,15 @@ describe('main.js device HTTP helper export', () => {
         expect(source).toContain("window.history.replaceState({}, '', scopedHref);");
         expect(source).toContain('window.syncSidebarDeviceAwareLinks = syncSidebarDeviceAwareLinks;');
     });
+
+    test('uses a non-blocking incoming call panel instead of a blocking modal', () => {
+        const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'main.js'), 'utf8');
+
+        expect(source).toContain("document.getElementById('incomingCallPanel')");
+        expect(source).toContain('function showIncomingCallPanel(displayNumber, timeLabel)');
+        expect(source).toContain("panel.classList.remove('d-none');");
+        expect(source).toContain('function hideIncomingCallPanel()');
+        expect(source).toContain('window.dismissIncomingCallPanel = function () {');
+        expect(source).not.toContain("document.getElementById('incomingCallModal')");
+    });
 });

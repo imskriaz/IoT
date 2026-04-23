@@ -860,6 +860,64 @@ body {
     height: 64px;
 }
 
+.incoming-call-panel {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 1080;
+    width: min(360px, calc(100vw - 2rem));
+    pointer-events: none;
+}
+
+.incoming-call-card {
+    pointer-events: auto;
+    border-radius: 1rem;
+    overflow: hidden;
+    background: var(--bs-body-bg);
+    border: 1px solid rgba(40, 167, 69, 0.18);
+}
+
+.incoming-call-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    color: #fff;
+    background: linear-gradient(135deg, #198754 0%, #157347 100%);
+}
+
+.incoming-call-card__body {
+    padding: 1rem 1rem 0.5rem;
+}
+
+.incoming-call-card__actions {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+    padding: 0 1rem 1rem;
+}
+
+.incoming-call-card__actions .btn {
+    min-width: 120px;
+}
+
+@media (max-width: 575.98px) {
+    .incoming-call-panel {
+        right: 0.75rem;
+        left: 0.75rem;
+        width: auto;
+        bottom: 0.75rem;
+    }
+
+    .incoming-call-card__actions {
+        flex-direction: column;
+    }
+
+    .incoming-call-card__actions .btn {
+        width: 100%;
+    }
+}
+
 .sidebar-device-label {
     font-size: 0.7rem;
     text-transform: uppercase;

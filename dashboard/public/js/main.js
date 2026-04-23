@@ -1128,6 +1128,42 @@ function formatIncomingCallNumber(number) {
     return raw || 'Unknown';
 }
 
+function getIncomingCallPanelStateElements() {
+    return {
+        panel: document.getElementById('incomingCallPanel'),
+        number: document.getElementById('incomingCallNumber'),
+        time: document.getElementById('incomingCallTime'),
+        answerBtn: document.getElementById('incomingCallAnswerBtn'),
+        rejectBtn: document.getElementById('incomingCallRejectBtn')
+    };
+}
+
+function setIncomingCallActionState(isBusy) {
+    const { answerBtn, rejectBtn } = getIncomingCallPanelStateElements();
+    if (answerBtn) answerBtn.disabled = Boolean(isBusy);
+    if (rejectBtn) rejectBtn.disabled = Boolean(isBusy);
+}
+
+function showIncomingCallPanel(displayNumber, timeLabel) {
+    const { panel, number, time } = getIncomingCallPanelStateElements();
+    if (!panel) {
+        showToast(`Incoming call from ${displayNumber}`, 'warning');
+        return;
+    }
+
+    if (number) number.textContent = displayNumber || 'Unknown';
+    if (time) time.textContent = timeLabel || new Date().toLocaleTimeString();
+    setIncomingCallActionState(false);
+    panel.classList.remove('d-none');
+}
+
+function hideIncomingCallPanel() {
+    const { panel } = getIncomingCallPanelStateElements();
+    if (!panel) return;
+    panel.classList.add('d-none');
+    setIncomingCallActionState(false);
+}
+
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
     initializeProgressWidths();
@@ -1507,30 +1543,16 @@ function isActiveSimScopedEvent(data) {
         const displayNumber = formatIncomingCallNumber(data.number);
         playNotificationSound('call');
         pushNotify('Incoming Call', `From: ${displayNumber}`, '/favicon.ico');
-        // Show incoming call modal
-        const numEl = document.getElementById('incomingCallNumber');
-        const timeEl = document.getElementById('incomingCallTime');
-        if (numEl) numEl.textContent = displayNumber;
-        if (timeEl) timeEl.textContent = new Date().toLocaleTimeString();
-        const modalEl = document.getElementById('incomingCallModal');
-        if (modalEl && window.bootstrap) {
-            const m = bootstrap.Modal.getOrCreateInstance(modalEl);
-            m.show();
-        } else {
-            showToast(`Incoming call from ${displayNumber}`, 'warning');
-        }
+        showIncomingCallPanel(displayNumber, new Date().toLocaleTimeString());
     });
 
     socket.on('call:status', function(data) {
         if (!isActiveSimScopedEvent(data)) return;
         if (data?.sync === true || String(data?.sync || '').toLowerCase() === 'true') return;
-        // Auto-dismiss incoming call modal when call ends/connected
-        if (data.status === 'ended' || data.status === 'missed' || data.status === 'rejected') {
+        const status = String(data.status || '').toLowerCase();
+        if (['ended', 'missed', 'rejected', 'answered', 'connected', 'dialing'].includes(status)) {
             activeIncomingCallContext = null;
-            const modalEl = document.getElementById('incomingCallModal');
-            if (modalEl && window.bootstrap) {
-                bootstrap.Modal.getOrCreateInstance(modalEl).hide();
-            }
+            hideIncomingCallPanel();
         }
     });
     
@@ -2904,6 +2926,7 @@ function loadCachedDeviceCapabilities(deviceId, options = {}) {
 window.addEventListener('device:changed', function () {
     const deviceId = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
     activeIncomingCallContext = null;
+    hideIncomingCallPanel();
     latestDeviceStatus = {
         deviceId,
         online: false
@@ -2922,6 +2945,7 @@ window.addEventListener('device:changed', function () {
 });
 window.addEventListener('device:sim-changed', function (event) {
     activeIncomingCallContext = null;
+    hideIncomingCallPanel();
     updateUnreadBadge();
     scheduleDashboardSmsRefresh(100);
     const nextUrl = new URL(window.location.href);
@@ -3454,9 +3478,13 @@ window.addEventListener('beforeunload', function() {
 
 // Incoming call controls
 
+window.dismissIncomingCallPanel = function () {
+    hideIncomingCallPanel();
+};
+
 window.answerIncomingCall = async function () {
-    const modalEl = document.getElementById('incomingCallModal');
-    if (modalEl && window.bootstrap) bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+    hideIncomingCallPanel();
+    setIncomingCallActionState(true);
     try {
         const callContext = activeIncomingCallContext || resolveActiveDeviceSimContext();
         const res = await fetch('/api/calls/answer', {
@@ -3467,12 +3495,16 @@ window.answerIncomingCall = async function () {
         const data = await res.json();
         if (data.success) showToast('Call answered', 'success');
         else showToast(data.message || 'Failed to answer call', 'danger');
-    } catch (e) { showToast('Failed to answer call', 'danger'); }
+    } catch (e) {
+        showToast('Failed to answer call', 'danger');
+    } finally {
+        setIncomingCallActionState(false);
+    }
 };
 
 window.rejectIncomingCall = async function () {
-    const modalEl = document.getElementById('incomingCallModal');
-    if (modalEl && window.bootstrap) bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+    hideIncomingCallPanel();
+    setIncomingCallActionState(true);
     try {
         const callContext = activeIncomingCallContext || resolveActiveDeviceSimContext();
         const res = await fetch('/api/calls/reject', {
@@ -3483,7 +3515,11 @@ window.rejectIncomingCall = async function () {
         const data = await res.json();
         if (data.success) showToast('Call rejected', 'info');
         else showToast(data.message || 'Failed to reject call', 'danger');
-    } catch (e) { showToast('Failed to reject call', 'danger'); }
+    } catch (e) {
+        showToast('Failed to reject call', 'danger');
+    } finally {
+        setIncomingCallActionState(false);
+    }
 };
 
 // Dark mode
