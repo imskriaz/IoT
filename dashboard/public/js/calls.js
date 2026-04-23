@@ -1806,6 +1806,7 @@
     }
 
     function getCallIcon(type, status) {
+        if (status === 'online') status = 'connected';
         if (status === 'missed') return 'bi-telephone-x';
         if (type === 'incoming') return 'bi-telephone-inbound';
         if (type === 'outgoing') return 'bi-telephone-outbound';
@@ -1813,6 +1814,7 @@
     }
 
     function getStatusClass(status) {
+        if (status === 'online') status = 'connected';
         switch (status) {
             case 'missed': return 'text-danger';
             case 'answered': return 'text-success';
@@ -1825,6 +1827,7 @@
     }
 
     function getStatusBadge(status) {
+        if (status === 'online') status = 'connected';
         switch (status) {
             case 'missed': return 'bg-danger';
             case 'answered': return 'bg-success';
@@ -1845,6 +1848,7 @@
             'ringing': 'Ringing',
             'answered': 'Answered',
             'connected': 'Connected',
+            'online': 'Connected',
             'ending': 'Ending',
             'missed': 'Missed',
             'rejected': 'Rejected',
@@ -1856,6 +1860,7 @@
     }
 
     function getActiveBannerClass(status) {
+        if (status === 'online') status = 'connected';
         switch (status) {
             case 'ringing': return 'alert-info';
             case 'answered': return 'alert-primary';

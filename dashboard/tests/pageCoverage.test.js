@@ -829,6 +829,8 @@ describe('sidebar navigation coverage', () => {
         expect(callsJs).toContain("window.socket.on('call:hold'");
         expect(callsJs).toContain("elements.activeCallStatus.textContent = onHold ? 'On Hold' : 'Connected';");
         expect(callsJs).toContain('resetActiveCallControls();');
+        expect(callsJs).toContain("if (status === 'online') status = 'connected';");
+        expect(callsJs).toContain("'online': 'Connected'");
     });
 
     test('calls page keeps dialer and contact selection inline instead of modal-only', () => {
