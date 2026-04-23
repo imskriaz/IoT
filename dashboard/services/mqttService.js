@@ -621,7 +621,7 @@ class MQTTService extends EventEmitter {
         return {
             success: true,
             messageId,
-            mounted: Boolean(snapshot.sd_mounted && snapshot.storage_media_available),
+            mounted: Boolean((snapshot.storage_media_mounted ?? snapshot.sd_mounted) && snapshot.storage_media_available),
             cardDetected: Boolean(snapshot.storage_media_available),
             bufferedOnly: Boolean(snapshot.storage_buffered_only),
             queueDepth: Number(snapshot.storage_queue_depth || 0),

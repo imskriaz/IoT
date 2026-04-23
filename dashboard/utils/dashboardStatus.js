@@ -245,7 +245,8 @@ function normalizeStorage(status) {
     const storage = status?.storage || status?.status?.storage || null;
     const sd = status?.sd || null;
     const hasFlatStorage = status && (
-        status?.sd_mounted !== undefined
+        status?.storage_media_mounted !== undefined
+        || status?.sd_mounted !== undefined
         || status?.storage_media_available !== undefined
         || status?.storage_buffered_only !== undefined
         || status?.storage_queue_depth !== undefined
@@ -254,8 +255,8 @@ function normalizeStorage(status) {
         || status?.storage_free_bytes !== undefined
     );
     const flatStorage = hasFlatStorage ? {
-        mounted: firstBoolean(status?.sd_mounted, status?.storage_media_available),
-        mediaAvailable: firstBoolean(status?.storage_media_available, status?.sd_mounted),
+        mounted: firstBoolean(status?.storage_media_mounted, status?.sd_mounted, status?.storage_media_available),
+        mediaAvailable: firstBoolean(status?.storage_media_available, status?.storage_media_mounted, status?.sd_mounted),
         bufferedOnly: firstBoolean(status?.storage_buffered_only),
         queueDepth: firstNumber(status?.storage_queue_depth, 0),
         pendingUploads: firstNumber(status?.pending_uploads, status?.storage_queue_depth, 0),

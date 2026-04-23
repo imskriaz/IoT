@@ -889,7 +889,7 @@ class ModemService {
                             appliedVersion: Number(data.applied_version || 0)
                         },
                         storage: {
-                            mounted: !!data.sd_mounted,
+                            mounted: !!(data.storage_media_mounted ?? data.sd_mounted),
                             mediaAvailable: !!data.storage_media_available,
                             bufferedOnly: !!data.storage_buffered_only,
                             queueDepth: Number(data.storage_queue_depth || 0),
