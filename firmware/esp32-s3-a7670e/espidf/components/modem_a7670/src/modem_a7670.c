@@ -1262,13 +1262,21 @@ static esp_err_t modem_a7670_probe_uart_sideband(bool refresh_data_session) {
     }
 
     if (transport_alive) {
-        /* A live modem MQTT session proves the network lane is usable. Keep
-         * quick cadence for recovery, but back off observability probes while
-         * the command path is already healthy. */
-        registration_refresh_interval_ms = MODEM_A7670_HEALTHY_REGISTRATION_REFRESH_INTERVAL_MS;
-        signal_refresh_interval_ms = MODEM_A7670_HEALTHY_SIGNAL_REFRESH_INTERVAL_MS;
-        metadata_refresh_interval_ms = MODEM_A7670_HEALTHY_METADATA_REFRESH_INTERVAL_MS;
-        environment_refresh_interval_ms = MODEM_A7670_HEALTHY_ENV_REFRESH_INTERVAL_MS;
+        /* Once modem MQTT is healthy, prefer a fully event-driven lane for
+         * incoming command delivery. Periodic AT refreshes can interleave with
+         * CMQTTRX frames and make inbound MQTT less reliable than it should be.
+         * Keep the last known modem state until the transport drops and we need
+         * active recovery again. */
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+            s_status.runtime.running = true;
+            s_status.runtime.last_error = ESP_OK;
+            s_status.runtime.last_error_text[0] = '\0';
+            modem_a7670_sync_state_modes_locked();
+            modem_a7670_set_health_locked();
+            modem_a7670_publish_status_locked();
+            xSemaphoreGive(s_lock);
+        }
+        return ESP_OK;
     }
 
     if (!transport_alive) {
@@ -2276,9 +2284,10 @@ static esp_err_t modem_a7670_mqtt_subscribe_locked(
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* The A76XX MQTT application note's two-step subscribe flow is more
-     * reliable than pushing the topic inline with CMQTTSUB on this modem. */
-    snprintf(command, sizeof(command), "AT+CMQTTSUBTOPIC=0,%u,1", (unsigned)strlen(topic));
+    /* Some A76XX firmware accepts the two-step CMQTTSUBTOPIC flow but does not
+     * consistently deliver live publishes afterwards. The direct CMQTTSUB form
+     * keeps the broker ACK and topic write as one modem transaction. */
+    snprintf(command, sizeof(command), "AT+CMQTTSUB=0,%u,1", (unsigned)strlen(topic));
     err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
     if (err == ESP_OK) {
         response[0] = '\0';
@@ -2289,15 +2298,11 @@ static esp_err_t modem_a7670_mqtt_subscribe_locked(
         }
     }
 
-    if (err == ESP_OK) {
-        response[0] = '\0';
-        err = modem_a7670_send_command_locked("AT+CMQTTSUB=0", response, response_len, timeout_ms, false);
-        if (!modem_a7670_response_has_phrase(response, "+CMQTTSUB:")) {
-            err = modem_a7670_read_response_until_phrase_locked(response, response_len, timeout_ms, "+CMQTTSUB:");
-        }
-        if (err == ESP_OK && !modem_a7670_response_has_phrase(response, "+CMQTTSUB: 0,0")) {
-            err = ESP_FAIL;
-        }
+    if (err == ESP_OK && !modem_a7670_response_has_phrase(response, "+CMQTTSUB:")) {
+        err = modem_a7670_read_response_until_phrase_locked(response, response_len, timeout_ms, "+CMQTTSUB:");
+    }
+    if (err == ESP_OK && !modem_a7670_response_has_phrase(response, "+CMQTTSUB: 0,0")) {
+        err = ESP_FAIL;
     }
 
     if (err != ESP_OK) {
@@ -2419,6 +2424,9 @@ esp_err_t modem_a7670_mqtt_connect(
         xSemaphoreGive(s_lock);
         return err;
     }
+
+    (void)modem_a7670_send_command_locked("AT+CMQTTCFG=\"version\",0,4", response, response_len, timeout_ms, false);
+    (void)modem_a7670_send_command_locked("AT+CMQTTCFG=\"checkUTF8\",0,0", response, response_len, timeout_ms, false);
 
     if (username && username[0] != '\0' && password && password[0] != '\0') {
         snprintf(

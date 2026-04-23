@@ -845,7 +845,6 @@ esp_err_t storage_mgr_append_sms(const unified_sms_payload_t *payload) {
 }
 
 esp_err_t storage_mgr_build_sms_history_json(char *buffer, size_t buffer_len, uint16_t max_entries) {
-    storage_mgr_record_t records[CONFIG_UNIFIED_STORAGE_RECORD_CAPACITY] = {0};
     size_t record_count = 0U;
     size_t sms_count = 0U;
     size_t written = 0U;
@@ -861,9 +860,14 @@ esp_err_t storage_mgr_build_sms_history_json(char *buffer, size_t buffer_len, ui
         effective_max_entries = CONFIG_UNIFIED_STORAGE_SMS_HISTORY_MAX_ENTRIES;
     }
 
-    record_count = storage_mgr_snapshot_records(records, CONFIG_UNIFIED_STORAGE_RECORD_CAPACITY);
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    record_count = s_blob.count;
     for (size_t index = 0U; index < record_count; ++index) {
-        if (records[index].type == STORAGE_MGR_RECORD_SMS) {
+        const size_t record_index = (s_blob.head + index) % CONFIG_UNIFIED_STORAGE_RECORD_CAPACITY;
+        if (s_blob.records[record_index].type == STORAGE_MGR_RECORD_SMS) {
             sms_count++;
         }
     }
@@ -876,11 +880,13 @@ esp_err_t storage_mgr_build_sms_history_json(char *buffer, size_t buffer_len, ui
     );
     if (written >= buffer_len) {
         buffer[0] = '\0';
+        xSemaphoreGive(s_lock);
         return ESP_ERR_INVALID_SIZE;
     }
 
     for (size_t index = record_count; index > 0U && included < effective_max_entries; --index) {
-        const storage_mgr_record_t *record = &records[index - 1U];
+        const size_t record_index = (s_blob.head + index - 1U) % CONFIG_UNIFIED_STORAGE_RECORD_CAPACITY;
+        const storage_mgr_record_t *record = &s_blob.records[record_index];
         char from[sizeof(record->sms.from) * 2U] = {0};
         char text[sizeof(record->sms.text) * 2U] = {0};
         char detail[sizeof(record->sms.detail) * 2U] = {0};
@@ -907,6 +913,7 @@ esp_err_t storage_mgr_build_sms_history_json(char *buffer, size_t buffer_len, ui
         );
         if (append_result < 0 || (size_t)append_result >= (buffer_len - written)) {
             buffer[0] = '\0';
+            xSemaphoreGive(s_lock);
             return ESP_ERR_INVALID_SIZE;
         }
 
@@ -916,11 +923,13 @@ esp_err_t storage_mgr_build_sms_history_json(char *buffer, size_t buffer_len, ui
 
     if (written + 3U > buffer_len) {
         buffer[0] = '\0';
+        xSemaphoreGive(s_lock);
         return ESP_ERR_INVALID_SIZE;
     }
     buffer[written++] = ']';
     buffer[written++] = '}';
     buffer[written] = '\0';
+    xSemaphoreGive(s_lock);
     return ESP_OK;
 }
 

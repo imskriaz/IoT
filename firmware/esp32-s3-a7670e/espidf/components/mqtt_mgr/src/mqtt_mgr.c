@@ -488,25 +488,11 @@ static esp_err_t mqtt_mgr_subscribe_commands_locked(void) {
 
 static esp_err_t mqtt_mgr_subscribe_modem_command_topics_locked(void) {
     static const char *const command_suffixes[] = {
-        "command/#",
-        "cmd/#",
-        "command/config-set",
-        "command/wifi-scan",
-        "command/wifi-reconnect",
-        "command/wifi-toggle",
-        "command/wifi-disconnect",
-        "command/mobile-toggle",
-        "command/mobile-apn",
-        "command/routing-configure",
-        "command/status-watch",
-        "command/get-status",
         "command/get-sms-history",
         "command/send-sms",
         "command/send-sms-multipart",
-        "command/send-ussd",
-        "command/cancel-ussd",
-        "command/restart-modem",
-        "command/restart"
+        "command/#",
+        "cmd/#"
     };
     char topic[160] = {0};
     char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
