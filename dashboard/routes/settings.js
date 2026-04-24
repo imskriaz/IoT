@@ -11,6 +11,7 @@ const { admin: adminMiddleware } = require('../middleware/auth');
 const { DEFAULT_DEVICE_ID } = require('../config/device');
 const {
     getEffectiveSystemSettings,
+    normalizeTimezone,
     saveSystemSettings,
     pruneLogFiles
 } = require('../services/systemSettingsService');
@@ -18,6 +19,10 @@ const { clearAllDashboardLogs } = require('../services/logCleanupService');
 
 function detectSystemTimezone() {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+}
+
+function isValidTimezone(value) {
+    return normalizeTimezone(value, '') === String(value || '').trim();
 }
 
 const ENV_PATH = path.join(__dirname, '../.env');
@@ -259,12 +264,15 @@ router.get('/runtime', async (req, res) => {
                 statusWatchRefreshMs: effectiveSystem.system.statusWatchRefreshMs,
                 statusWatchRefreshSeconds: effectiveSystem.system.statusWatchRefreshSeconds,
                 logRetentionDays: effectiveSystem.system.logRetentionDays,
+                timezone: effectiveSystem.system.timezone,
+                browserDefaultTimezone: detectSystemTimezone(),
                 sources: {
                     deviceStatusRefreshMs: effectiveSystem.effective.deviceStatusRefreshMs.source,
                     statusWatchIntervalMs: effectiveSystem.effective.statusWatchIntervalMs.source,
                     statusWatchTtlMs: effectiveSystem.effective.statusWatchTtlMs.source,
                     statusWatchRefreshMs: effectiveSystem.effective.statusWatchRefreshMs.source,
-                    logRetentionDays: effectiveSystem.effective.logRetentionDays.source
+                    logRetentionDays: effectiveSystem.effective.logRetentionDays.source,
+                    timezone: effectiveSystem.effective.timezone.source
                 }
             }
         });
@@ -472,7 +480,7 @@ router.post('/system', adminMiddleware, [
     body('phoneCountryCode').optional({ values: 'falsy' }).trim().isLength({ max: 8 }),
     body('publicBaseUrl').optional({ values: 'falsy' }).trim().isLength({ max: 300 }),
     body('otaBaseUrl').optional({ values: 'falsy' }).trim().isLength({ max: 300 }),
-    body('timezone').notEmpty(),
+    body('timezone').notEmpty().custom(isValidTimezone).withMessage('Valid timezone required'),
     body('logLevel').isIn(['debug', 'info', 'warn', 'error']),
     body('autoRestart').isBoolean(),
     body('restartSchedule').optional().matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/),
@@ -567,7 +575,10 @@ router.post('/restart', adminMiddleware, (req, res) => {
         
         res.json({
             success: true,
-            message: 'Server is restarting...'
+            message: 'Server is restarting...',
+            data: {
+                restartPath: req.get('referer') || '/settings'
+            }
         });
 
         // Restart after delay

@@ -101,6 +101,7 @@ public class MqttBridgeService extends Service {
     private volatile ScheduledFuture<?> outstandingPollFuture;
     private volatile boolean stopRequested;
     private volatile boolean commandSubscriptionsReady;
+    private volatile boolean activeHttpTransport;
     private volatile long publishSuccessCount;
     private volatile long publishFailureCount;
     private volatile long lastStatusPushAtMs;
@@ -288,7 +289,7 @@ public class MqttBridgeService extends Service {
         }
 
         BridgeConfig cfg = BridgeConfig.load(appContext);
-        if (!cfg.usesHttpTransport() || !cfg.hasHttpBridgeConfig()) {
+        if (!cfg.hasHttpBridgeConfig()) {
             appContext.getSharedPreferences(BridgeConfig.PREFS, Context.MODE_PRIVATE)
                     .edit()
                     .putBoolean(syncPrefKey(KEY_PENDING_PERMISSION_BULK_SYNC_PREFIX, cfg), true)
@@ -305,7 +306,7 @@ public class MqttBridgeService extends Service {
         if (service == null) {
             return;
         }
-        if (service.currentConfig().usesHttpTransport()) {
+        if (service.currentTransportUsesHttp()) {
             service.postHttpMessageEvent(actionId, success ? "SENT" : "FAILED", detail, number);
             return;
         }
@@ -323,7 +324,7 @@ public class MqttBridgeService extends Service {
         if (service == null) {
             return;
         }
-        if (service.currentConfig().usesHttpTransport()) {
+        if (service.currentTransportUsesHttp()) {
             service.postHttpMessageEvent(actionId, "DELIVERED", "sms_delivered", number);
             return;
         }
@@ -343,7 +344,9 @@ public class MqttBridgeService extends Service {
     }
 
     private boolean hasUsableConnection(BridgeConfig cfg) {
-        return cfg != null && (cfg.usesHttpTransport() ? cfg.hasHttpBridgeConfig() : cfg.hasProvisionedMqttConfig());
+        return cfg != null && (cfg.usesHttpTransport()
+                ? cfg.hasHttpBridgeConfig()
+                : (cfg.hasProvisionedMqttConfig() || (cfg.usesAutoTransport() && cfg.hasHttpBridgeConfig())));
     }
 
     private void connectInternal() {
@@ -352,12 +355,14 @@ public class MqttBridgeService extends Service {
             return;
         }
 
-        updateRuntimeState("connecting", false, cfg.usesHttpTransport()
+        boolean useHttpFirst = cfg.usesHttpTransport() || (cfg.usesAutoTransport() && !cfg.hasProvisionedMqttConfig() && cfg.hasHttpBridgeConfig());
+        updateRuntimeState("connecting", false, useHttpFirst
                 ? "Connecting to " + cfg.serverUrl
                 : "Connecting to " + cfg.brokerUri());
         cancelReconnect();
 
-        if (cfg.usesHttpTransport()) {
+        if (useHttpFirst) {
+            activeHttpTransport = true;
             closeClientQuietly();
             if (!cfg.hasHttpBridgeConfig()) {
                 logTelemetry("HTTP bridge config is incomplete");
@@ -384,8 +389,11 @@ public class MqttBridgeService extends Service {
         }
 
         try {
+            activeHttpTransport = false;
             MqttClient current = client;
             if (current != null && current.isConnected()) {
+                activeHttpTransport = false;
+                cancelOutstandingPoll();
                 commandSubscriptionsReady = true;
                 publishStatus("online", true);
                 scheduleStatusHeartbeat();
@@ -447,6 +455,21 @@ public class MqttBridgeService extends Service {
             Log.e(TAG, "MQTT connect failed: " + cfg.brokerUri(), error);
             logTelemetry("MQTT connect failed: " + detailForError(error, "connect failed"));
             updateRuntimeState("mqtt_connect_failed", false, detailForError(error, "MQTT connect failed"));
+            if (cfg.usesAutoTransport() && cfg.hasHttpBridgeConfig()) {
+                logTelemetry("MQTT unavailable, falling back to HTTP");
+                activeHttpTransport = true;
+                BridgeHttpClient.Result result = httpHandler.connect(cfg, statusPayload("online"));
+                if (result.success) {
+                    logTelemetry("HTTP fallback connected to " + cfg.serverUrl);
+                    updateBridgeNotification("Device Bridge online", "HTTP fallback connected");
+                    scheduleStatusHeartbeat();
+                    scheduleOutstandingPoll();
+                    updateRuntimeState("online", false, "HTTP fallback active via " + cfg.serverUrl);
+                    syncSmsAndCallsToDashboardOnce(consumePendingPermissionBulkSync(cfg));
+                    return;
+                }
+                recordHttpFailure("HTTP fallback failed", result.detail);
+            }
             scheduleReconnect();
         }
     }
@@ -460,6 +483,8 @@ public class MqttBridgeService extends Service {
             }
             current.subscribe(cfg.topic("command/#"), 1);
             current.subscribe(cfg.topic("cmd/#"), 1);
+            activeHttpTransport = false;
+            cancelOutstandingPoll();
             commandSubscriptionsReady = true;
             logTelemetry("Subscribed to bridge command topics");
             publishStatus("online", true);
@@ -497,6 +522,12 @@ public class MqttBridgeService extends Service {
                 case "send_sms":
                     logConsoleEvent("sms", "Command received: send_sms");
                     handleSendSms(actionId, data);
+                    break;
+                case "sync_sms":
+                case "pull_sms":
+                case "pull_messages":
+                    logConsoleEvent("sms", "Command received: " + normalized);
+                    handleSyncSms(actionId);
                     break;
                 case "make_call":
                 case "call_dial":
@@ -584,6 +615,18 @@ public class MqttBridgeService extends Service {
         } catch (JSONException ignored) {
         }
         publishActionResult(actionId, "send_sms", "accepted", 0, "sms_queued", payload, timeoutMs);
+    }
+
+    private void handleSyncSms(String actionId) {
+        if (checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+            logConsoleEvent("sms", "SMS sync rejected: READ_SMS permission missing");
+            publishActionResult(actionId, "sync_sms", "failed", 1, "sms_read_permission_denied", null, 90000);
+            return;
+        }
+
+        logConsoleEvent("sms", "Manual SMS sync started");
+        syncExistingSmsToDashboardOnce(true);
+        publishActionResult(actionId, "sync_sms", "completed", 0, "sms_sync_requested", null, 90000);
     }
 
     private void handleMakeCall(String actionId, JSONObject data) {
@@ -1018,7 +1061,7 @@ public class MqttBridgeService extends Service {
             }
         } catch (JSONException ignored) {
         }
-        if (currentConfig().usesHttpTransport()) {
+        if (currentTransportUsesHttp()) {
             postHttpIncomingSms(json);
             return;
         }
@@ -1140,7 +1183,7 @@ public class MqttBridgeService extends Service {
 
     private void publishSmsSyncState(String type, int total, int synced) {
         JSONObject json = buildSmsSyncStatePayload(currentConfig(), type, total, synced);
-        if (currentConfig().usesHttpTransport()) {
+        if (currentTransportUsesHttp()) {
             postHttpIncomingSms(json);
         } else {
             publishJson(currentConfig().topic("sms/incoming"), json);
@@ -1154,7 +1197,7 @@ public class MqttBridgeService extends Service {
         if (address.isEmpty() || body.isEmpty()) return false;
         JSONObject json = buildSmsSyncPayload(currentConfig(), message);
         if (json == null) return false;
-        if (currentConfig().usesHttpTransport()) {
+        if (currentTransportUsesHttp()) {
             postHttpIncomingSms(json);
         } else {
             publishJson(currentConfig().topic("sms/incoming"), json);
@@ -1337,7 +1380,7 @@ public class MqttBridgeService extends Service {
 
     private void publishCallSyncState(String type, int total, int synced) {
         JSONObject payload = buildCallSyncStatePayload(currentConfig(), type, total, synced);
-        if (currentConfig().usesHttpTransport()) {
+        if (currentTransportUsesHttp()) {
             postHttpStatus(payload);
         } else {
             publishJson(currentConfig().topic("call/status"), payload);
@@ -1347,7 +1390,7 @@ public class MqttBridgeService extends Service {
     private boolean publishCallSyncRecord(CallLogSyncRecord call) {
         JSONObject payload = buildCallSyncPayload(currentConfig(), call);
         if (payload == null) return false;
-        if (currentConfig().usesHttpTransport()) {
+        if (currentTransportUsesHttp()) {
             postHttpStatus(payload);
         } else {
             publishJson(currentConfig().topic("call/status"), payload);
@@ -1513,7 +1556,7 @@ public class MqttBridgeService extends Service {
 
     private void publishStatus(String state, boolean forceDetailed) {
         JSONObject payload = statusPayload(state, forceDetailed);
-        if (currentConfig().usesHttpTransport()) {
+        if (currentTransportUsesHttp()) {
             postHttpStatus(payload);
             return;
         }
@@ -1738,7 +1781,7 @@ public class MqttBridgeService extends Service {
             json.put("bridge", "android_sms");
             json.put("transport_mode", currentConfig().transportMode);
             json.put("status", snapshot.state);
-            json.put("active_path", currentConfig().usesHttpTransport() ? "http" : snapshot.activePath);
+            json.put("active_path", currentTransportUsesHttp() ? "http" : snapshot.activePath);
             json.put("mqtt_connected", snapshot.mqttConnected);
             json.put("mqtt_subscribed", snapshot.mqttSubscribed);
             json.put("mqtt_published_count", snapshot.mqttPublishedCount);
@@ -1996,7 +2039,7 @@ public class MqttBridgeService extends Service {
             }
         } catch (JSONException ignored) {
         }
-        if (currentConfig().usesHttpTransport()) {
+        if (currentTransportUsesHttp()) {
             return;
         }
         publishJson(currentConfig().topic("action/result"), json);
@@ -2098,6 +2141,11 @@ public class MqttBridgeService extends Service {
         return cfg;
     }
 
+    private boolean currentTransportUsesHttp() {
+        BridgeConfig cfg = currentConfig();
+        return cfg.usesHttpTransport() || (cfg.usesAutoTransport() && activeHttpTransport);
+    }
+
     boolean isStopRequested() {
         return stopRequested;
     }
@@ -2128,7 +2176,7 @@ public class MqttBridgeService extends Service {
         String fullMessage = detailText.isEmpty() ? message : (message + ": " + detailText);
         BridgeEventLog.append(this, fullMessage);
         publishFailureCount += 1;
-        if (currentConfig().usesHttpTransport() && currentConfig().bridgeEnabled && !stopRequested) {
+        if (currentTransportUsesHttp() && currentConfig().bridgeEnabled && !stopRequested) {
             updateRuntimeState("http_degraded", false, fullMessage);
             maybeScheduleHttpRecovery(fullMessage);
         }
@@ -2139,7 +2187,7 @@ public class MqttBridgeService extends Service {
         publishSuccessCount += 1;
         lastStatusPushAtMs = System.currentTimeMillis();
         lastHttpRecoveryAttemptAtMs = 0L;
-        if (currentConfig().usesHttpTransport() && currentConfig().bridgeEnabled && !stopRequested) {
+        if (currentTransportUsesHttp() && currentConfig().bridgeEnabled && !stopRequested) {
             updateRuntimeState("online", false, "HTTP bridge active via " + currentConfig().serverUrl);
         }
         persistRuntimeTelemetry();
@@ -2879,7 +2927,7 @@ public class MqttBridgeService extends Service {
         reconnectFuture = executor.schedule(this::connectInternal, RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
         logTelemetry("Reconnect scheduled in " + RECONNECT_DELAY_SECONDS + "s");
         updateBridgeNotification("Device Bridge reconnecting", "Retrying in " + RECONNECT_DELAY_SECONDS + "s");
-        updateRuntimeState("reconnecting", false, currentConfig().usesHttpTransport()
+        updateRuntimeState("reconnecting", false, currentTransportUsesHttp()
                 ? "Retrying HTTP in " + RECONNECT_DELAY_SECONDS + "s"
                 : "Retrying MQTT in " + RECONNECT_DELAY_SECONDS + "s");
     }
@@ -2911,7 +2959,7 @@ public class MqttBridgeService extends Service {
     }
 
     private void scheduleOutstandingPoll() {
-        if (!currentConfig().usesHttpTransport()) {
+        if (!currentTransportUsesHttp()) {
             cancelOutstandingPoll();
             return;
         }

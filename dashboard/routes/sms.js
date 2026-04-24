@@ -682,6 +682,40 @@ router.post('/bulk-import', [
     }
 });
 
+router.post('/sync', async (req, res) => {
+    try {
+        const deviceId = String(req.body?.deviceId || req.query?.deviceId || resolveDeviceId(req, DEFAULT_DEVICE_ID)).trim();
+        if (!deviceId) {
+            return res.status(400).json({ success: false, message: 'No active device selected' });
+        }
+        if (!global.mqttService?.publishCommand) {
+            return res.status(503).json({ success: false, message: 'Device command service unavailable' });
+        }
+
+        await global.mqttService.publishCommand(
+            deviceId,
+            'sync-sms',
+            {
+                reason: 'dashboard_pull',
+                requestedAt: new Date().toISOString()
+            },
+            false,
+            90000,
+            { source: 'dashboard' }
+        );
+
+        emitDeviceEvent(deviceId, 'sms:sync-started', {
+            deviceId,
+            total: 0,
+            requested: true
+        });
+        res.json({ success: true, message: 'Message pull requested' });
+    } catch (error) {
+        logger.error('POST /api/sms/sync error:', error);
+        res.status(500).json({ success: false, message: error.message || 'Failed to request message pull' });
+    }
+});
+
 /**
  * @swagger
  * /sms/send:

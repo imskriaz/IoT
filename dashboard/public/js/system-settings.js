@@ -50,6 +50,45 @@
         if (el) el.checked = !!checked;
     }
 
+    function timezoneOptions() {
+        let zones = [];
+        try {
+            if (typeof Intl.supportedValuesOf === 'function') {
+                zones = Intl.supportedValuesOf('timeZone') || [];
+            }
+        } catch (_) {
+            zones = [];
+        }
+        return Array.from(new Set([
+            'UTC',
+            'Asia/Dhaka',
+            'Asia/Kolkata',
+            'Asia/Dubai',
+            'Asia/Singapore',
+            'Europe/London',
+            'Europe/Berlin',
+            'America/New_York',
+            'America/Chicago',
+            'America/Denver',
+            'America/Los_Angeles',
+            ...zones
+        ])).sort((a, b) => a.localeCompare(b));
+    }
+
+    function renderTimezoneOptions(selected) {
+        const select = $('systemTimezone');
+        if (!select) return;
+        const localZone = window.DashboardTime?.browserTimeZone || 'UTC';
+        const selectedZone = String(selected || localZone || 'UTC').trim();
+        const zones = timezoneOptions();
+        if (selectedZone && !zones.includes(selectedZone)) zones.unshift(selectedZone);
+        select.innerHTML = zones.map(zone => {
+            const label = zone === localZone ? `${zone} (local)` : zone;
+            return `<option value="${escapeHtml(zone)}"${zone === selectedZone ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+        }).join('');
+        select.value = selectedZone;
+    }
+
     function setSource(id, effective, fallback = 'Saved in dashboard settings') {
         const el = $(id);
         if (!el) return;
@@ -98,7 +137,7 @@
         if (!value) return '';
         const date = new Date(value);
         if (Number.isNaN(date.getTime())) return String(value);
-        return date.toLocaleString();
+        return window.formatDashboardDateTime ? window.formatDashboardDateTime(date) : date.toLocaleString();
     }
 
     async function fetchJson(url, options = {}) {
@@ -140,7 +179,10 @@
     }
 
     function renderSystem(system = {}, effective = {}) {
-        setValue('systemTimezone', system.timezone || 'UTC');
+        renderTimezoneOptions(system.timezone || 'UTC');
+        if (system.timezone && window.DashboardTime) {
+            window.DashboardTime.setTimeZone(system.timezone);
+        }
         setValue('systemPhoneCountryCode', system.phoneCountryCode || '');
         setValue('systemLogLevel', system.logLevel || 'info');
         setValue('deviceStatusRefreshSeconds', system.deviceStatusRefreshSeconds || Math.round(Number(system.deviceStatusRefreshMs || 60000) / 1000));
@@ -390,8 +432,10 @@
                     statusWatchIntervalMs: payload.data.system.statusWatchIntervalMs,
                     statusWatchTtlMs: payload.data.system.statusWatchTtlMs,
                     statusWatchRefreshMs: payload.data.system.statusWatchRefreshMs,
-                    logRetentionDays: payload.data.system.logRetentionDays
+                    logRetentionDays: payload.data.system.logRetentionDays,
+                    timezone: payload.data.system.timezone
                 };
+                if (window.DashboardTime) window.DashboardTime.setTimeZone(payload.data.system.timezone);
             }
             if (window.loadDashboardRuntimeSettings) {
                 window.loadDashboardRuntimeSettings(true);
@@ -466,7 +510,30 @@
                 headers: { 'X-CSRF-Token': csrfToken() }
             });
             notify(payload.message || 'Dashboard restart requested', 'warning');
+            waitForDashboardRestart(payload.data?.restartPath || window.location.href);
         });
+    }
+
+    function waitForDashboardRestart(targetUrl) {
+        const url = new URL(targetUrl || window.location.href, window.location.origin);
+        const reloadUrl = `${url.pathname}${url.search}${url.hash}`;
+        let attempts = 0;
+        const timer = setInterval(async () => {
+            attempts += 1;
+            try {
+                const response = await fetch('/api/settings/runtime', {
+                    cache: 'no-store',
+                    credentials: 'same-origin',
+                    headers: { 'Cache-Control': 'no-cache' }
+                });
+                if (response.ok) {
+                    clearInterval(timer);
+                    window.location.assign(reloadUrl || '/settings');
+                }
+            } catch (_) {
+                if (attempts > 60) clearInterval(timer);
+            }
+        }, 1500);
     }
 
     async function viewLogs(button) {
@@ -549,6 +616,14 @@
     window.toggleSystemPassword = toggleSystemPassword;
 
     document.addEventListener('DOMContentLoaded', () => {
+        renderTimezoneOptions(window.DashboardTime?.browserTimeZone || 'UTC');
+        $('useLocalTimezoneBtn')?.addEventListener('click', () => {
+            let localZone = window.DashboardTime?.browserTimeZone || 'UTC';
+            try {
+                localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || localZone;
+            } catch (_) {}
+            renderTimezoneOptions(localZone);
+        });
         loadSystemSettings().then(() => focusMqttSettingsPanel());
     });
 })();

@@ -7,6 +7,24 @@ const path = require('path');
 
 const DASHBOARD_ENV_PATH = path.join(__dirname, '../.env');
 
+function detectSystemTimezone() {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch (_) {
+        return 'UTC';
+    }
+}
+
+function normalizeTimezone(value, fallback = detectSystemTimezone()) {
+    const zone = String(value || fallback || 'UTC').trim() || 'UTC';
+    try {
+        new Intl.DateTimeFormat(undefined, { timeZone: zone }).format(new Date());
+        return zone;
+    } catch (_) {
+        return fallback || 'UTC';
+    }
+}
+
 const DEFAULTS = Object.freeze({
     deviceStatusRefreshMs: 60000,
     statusWatchIntervalMs: 45000,
@@ -14,7 +32,7 @@ const DEFAULTS = Object.freeze({
     statusWatchRefreshMs: 120000,
     logRetentionDays: 30,
     logLevel: 'info',
-    timezone: 'UTC',
+    timezone: detectSystemTimezone(),
     autoRestart: false,
     restartSchedule: '03:00',
     backupConfig: true
@@ -333,7 +351,7 @@ async function getEffectiveSystemSettings(db) {
         envNames: ['TZ'],
         storedValue: system.timezone ?? rows.get('timezone'),
         defaultValue: DEFAULTS.timezone,
-        parser: (value, fallback) => String(value || fallback).trim() || fallback,
+        parser: normalizeTimezone,
         dashboardEnv
     });
 
@@ -462,7 +480,7 @@ async function saveSystemSettings(db, input, userId = null) {
     const current = await getEffectiveSystemSettings(db);
     const next = {
         deviceName: String(input.deviceName || current.system.deviceName || 'Dashboard').trim() || 'Dashboard',
-        timezone: String(input.timezone || current.system.timezone || DEFAULTS.timezone).trim() || DEFAULTS.timezone,
+        timezone: normalizeTimezone(input.timezone, current.system.timezone || DEFAULTS.timezone),
         logLevel: normalizeLogLevel(input.logLevel, current.system.logLevel),
         autoRestart: !!input.autoRestart,
         restartSchedule: String(input.restartSchedule || DEFAULTS.restartSchedule).trim(),
@@ -558,6 +576,7 @@ function pruneLogFiles(logsDir, retentionDays, logger = null) {
 module.exports = {
     DEFAULTS,
     getEffectiveSystemSettings,
+    normalizeTimezone,
     normalizeStatusWatchSettings,
     saveSystemSettings,
     pruneLogFiles

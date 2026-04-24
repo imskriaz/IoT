@@ -31,7 +31,7 @@ final class BridgeProvisioning {
                         nestedString(json, "transport", "mode"),
                         ""
                 ),
-                "mqtt"
+                "auto"
         );
 
         String nextHost = firstNonEmpty(
@@ -40,10 +40,6 @@ final class BridgeProvisioning {
                 nestedString(json, "mqtt", "ip"),
                 ""
         );
-        if ("mqtt".equals(nextTransportMode) && nextHost.isEmpty()) {
-            throw new IllegalArgumentException("Setup code is missing MQTT host.");
-        }
-
         int nextPort = firstPositive(
                 json.optInt("mp", 0),
                 nestedInt(json, "mqtt", "port"),
@@ -76,9 +72,17 @@ final class BridgeProvisioning {
         );
         String nextServerUrl = firstNonEmpty(json.optString("su", ""));
         String nextApiKey = firstNonEmpty(json.optString("ak", ""));
+        boolean hasHttp = !nextServerUrl.isEmpty() && !nextApiKey.isEmpty();
+        boolean hasMqtt = !nextHost.isEmpty();
+        if (hasHttp && hasMqtt) {
+            nextTransportMode = "auto";
+        }
 
         if (nextDeviceId.isEmpty()) {
             throw new IllegalArgumentException("Setup code is missing device ID.");
+        }
+        if ("mqtt".equals(nextTransportMode) && !hasMqtt) {
+            throw new IllegalArgumentException("Setup code is missing MQTT host.");
         }
         if ("http".equals(nextTransportMode)) {
             if (nextServerUrl.isEmpty()) {
@@ -87,6 +91,8 @@ final class BridgeProvisioning {
             if (nextApiKey.isEmpty()) {
                 throw new IllegalArgumentException("Setup code is missing API key.");
             }
+        } else if ("auto".equals(nextTransportMode) && !hasMqtt && !hasHttp) {
+            throw new IllegalArgumentException("Setup code is missing dashboard connection details.");
         }
 
         BridgeConfig updated = new BridgeConfig(
@@ -133,21 +139,13 @@ final class BridgeProvisioning {
 
     static String buildProvisioningSummary(BridgeConfig config) {
         StringBuilder builder = new StringBuilder();
-        builder.append("Transport: ").append("http".equals(config.transportMode) ? "HTTP API" : "MQTT")
+        builder.append("Connection: Automatic fallback")
                 .append("\nDevice ID: ").append(nonEmpty(config.deviceId))
                 .append("\nTopic Prefix: ").append(nonEmpty(config.topicPrefix))
                 .append("\nServer URL: ").append(nonEmpty(config.serverUrl))
-                .append("\nAPI Key: ").append(config.apiKey.isEmpty() ? "not provided" : "configured");
-
-        if ("mqtt".equals(config.transportMode)) {
-            builder.append("\nBroker Host: ").append(nonEmpty(config.brokerHost))
-                    .append("\nBroker Port: ").append(config.brokerPort)
-                    .append("\nMQTT Protocol: ").append(nonEmpty(config.brokerProtocol))
-                    .append("\nMQTT Username: ").append(config.username.isEmpty() ? "not set" : config.username)
-                    .append("\nMQTT Password: ").append(config.password.isEmpty() ? "not set" : "configured");
-        } else {
-            builder.append("\nHTTP Bridge: ").append(config.hasHttpBridgeConfig() ? "ready" : "incomplete");
-        }
+                .append("\nAPI Key: ").append(config.apiKey.isEmpty() ? "not provided" : "configured")
+                .append("\nRealtime channel: ").append(config.hasProvisionedMqttConfig() ? "ready" : "not provisioned")
+                .append("\nHTTP fallback: ").append(config.hasHttpBridgeConfig() ? "ready" : "not provisioned");
         return builder.toString();
     }
 
@@ -195,6 +193,7 @@ final class BridgeProvisioning {
 
     private static String normalizeTransportMode(String value, String fallback) {
         String normalized = firstNonEmpty(value, fallback).toLowerCase(Locale.ROOT);
+        if ("auto".equals(normalized)) return "auto";
         return "http".equals(normalized) ? "http" : "mqtt";
     }
 

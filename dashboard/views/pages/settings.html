@@ -43,7 +43,12 @@
                         <div class="row g-3">
                             <div class="col-md-6">
                                 <label class="form-label fw-semibold" for="systemTimezone">Timezone</label>
-                                <input type="text" class="form-control" id="systemTimezone" placeholder="Asia/Dhaka" <%= canEditSystem ? '' : 'disabled' %>>
+                                <div class="input-group">
+                                    <select class="form-select" id="systemTimezone" <%= canEditSystem ? '' : 'disabled' %>></select>
+                                    <button class="btn btn-outline-secondary" type="button" id="useLocalTimezoneBtn" <%= canEditSystem ? '' : 'disabled' %>>
+                                        <i class="bi bi-crosshair me-1"></i>Local
+                                    </button>
+                                </div>
                                 <div class="form-text" id="systemTimezoneSource">Source: loading</div>
                             </div>
                             <div class="col-md-6">

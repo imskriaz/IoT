@@ -53,7 +53,9 @@
     function formatDate(dateStr) {
         if (!dateStr) return '-';
         try {
-            return new Date(dateStr).toLocaleString();
+            return window.formatDashboardDateTime
+                ? window.formatDashboardDateTime(dateStr)
+                : new Date(dateStr).toLocaleString();
         } catch (e) {
             return dateStr;
         }

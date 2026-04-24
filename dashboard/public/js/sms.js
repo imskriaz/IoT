@@ -145,6 +145,40 @@
         }, 700);
     }
 
+    async function pullDeviceMessages(button) {
+        const deviceId = getSmsActiveDeviceId();
+        if (!deviceId) {
+            showToast('Select a device first.', 'warning');
+            return;
+        }
+        const btn = button?.closest ? button.closest('button') : button;
+        const originalHtml = btn?.innerHTML || '';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Pulling';
+        }
+        setSmsSyncOverlay(true, { requested: true });
+        try {
+            const response = await fetchSmsJson(buildSmsRequestUrl('/api/sms/sync'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ deviceId })
+            });
+            if (!response?.success) {
+                throw new Error(response?.message || 'Failed to request message pull');
+            }
+            showToast(response.message || 'Message pull requested', 'success');
+        } catch (error) {
+            setSmsSyncOverlay(false, { synced: 0 });
+            showToast(error.message || 'Failed to request message pull', 'danger');
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        }
+    }
+
     function buildSmsRequestUrl(url, options = {}) {
         const requestUrl = new URL(url, window.location.origin);
         const includeDeviceId = options.includeDeviceId !== false;
@@ -3926,6 +3960,7 @@
     window.saveContact = saveContact;
     window.deleteContact = deleteContact;
     window.openContactsModal = openContactsModal; // Make sure this is exposed
+    window.pullDeviceMessages = pullDeviceMessages;
 
     // ---- IndexedDB: seed from server-rendered DOM ----
     // Runs once after the page renders. Picks up all visible SMS rows and stores

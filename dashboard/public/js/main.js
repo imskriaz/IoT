@@ -331,6 +331,9 @@ function applyDashboardRuntimeSettings(settings = {}) {
         ...settings,
         deviceStatusRefreshMs: nextInterval
     };
+    if (settings.timezone && window.DashboardTime) {
+        window.DashboardTime.setTimeZone(settings.timezone);
+    }
 
     if (changed && connectionCheckInterval) {
         startConnectionMonitoring();
@@ -368,7 +371,9 @@ window.loadDashboardRuntimeSettings = loadDashboardRuntimeSettings;
 function formatHeaderTimestamp(value) {
     if (!value) return null;
     try {
-        return new Date(value).toLocaleString();
+        return window.formatDashboardDateTime
+            ? window.formatDashboardDateTime(value)
+            : new Date(value).toLocaleString();
     } catch (_) {
         return null;
     }
@@ -1099,7 +1104,9 @@ function requestDashboardStatus(options = {}) {
 function formatSmsTimestamp(value) {
     if (!value) return '';
     try {
-        return new Date(value).toLocaleString();
+        return window.formatDashboardDateTime
+            ? window.formatDashboardDateTime(value)
+            : new Date(value).toLocaleString();
     } catch (_) {
         return '';
     }

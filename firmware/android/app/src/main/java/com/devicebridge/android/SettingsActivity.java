@@ -163,14 +163,11 @@ public class SettingsActivity extends Activity {
         apiKey = BridgeUi.passwordInput(this, "Device Bridge API key");
         deviceId = BridgeUi.input(this, "Device ID");
         topicPrefix = BridgeUi.input(this, "Topic prefix");
-        transportModeSpinner = buildTransportModeSpinner();
 
         card.addView(BridgeUi.label(this, "Server URL"));
         card.addView(serverUrl, BridgeUi.fullWidth(this));
         card.addView(BridgeUi.label(this, "API Key"));
         card.addView(apiKey, BridgeUi.fullWidth(this));
-        card.addView(BridgeUi.label(this, "Transport Mode"));
-        card.addView(transportModeSpinner, BridgeUi.fullWidth(this));
         card.addView(BridgeUi.label(this, "Device ID"));
         card.addView(deviceId, BridgeUi.fullWidth(this));
         card.addView(BridgeUi.label(this, "Topic Prefix"));
@@ -187,18 +184,8 @@ public class SettingsActivity extends Activity {
         username = BridgeUi.input(this, "MQTT username");
         password = BridgeUi.passwordInput(this, "MQTT password");
 
-        card.addView(BridgeUi.label(this, "Broker Host"));
-        card.addView(host, BridgeUi.fullWidth(this));
-        card.addView(BridgeUi.label(this, "Port"));
-        card.addView(port, BridgeUi.fullWidth(this));
-        card.addView(BridgeUi.label(this, "Protocol"));
-        card.addView(protocol, BridgeUi.fullWidth(this));
-        card.addView(BridgeUi.label(this, "Username"));
-        card.addView(username, BridgeUi.fullWidth(this));
-        card.addView(BridgeUi.label(this, "Password"));
-        card.addView(password, BridgeUi.fullWidth(this));
-
         mqttHint = BridgeUi.textBlock(this, 12, false);
+        mqttHint.setText("Connection details are provisioned by the dashboard setup code. The bridge uses realtime MQTT when available and falls back to dashboard HTTP when needed.");
         card.addView(mqttHint, BridgeUi.fullWidth(this));
         return card;
     }
@@ -313,7 +300,6 @@ public class SettingsActivity extends Activity {
         apiKey.setText(config.apiKey);
         deviceId.setText(config.deviceId);
         topicPrefix.setText(config.topicPrefix);
-        setTransportModeSelection(config.transportMode);
         host.setText(config.brokerHost);
         port.setText(String.valueOf(config.brokerPort));
         username.setText(config.username);
@@ -324,7 +310,7 @@ public class SettingsActivity extends Activity {
 
     private String saveConfig(boolean enabled) {
         BridgeConfig current = BridgeConfig.load(this);
-        String nextTransportMode = normalizeTransportMode(String.valueOf(transportModeSpinner.getSelectedItem()), current.transportMode);
+        String nextTransportMode = normalizeTransportMode(current.transportMode, "auto");
         String brokerValue = host.getText().toString().trim();
         if (enabled && "mqtt".equals(nextTransportMode) && brokerValue.isEmpty()) {
             return "MQTT host is required before starting.";
@@ -400,9 +386,7 @@ public class SettingsActivity extends Activity {
 
     private void updateTransportHint(String mode) {
         if (mqttHint == null) return;
-        mqttHint.setText("http".equals(normalizeTransportMode(mode, "mqtt"))
-                ? "HTTP mode is active. Server URL and API key drive bridge traffic; MQTT fields are stored only if you switch back later."
-                : "MQTT mode is active. Broker host, credentials, and protocol will be used by the bridge service.");
+        mqttHint.setText("Connection details are provisioned by the dashboard setup code. The bridge uses realtime MQTT when available and falls back to dashboard HTTP when needed.");
     }
 
     private void copyConsole() {
@@ -433,6 +417,7 @@ public class SettingsActivity extends Activity {
 
     private String normalizeTransportMode(String value, String fallback) {
         String normalized = BridgeProvisioning.firstNonEmpty(value, fallback).toLowerCase(Locale.ROOT);
+        if ("auto".equals(normalized)) return "auto";
         return "http".equals(normalized) ? "http" : "mqtt";
     }
 

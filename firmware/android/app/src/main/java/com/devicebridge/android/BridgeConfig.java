@@ -63,7 +63,7 @@ final class BridgeConfig {
                 connectionConfigured ? prefs.getString("server_url", "") : "",
                 connectionConfigured ? prefs.getString("api_key", "") : "",
                 installId,
-                connectionConfigured ? prefs.getString("transport_mode", "mqtt") : "mqtt",
+                connectionConfigured ? prefs.getString("transport_mode", "auto") : "auto",
                 connectionConfigured ? prefs.getString("broker_host", "") : "",
                 connectionConfigured ? prefs.getInt("broker_port", 1883) : 1883,
                 connectionConfigured ? prefs.getString("broker_protocol", "mqtt") : "mqtt",
@@ -205,6 +205,10 @@ final class BridgeConfig {
         return "http".equals(transportMode);
     }
 
+    boolean usesAutoTransport() {
+        return "auto".equals(transportMode);
+    }
+
     boolean hasProvisionedMqttConfig() {
         return connectionConfigured && !brokerHost.isEmpty() && !deviceId.isEmpty();
     }
@@ -307,7 +311,10 @@ final class BridgeConfig {
     }
 
     private static String normalizeTransportMode(String value) {
-        return "http".equals(clean(value).toLowerCase(Locale.ROOT)) ? "http" : "mqtt";
+        String mode = clean(value).toLowerCase(Locale.ROOT);
+        if ("http".equals(mode)) return "http";
+        if ("mqtt".equals(mode)) return "mqtt";
+        return "auto";
     }
 
     private String defaultProtocolPrefix() {

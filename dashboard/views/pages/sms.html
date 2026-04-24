@@ -151,6 +151,9 @@
                     <button class="btn btn-sm btn-outline-secondary" type="button" onclick="markAllAsRead()">
                         <i class="bi bi-envelope-open me-1"></i><span class="d-none d-lg-inline">Read all</span>
                     </button>
+                    <button class="btn btn-sm btn-outline-primary" type="button" id="smsPullMessagesBtn" onclick="pullDeviceMessages(this)">
+                        <i class="bi bi-cloud-arrow-down me-1"></i><span class="d-none d-lg-inline">Pull messages</span>
+                    </button>
                 </div>
             </div>
             <div class="list-group list-group-flush sms-conversation-list" id="smsConversationList">
