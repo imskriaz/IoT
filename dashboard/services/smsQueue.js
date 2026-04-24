@@ -7,6 +7,7 @@ const { resolveSmsCommandForRecipient } = require('../utils/smsLimits');
 const { buildSmsSubmitPdus } = require('../utils/smsPdu');
 
 const MODEM_MQTT_UNICODE_PDU_SEGMENT_SIZE = 17;
+const MODEM_MQTT_GSM7_PDU_SEGMENT_SIZE = 153;
 
 function buildSmsCommandMessageId(command = 'send-sms') {
     const normalized = String(command || 'send-sms').trim().toLowerCase();
@@ -161,17 +162,18 @@ async function queueSmsForDelivery({
     }
 
     try {
-        const pduSegments = smsTransport.sms_transport_encoding === 'ucs2' &&
-            Number(smsTransport.sms_parts) > 1
-            ? buildSmsSubmitPdus(formattedNumber, message, {
-                requestStatusReport: true,
-                segmentSize: MODEM_MQTT_UNICODE_PDU_SEGMENT_SIZE
-            }).map((pdu) => pdu.pdu)
-            : [];
+        const pduParts = buildSmsSubmitPdus(formattedNumber, message, {
+            requestStatusReport: true,
+            encoding: smsTransport.sms_transport_encoding === 'ucs2' ? 'ucs2' : 'gsm7',
+            segmentSize: smsTransport.sms_transport_encoding === 'ucs2'
+                ? MODEM_MQTT_UNICODE_PDU_SEGMENT_SIZE
+                : MODEM_MQTT_GSM7_PDU_SEGMENT_SIZE,
+            forceSegmentSize: smsTransport.sms_transport_encoding === 'ucs2'
+        });
         const queueResults = [];
 
-        if (pduSegments.length > 1) {
-            for (let index = 0; index < pduSegments.length; index++) {
+        if (pduParts.length > 1) {
+            for (let index = 0; index < pduParts.length; index++) {
                 queueResults.push(await mqttService.publishCommand(
                     deviceId,
                     'send-sms',
@@ -180,9 +182,9 @@ async function queueSmsForDelivery({
                         message: '',
                         smsId,
                         sim_slot: normalizedSimSlot,
-                        sms_pdu: pduSegments[index],
-                        sms_pdu_encoding: smsTransport.sms_pdu_encoding || 'ucs2',
-                        sms_status_report_requested: smsTransport.sms_status_report_requested
+                        sms_pdu: pduParts[index].pdu,
+                        sms_pdu_encoding: pduParts[index].encoding,
+                        sms_status_report_requested: pduParts[index].statusReportRequested
                     },
                     false,
                     smsTimeoutMs,
@@ -197,14 +199,16 @@ async function queueSmsForDelivery({
         } else {
             queueResults.push(await mqttService.publishCommand(
                 deviceId,
-                smsCommand,
+                'send-sms',
                 {
                     to: formattedNumber,
-                    message,
+                    message: '',
                     smsId,
                     sim_slot: normalizedSimSlot,
                     timeout: smsTimeoutMs,
-                    ...smsTransport
+                    sms_pdu: pduParts[0].pdu,
+                    sms_pdu_encoding: pduParts[0].encoding,
+                    sms_status_report_requested: pduParts[0].statusReportRequested
                 },
                 false,
                 smsTimeoutMs,
@@ -236,7 +240,7 @@ async function queueSmsForDelivery({
             command: smsCommand,
             simSlot: normalizedSimSlot,
             sms: smsTransport,
-            segmentedPdu: pduSegments.length > 1,
+            segmentedPdu: pduParts.length > 1,
             queueId: queueResult?.queueId || null,
             queueIds: queueResults.map((result) => result?.queueId).filter(Boolean),
             messageId

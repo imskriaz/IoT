@@ -1,6 +1,6 @@
 'use strict';
 
-const { buildSmsSubmitPdus } = require('./smsPdu');
+const { analyzeGsm7Text, buildSmsSubmitPdus } = require('./smsPdu');
 
 const SMS_MAX_UTF8_BYTES = 1023;
 const SMS_MAX_PARTS = 15;
@@ -10,7 +10,6 @@ const UCS2_SINGLE_PART_LIMIT = 70;
 const UCS2_MULTI_PART_LIMIT = 67;
 const SMS_PDU_BUNDLE_MAX_CHARS = 1800;
 
-const GSM_EXTENSION_CHAR_SET = new Set(['^', '{', '}', '\\', '[', '~', ']', '|', '\u20AC']);
 const UCS2_BMP_MAX_CODEPOINT = 0xFFFF;
 const FORCE_SINGLE_GSM_TEXT_MODE_UCS2 = false;
 
@@ -28,8 +27,9 @@ function countUnicodeCharacters(text) {
 
 function analyzeSmsText(value) {
     const text = String(value || '');
-    let encoding = 'gsm7';
-    let gsmUnits = 0;
+    const gsm7 = analyzeGsm7Text(text);
+    let encoding = gsm7.encodable ? 'gsm7' : 'unicode';
+    let gsmUnits = gsm7.units;
     let unsupportedUnicode = false;
     const unsupportedCharacters = [];
 
@@ -43,15 +43,6 @@ function analyzeSmsText(value) {
             encoding = 'unicode';
             continue;
         }
-        if (codepoint > 0x7F) {
-            encoding = 'unicode';
-            continue;
-        }
-        if (GSM_EXTENSION_CHAR_SET.has(char)) {
-            gsmUnits += 2;
-            continue;
-        }
-        gsmUnits += 1;
     }
 
     const utf8Bytes = getUtf8ByteLength(text);
@@ -157,19 +148,20 @@ function buildSmsTransportMetadataForRecipient(number, valueOrAnalysis) {
         : analyzeSmsText(valueOrAnalysis);
     const metadata = buildSmsTransportMetadata(analysis);
 
-    if (metadata.sms_transport_encoding === 'ucs2') {
-        const pdus = buildSmsSubmitPdus(number, analysis.text, { requestStatusReport: true });
-        const pduBundle = pdus.map((pdu) => pdu.pdu).join(';');
+    const pdus = buildSmsSubmitPdus(number, analysis.text, {
+        requestStatusReport: true,
+        encoding: metadata.sms_transport_encoding === 'ucs2' ? 'ucs2' : 'gsm7'
+    });
+    const pduBundle = pdus.map((pdu) => pdu.pdu).join(';');
 
-        if (pduBundle.length <= SMS_PDU_BUNDLE_MAX_CHARS) {
-            metadata.sms_pdu = pduBundle;
-            metadata.sms_pdu_encoding = 'ucs2';
-            metadata.sms_pdu_count = pdus.length;
-            metadata.sms_status_report_requested = pdus.every((pdu) => pdu.statusReportRequested);
+    if (pduBundle.length <= SMS_PDU_BUNDLE_MAX_CHARS) {
+        metadata.sms_pdu = pduBundle;
+        metadata.sms_pdu_encoding = pdus[0]?.encoding || metadata.sms_transport_encoding;
+        metadata.sms_pdu_count = pdus.length;
+        metadata.sms_status_report_requested = pdus.every((pdu) => pdu.statusReportRequested);
 
-            if (pdus.length === 1) {
-                metadata.sms_pdu_length = pdus[0].length;
-            }
+        if (pdus.length === 1) {
+            metadata.sms_pdu_length = pdus[0].length;
         }
     }
 

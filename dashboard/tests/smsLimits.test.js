@@ -44,15 +44,19 @@ describe('smsLimits', () => {
     });
 
     test('uses IRA transport for regular single-part text', () => {
-        const resolved = resolveSmsCommand('regular sms test');
+        const resolved = resolveSmsCommandForRecipient('+8801887300993', 'regular sms test');
 
         expect(resolved.command).toBe('send-sms');
         expect(resolved.metadata).toEqual(expect.objectContaining({
             sms_encoding: 'gsm7',
             sms_transport_encoding: 'ira',
             sms_parts: 1,
-            sms_multipart: false
+            sms_multipart: false,
+            sms_pdu_encoding: 'gsm7',
+            sms_pdu_count: 1,
+            sms_status_report_requested: true
         }));
+        expect(resolved.metadata.sms_pdu).toMatch(/^00[0-9A-F]+$/);
         expect(resolved.timeoutMs).toBe(45000);
     });
 
@@ -92,13 +96,14 @@ describe('smsLimits', () => {
         expect(formatSmsLimitError(analysis)).toBe('Message exceeds device SMS limit (max 1023 UTF-8 bytes / max 15 parts)');
     });
 
-    test('classifies non-GSM ASCII as IRA instead of Unicode to match firmware transport', () => {
-        const text = '`'.repeat(1006);
+    test('uses UCS-2 PDU metadata for ASCII outside the GSM 7-bit alphabet', () => {
+        const text = '`'.repeat(1000);
         const analysis = analyzeSmsText(text);
 
-        expect(analysis.encoding).toBe('gsm7');
-        expect(analysis.transportEncoding).toBe('ira');
-        expect(analysis.parts).toBe(Math.ceil(1006 / 153));
+        expect(analysis.encoding).toBe('unicode');
+        expect(analysis.transportEncoding).toBe('ucs2');
+        expect(analysis.parts).toBe(15);
+        expect(analysis.overByteLimit).toBe(false);
         expect(analysis.overPartLimit).toBe(false);
     });
 

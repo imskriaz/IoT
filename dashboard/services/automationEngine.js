@@ -4,6 +4,7 @@ const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
 const { resolveSmsCommandForRecipient } = require('../utils/smsLimits');
 const notificationService = require('./notificationService');
+const { queueSmsForDelivery } = require('./smsQueue');
 
 class AutomationEngine {
     constructor() {
@@ -430,13 +431,24 @@ class AutomationEngine {
                     {
                         const to = this._interpolate(cfg.to || '', context);
                         const message = this._interpolate(cfg.message || '', context);
-                        const resolved = resolveSmsCommandForRecipient(to, message);
-                        await this._publishCommand(context.deviceId, resolved.command, {
-                            to,
-                            message,
-                            timeout: resolved.timeoutMs,
-                            ...(resolved.metadata || {})
-                        }, false, resolved.timeoutMs);
+                        if (this.db && this.mqttService?.publishCommand) {
+                            await queueSmsForDelivery({
+                                db: this.db,
+                                mqttService: this.mqttService,
+                                deviceId: context.deviceId,
+                                to,
+                                message,
+                                source: 'automation'
+                            });
+                        } else {
+                            const resolved = resolveSmsCommandForRecipient(to, message);
+                            await this._publishCommand(context.deviceId, resolved.command, {
+                                to,
+                                message,
+                                timeout: resolved.timeoutMs,
+                                ...(resolved.metadata || {})
+                            }, false, resolved.timeoutMs);
+                        }
                     }
                     break;
                 case 'action.send_notification': {

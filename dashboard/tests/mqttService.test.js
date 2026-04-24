@@ -80,7 +80,7 @@ describe('mqttService firmware compatibility', () => {
         delete global.io;
     });
 
-    test('publishCommand sends only runtime SMS fields to firmware', async () => {
+    test('publishCommand sends compact dashboard-built GSM PDU payloads to firmware', async () => {
         await svc.publishCommand(
             'device-1',
             'send-sms',
@@ -94,12 +94,14 @@ describe('mqttService firmware compatibility', () => {
         expect(svc.client.publish.mock.calls[0][0]).toBe('device/device-1/command/send-sms');
 
         const payload = JSON.parse(svc.client.publish.mock.calls[0][1]);
-        expect(payload.number).toBe('+15551234567');
-        expect(payload.text).toBe('hello from test');
         expect(payload.action_id).toMatch(/^sms_/);
-        expect(payload.timeout).toBe(5000);
-        expect(payload.sms_transport_encoding).toBe('ira');
-        expect(payload.sms_parts).toBe(1);
+        expect(payload.sms_pdu).toMatch(/^00[0-9A-F]+$/);
+        expect(payload.command).toBeUndefined();
+        expect(payload.number).toBeUndefined();
+        expect(payload.text).toBeUndefined();
+        expect(payload.timeout).toBeUndefined();
+        expect(payload.sms_transport_encoding).toBeUndefined();
+        expect(payload.sms_parts).toBeUndefined();
         expect(payload.sms_encoding).toBeUndefined();
         expect(payload.sms_multipart).toBeUndefined();
         expect(payload.messageId).toBeUndefined();
@@ -1249,7 +1251,7 @@ describe('mqttService durable SMS queue', () => {
         );
     });
 
-    test('send-sms publish injects the command timeout into the firmware payload', async () => {
+    test('send-sms publish keeps compact PDU payload free of text-mode timeout fields', async () => {
         await svc._publishCommandNow(
             'device-1',
             'send-sms',
@@ -1268,11 +1270,12 @@ describe('mqttService durable SMS queue', () => {
         const published = JSON.parse(svc.client.publish.mock.calls[0][1]);
         expect(published).toEqual(expect.objectContaining({
             action_id: 'send-sms_timeout_payload',
-            command: 'send_sms',
-            number: '+8801628301525',
-            text: 'hello',
-            timeout: 60000
+            sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/)
         }));
+        expect(published.command).toBeUndefined();
+        expect(published.number).toBeUndefined();
+        expect(published.text).toBeUndefined();
+        expect(published.timeout).toBeUndefined();
     });
 
     test('non-replay-safe SMS command timeouts become ambiguous instead of being retried', async () => {

@@ -108,7 +108,7 @@ describe('automationEngine', () => {
         expect(twinUpdates).toHaveLength(0);
     });
 
-    test('publishes automation SMS with Unicode metadata and timeout', async () => {
+    test('queues automation SMS with dashboard-built Unicode PDU parts', async () => {
         const unicodeMessage = '\u0985'.repeat(80);
         const flows = [{
             id: 3,
@@ -133,21 +133,42 @@ describe('automationEngine', () => {
         automationEngine.init(db, mqttService, { emit: jest.fn() });
         await automationEngine.onEvent('telemetry', { temperature: 35 }, 'dev-3');
 
-        expect(mqttService.publishCommand).toHaveBeenCalledWith(
+        expect(mqttService.publishCommand).toHaveBeenCalledTimes(5);
+        expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
+            1,
             'dev-3',
-            'send-sms-multipart',
+            'send-sms',
             expect.objectContaining({
                 to: '+8801555123456',
-                message: unicodeMessage,
-                sms_encoding: 'unicode',
-                sms_transport_encoding: 'ucs2',
-                sms_parts: 2,
-                sms_multipart: true,
-                timeout: 60000
+                message: '',
+                sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
+                sms_pdu_encoding: 'ucs2',
+                sms_status_report_requested: true
             }),
             false,
             60000,
-            {}
+            expect.objectContaining({
+                source: 'automation-sms',
+                messageId: expect.stringMatching(/^sms_.*_p1$/)
+            })
+        );
+        expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
+            5,
+            'dev-3',
+            'send-sms',
+            expect.objectContaining({
+                to: '+8801555123456',
+                message: '',
+                sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
+                sms_pdu_encoding: 'ucs2',
+                sms_status_report_requested: true
+            }),
+            false,
+            60000,
+            expect.objectContaining({
+                source: 'automation-sms',
+                messageId: expect.stringMatching(/^sms_.*_p5$/)
+            })
         );
     });
 });

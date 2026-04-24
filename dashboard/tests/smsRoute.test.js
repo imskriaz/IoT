@@ -97,13 +97,11 @@ describe('sms route queue-first delivery', () => {
             'send-sms',
             expect.objectContaining({
                 to: '+8801555123456',
-                message: 'queued hello',
+                message: '',
                 smsId: 41,
-                sms_encoding: 'gsm7',
-                sms_transport_encoding: 'ira',
-                sms_parts: 1,
-                sms_multipart: false,
-                timeout: 45000
+                sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
+                sms_pdu_encoding: 'gsm7',
+                sms_status_report_requested: true
             }),
             false,
             45000,
@@ -116,7 +114,7 @@ describe('sms route queue-first delivery', () => {
         );
     });
 
-    test('accepts multipart SMS under the device limit and uses the multipart MQTT contract', async () => {
+    test('accepts multipart SMS under the device limit and queues dashboard-built PDU parts', async () => {
         const db = {
             run: jest.fn(async (sql) => {
                 if (String(sql).includes('INSERT INTO sms')) {
@@ -149,23 +147,41 @@ describe('sms route queue-first delivery', () => {
             queued: true,
             id: 61
         }));
-        expect(global.mqttService.publishCommand).toHaveBeenCalledWith(
+        expect(global.mqttService.publishCommand).toHaveBeenCalledTimes(6);
+        expect(global.mqttService.publishCommand).toHaveBeenNthCalledWith(
+            1,
             'device-1',
-            'send-sms-multipart',
+            'send-sms',
             expect.objectContaining({
                 to: '+8801555123456',
-                message: multipartMessage,
+                message: '',
                 smsId: 61,
-                sms_encoding: 'gsm7',
-                sms_transport_encoding: 'ira',
-                sms_parts: 6,
-                sms_multipart: true,
-                timeout: 75000
+                sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
+                sms_pdu_encoding: 'gsm7',
+                sms_status_report_requested: true
             }),
             false,
             75000,
             expect.objectContaining({
-                messageId: expect.stringMatching(/^sms_/)
+                messageId: expect.stringMatching(/^sms_.*_p1$/)
+            })
+        );
+        expect(global.mqttService.publishCommand).toHaveBeenNthCalledWith(
+            6,
+            'device-1',
+            'send-sms',
+            expect.objectContaining({
+                to: '+8801555123456',
+                message: '',
+                smsId: 61,
+                sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
+                sms_pdu_encoding: 'gsm7',
+                sms_status_report_requested: true
+            }),
+            false,
+            75000,
+            expect.objectContaining({
+                messageId: expect.stringMatching(/^sms_.*_p6$/)
             })
         );
     });
@@ -187,7 +203,7 @@ describe('sms route queue-first delivery', () => {
 
         const router = require('../routes/sms');
         const app = buildApp(router, db);
-        const banglaMessage = 'বাংলা টেস্ট মেসেজ';
+        const banglaMessage = '\u09AC\u09BE\u0982\u09B2\u09BE';
 
         const res = await request(app)
             .post('/api/sms/send')
@@ -208,16 +224,11 @@ describe('sms route queue-first delivery', () => {
             'send-sms',
             expect.objectContaining({
                 to: '+8801555123456',
-                message: banglaMessage,
+                message: '',
                 smsId: 71,
-                sms_encoding: 'unicode',
-                sms_transport_encoding: 'ucs2',
-                sms_parts: 1,
-                sms_multipart: false,
                 sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
-                sms_pdu_length: expect.any(Number),
                 sms_pdu_encoding: 'ucs2',
-                timeout: 45000
+                sms_status_report_requested: true
             }),
             false,
             45000,
@@ -244,7 +255,7 @@ describe('sms route queue-first delivery', () => {
 
         const router = require('../routes/sms');
         const app = buildApp(router, db);
-        const banglaMultipartMessage = 'অ'.repeat(80);
+        const banglaMultipartMessage = '\u0985'.repeat(80);
 
         const res = await request(app)
             .post('/api/sms/send')
