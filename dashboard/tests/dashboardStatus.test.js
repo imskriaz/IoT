@@ -372,6 +372,19 @@ describe('dashboardStatus', () => {
         expect(status.androidId).toBeFalsy();
     });
 
+    test('defaults unreported ESP32 firmware model to ESP32', () => {
+        const status = buildDashboardDeviceStatus({
+            online: true,
+            type: 'esp32',
+            active_path: 'wifi',
+            wifi_connected: true,
+            wifi_ssid: 'BenchNet',
+            wifi_ip_address: '10.0.0.32'
+        }, true);
+
+        expect(status.model).toBe('ESP32');
+    });
+
     test('clears stale mqtt_not_connected reasons when mqtt is already connected', () => {
         const status = buildDashboardDeviceStatus({
             online: true,

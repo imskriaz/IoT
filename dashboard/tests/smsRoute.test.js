@@ -100,7 +100,7 @@ describe('sms route queue-first delivery', () => {
                 message: 'queued hello',
                 smsId: 41,
                 sms_encoding: 'gsm7',
-                sms_transport_encoding: 'ira',
+                sms_transport_encoding: 'ucs2',
                 sms_parts: 1,
                 sms_multipart: false,
                 timeout: 45000
@@ -214,10 +214,10 @@ describe('sms route queue-first delivery', () => {
                 sms_transport_encoding: 'ucs2',
                 sms_parts: 1,
                 sms_multipart: false,
-                timeout: 60000
+                timeout: 45000
             }),
             false,
-            60000,
+            45000,
             expect.objectContaining({
                 messageId: expect.stringMatching(/^send-sms_/)
             })

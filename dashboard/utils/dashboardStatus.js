@@ -498,17 +498,26 @@ function normalizeDeviceInfo(status) {
     const device = status?.device || status?.deviceInfo || status?.device_info || null;
     const manufacturer = firstText(status?.manufacturer, status?.deviceManufacturer, device?.manufacturer);
     const brand = firstText(status?.brand, status?.deviceBrand, device?.brand);
-    const model = firstText(status?.model, status?.deviceModel, device?.model);
+    let model = firstText(status?.model, status?.deviceModel, device?.model);
     const imei = firstText(status?.imei, device?.imei);
     const androidId = firstText(status?.androidId, status?.android_id, device?.androidId, device?.android_id);
     const explicitPlatform = firstText(status?.platform, device?.platform);
-    const deviceName = firstText(
-        status?.deviceName,
-        status?.device_name,
-        device?.deviceName,
-        device?.device_name,
-        [manufacturer, model].filter(Boolean).join(' ').trim()
-    );
+    const deviceTypeHints = [
+        status?.type,
+        status?.deviceType,
+        status?.device_type,
+        status?.board,
+        status?.deviceBoard,
+        status?.device_board,
+        status?.chip,
+        status?.deviceId,
+        status?.device_id,
+        device?.type,
+        device?.deviceType,
+        device?.device_type,
+        device?.board,
+        device?.chip
+    ].map(value => String(value ?? '').trim().toLowerCase()).filter(Boolean);
     const firmwareHints = [
         status?.activePath,
         status?.active_path,
@@ -531,16 +540,33 @@ function normalizeDeviceInfo(status) {
         status?.bridge,
         status?.bridge_type
     ].map(value => String(value ?? '').trim().toLowerCase()).filter(Boolean);
+    const hasAndroidHint = Boolean(androidId)
+        || androidHints.some(value => value.includes('android'))
+        || deviceTypeHints.some(value => value.includes('android'));
+    const hasEsp32Hint = deviceTypeHints
+        .concat(firmwareHints)
+        .some(value => value.includes('esp32') || value.includes('a7670') || value === 'firmware');
     let platform = explicitPlatform || null;
 
     if (!platform) {
-        if (androidId || androidHints.some(value => value.includes('android'))) {
+        if (hasAndroidHint) {
             platform = 'android';
-        } else if (imei || firmwareHints.some(value => value.includes('esp32') || value.includes('a7670') || value === 'firmware') ||
-                   firmwareHints.length > 0) {
+        } else if (imei || hasEsp32Hint || firmwareHints.length > 0) {
             platform = 'firmware';
         }
     }
+
+    if (!model && !hasAndroidHint && (hasEsp32Hint || platform === 'firmware')) {
+        model = 'ESP32';
+    }
+
+    const deviceName = firstText(
+        status?.deviceName,
+        status?.device_name,
+        device?.deviceName,
+        device?.device_name,
+        [manufacturer, model].filter(Boolean).join(' ').trim()
+    );
 
     return {
         manufacturer,

@@ -99,16 +99,24 @@
 </div>
 <% } %>
 
+<% let homeDeviceLane = 'esp32'; %>
 <% if (hasActiveDevice) { %>
 <%
     const activeHomeDevice = Array.isArray(allDevices)
         ? (allDevices.find(d => String(d.id || '') === String(deviceId || '')) || {})
         : {};
     const activeHomeTypeText = String(activeHomeDevice.type || deviceStatus.type || activeHomeDevice.board || deviceId || '').toLowerCase();
-    const homeDeviceLane = activeHomeTypeText.includes('android') || (activeHomeTypeText.includes('http') && activeHomeTypeText.includes('sms'))
+    homeDeviceLane = activeHomeTypeText.includes('android') || (activeHomeTypeText.includes('http') && activeHomeTypeText.includes('sms'))
         ? 'android'
         : 'esp32';
     const homeLaneLabel = homeDeviceLane === 'android' ? 'Android Bridge device' : 'ESP32 device';
+    const homeReportedModelLabel = deviceStatus.model
+        ? [deviceStatus.manufacturer, deviceStatus.model].filter(Boolean).join(' ').trim()
+        : '';
+    const homeModelLabel = homeReportedModelLabel
+        || (homeDeviceLane === 'esp32' ? 'ESP32' : null)
+        || deviceStatus.deviceName
+        || 'Not reported by device';
     const homeOfflineAlertText = {
         esp32: 'Check power, MQTT broker, Wi-Fi/APN, SIM/modem path, and device firmware heartbeat.',
         android: 'Open the Android Bridge app and check transport mode, background service, SMS permissions, and battery restrictions.'
@@ -418,7 +426,7 @@
                 </div>
                 <div class="col-6 col-md-2">
                     <div class="dashboard-detail-label text-muted">Model</div>
-                    <div id="deviceModel" class="dashboard-detail-value fw-semibold text-truncate" title="<%= [deviceStatus.manufacturer, deviceStatus.model].filter(Boolean).join(' ') || deviceStatus.deviceName || 'Not reported by device' %>"><%= [deviceStatus.manufacturer, deviceStatus.model].filter(Boolean).join(' ') || deviceStatus.deviceName || 'Not reported by device' %></div>
+                    <div id="deviceModel" class="dashboard-detail-value fw-semibold text-truncate" title="<%= homeModelLabel %>"><%= homeModelLabel %></div>
                 </div>
                 <div class="col-6 col-md-2">
                     <div id="deviceHardwareIdLabel" class="dashboard-detail-label text-muted"><%= deviceStatus.androidId ? 'Android ID' : (deviceStatus.imei ? 'IMEI' : 'Android ID / IMEI') %></div>
@@ -802,6 +810,7 @@
 
 <script>
     window.__dashboardRenderedOnline = <%= isDeviceConnected ? 'true' : 'false' %>;
+    window.ACTIVE_DEVICE_TYPE = window.ACTIVE_DEVICE_TYPE || '<%= homeDeviceLane %>';
 
     function refreshDashboard() {
         location.reload();

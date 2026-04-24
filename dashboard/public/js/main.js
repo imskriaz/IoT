@@ -392,6 +392,60 @@ function formatDeviceHardwareIdLabel(status, fallback = 'Not reported by device'
     return fallback;
 }
 
+function getActiveDeviceTypeLabel() {
+    try {
+        if (typeof window.getActiveDeviceType === 'function') {
+            return window.getActiveDeviceType();
+        }
+        return window.ACTIVE_DEVICE_TYPE || localStorage.getItem('activeDeviceType') || '';
+    } catch (_) {
+        return window.ACTIVE_DEVICE_TYPE || '';
+    }
+}
+
+function isEsp32LikeStatus(status = {}) {
+    const tokens = [
+        getActiveDeviceTypeLabel(),
+        status?.type,
+        status?.deviceType,
+        status?.device_type,
+        status?.board,
+        status?.deviceBoard,
+        status?.device_board,
+        status?.chip,
+        status?.platform,
+        status?.model,
+        status?.deviceModel,
+        status?.device?.type,
+        status?.device?.deviceType,
+        status?.device?.device_type,
+        status?.device?.board,
+        status?.device?.chip,
+        status?.device?.platform,
+        status?.device?.model,
+        getStatusActiveDeviceId()
+    ].map(value => String(value ?? '').trim().toLowerCase()).filter(Boolean);
+
+    if (tokens.some(token => token.includes('android'))) {
+        return false;
+    }
+
+    return tokens.some(token => token.includes('esp32') || token.includes('a7670') || token === 'firmware');
+}
+
+function getDeviceModelDisplayLabel(status = {}, fallback = 'Not reported by device') {
+    const manufacturer = String(status?.manufacturer || status?.deviceManufacturer || status?.device?.manufacturer || '').trim();
+    const model = String(status?.model || status?.deviceModel || status?.device?.model || '').trim();
+    if (model) {
+        return [manufacturer, model].filter(Boolean).join(' ');
+    }
+    if (isEsp32LikeStatus(status)) {
+        return 'ESP32';
+    }
+    const deviceName = String(status?.deviceName || status?.device_name || status?.device?.deviceName || status?.device?.device_name || '').trim();
+    return manufacturer || deviceName || fallback;
+}
+
 function getStatusActiveDeviceId(fallback = '') {
     const value = (window.getActiveDeviceId ? window.getActiveDeviceId() : '')
         || window.DEVICE_ID
@@ -1024,6 +1078,96 @@ function scheduleDashboardSmsRefresh(delayMs = 400) {
     }, delayMs);
 }
 
+function getDashboardConversationNumber(thread = {}) {
+    return String(thread.primary_number || thread.thread_number || '').trim();
+}
+
+function getDashboardConversationTitle(thread = {}) {
+    const number = getDashboardConversationNumber(thread);
+    return String(thread.title || thread.display_from || number || 'Conversation').trim();
+}
+
+function getDashboardConversationPreview(thread = {}) {
+    return String(thread.last_message_preview || thread.message || 'No messages yet');
+}
+
+function getDashboardConversationTimestamp(thread = {}) {
+    return thread.last_message_at || thread.timestamp || '';
+}
+
+function getDashboardConversationDirection(thread = {}) {
+    return String(thread.last_message_direction || thread.last_direction || '').trim().toLowerCase();
+}
+
+function getDashboardConversationTotal(thread = {}) {
+    return Number(thread.message_count ?? thread.total_count ?? 0) || 0;
+}
+
+function buildDashboardConversationHref(thread = {}) {
+    const params = new URLSearchParams();
+    const deviceId = getDashboardSmsDeviceId();
+    const number = getDashboardConversationNumber(thread);
+    const conversationId = Math.max(0, Number(thread.conversation_id ?? thread.conversationId) || 0);
+    const title = getDashboardConversationTitle(thread);
+
+    if (deviceId) params.set('device', deviceId);
+    if (number) params.set('thread', number);
+    if (conversationId) params.set('conversation', String(conversationId));
+    if (title) params.set('title', title);
+
+    const query = params.toString();
+    return `/sms${query ? `?${query}` : ''}`;
+}
+
+function renderDashboardConversationPreviewRows(conversations) {
+    const rows = (Array.isArray(conversations) ? conversations : []).slice(0, 3);
+    if (!rows.length) {
+        return `
+            <div class="text-center py-5">
+                <i class="bi bi-inbox fs-1 text-muted"></i>
+                <p class="text-muted mt-3 mb-0">No recent conversations</p>
+            </div>
+        `;
+    }
+
+    const rowMarkup = rows.map((thread) => {
+        const number = getDashboardConversationNumber(thread);
+        const title = getDashboardConversationTitle(thread);
+        const href = buildDashboardConversationHref(thread);
+        const unreadCount = Number(thread.unread_count || 0);
+        const direction = getDashboardConversationDirection(thread);
+        const timestamp = getDashboardConversationTimestamp(thread);
+        const preview = getDashboardConversationPreview(thread);
+        const total = getDashboardConversationTotal(thread);
+        const badge = unreadCount > 0
+            ? `<span class="badge bg-danger ms-2">${unreadCount} new</span>`
+            : (direction === 'outgoing' ? '<span class="badge bg-secondary ms-2">Sent</span>' : '');
+        const numberMeta = number ? ` &middot; ${escapeHtml(number)}` : '';
+
+        return `
+            <a href="${escapeHtml(href)}" data-device-aware-href="${escapeHtml(href)}" class="list-group-item list-group-item-action p-3 text-decoration-none text-reset">
+                <div class="d-flex gap-3">
+                    <div class="flex-shrink-0">
+                        <div class="bg-light rounded-circle p-2">
+                            <i class="bi bi-chat-square-text fs-5"></i>
+                        </div>
+                    </div>
+                    <div class="flex-grow-1">
+                        <div class="d-flex flex-column flex-sm-row justify-content-between align-items-start gap-2">
+                            <h6 class="mb-0">${escapeHtml(title)}${badge}</h6>
+                            <small class="text-muted">${escapeHtml(formatSmsTimestamp(timestamp) || 'No activity')}</small>
+                        </div>
+                        <p class="mb-0 mt-1 text-truncate">${escapeHtml(preview)}</p>
+                        <div class="small text-muted mt-1">${total} messages${numberMeta}</div>
+                    </div>
+                </div>
+            </a>
+        `;
+    }).join('');
+
+    return `<div class="list-group list-group-flush">${rowMarkup}</div>`;
+}
+
 function refreshDashboardSmsPreview() {
     const container = document.getElementById('dashboardRecentSmsBody');
     if (!container) return;
@@ -1033,7 +1177,7 @@ function refreshDashboardSmsPreview() {
     };
     const requestToken = ++dashboardSmsPreviewToken;
 
-    fetch(buildDashboardSmsRequestUrl('/api/sms?limit=3', true), {
+    fetch(buildDashboardSmsRequestUrl('/api/sms/conversations?limit=3', true), {
         cache: 'no-store',
         credentials: 'same-origin',
         headers: {
@@ -1045,48 +1189,7 @@ function refreshDashboardSmsPreview() {
         .then(payload => {
             if (requestToken !== dashboardSmsPreviewToken || !isDashboardSmsScopeSnapshotCurrent(requestScope)) return;
             if (!payload?.success) return;
-            const messages = Array.isArray(payload.data) ? payload.data : [];
-            if (!messages.length) {
-                container.innerHTML = `
-                    <div class="text-center py-5">
-                        <i class="bi bi-inbox fs-1 text-muted"></i>
-                        <p class="text-muted mt-3 mb-0">No recent messages</p>
-                    </div>
-                `;
-                return;
-            }
-
-            const rows = messages.slice(0, 3).map((sms) => {
-                const label = sms.type === 'outgoing'
-                    ? (sms.to_number || 'Recipient')
-                    : (sms.display_from || sms.from_number || 'Unknown');
-                const badge = sms.type === 'outgoing'
-                    ? '<span class="badge bg-secondary ms-2">Sent</span>'
-                    : (!sms.read ? '<span class="badge bg-danger ms-2">New</span>' : '');
-                const ts = formatSmsTimestamp(sms.timestamp);
-                const preview = String(sms.message || '');
-
-                return `
-                    <div class="list-group-item list-group-item-action p-3">
-                        <div class="d-flex gap-3">
-                            <div class="flex-shrink-0">
-                                <div class="bg-light rounded-circle p-2">
-                                    <i class="bi bi-envelope fs-5"></i>
-                                </div>
-                            </div>
-                            <div class="flex-grow-1">
-                                <div class="d-flex flex-column flex-sm-row justify-content-between align-items-start gap-2">
-                                    <h6 class="mb-0">${escapeHtml(label)}${badge}</h6>
-                                    <small class="text-muted">${escapeHtml(ts)}</small>
-                                </div>
-                                <p class="mb-0 mt-1 text-truncate">${escapeHtml(preview)}</p>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-
-            container.innerHTML = `<div class="list-group list-group-flush">${rows}</div>`;
+            container.innerHTML = renderDashboardConversationPreviewRows(payload.data);
         })
         .catch(() => {});
 }
@@ -2108,8 +2211,8 @@ function updateDashboardCards(status) {
     }
     const modelEl = document.getElementById('deviceModel');
     if (modelEl) {
-        const modelLabel = [status?.manufacturer, status?.model].filter(Boolean).join(' ') || status?.deviceName || 'Not reported by device';
-        modelEl.textContent = isOnline ? modelLabel : 'Not reported by device';
+        const modelLabel = getDeviceModelDisplayLabel(status);
+        modelEl.textContent = modelLabel;
         modelEl.setAttribute('title', modelEl.textContent);
     }
 }

@@ -98,6 +98,10 @@ describe('mqttService firmware compatibility', () => {
         expect(payload.text).toBe('hello from test');
         expect(payload.action_id).toMatch(/^sms_/);
         expect(payload.timeout).toBe(5000);
+        expect(payload.sms_encoding).toBe('gsm7');
+        expect(payload.sms_transport_encoding).toBe('ucs2');
+        expect(payload.sms_parts).toBe(1);
+        expect(payload.sms_multipart).toBe(false);
         expect(payload.messageId).toBeUndefined();
     });
 
@@ -637,6 +641,48 @@ describe('mqttService firmware compatibility', () => {
 
         svc.deviceCommandQueues.delete('device-1');
         svc.clearDeviceBusy('device-1');
+    });
+
+    test('startup recovery syncs interrupted SMS queue state back to SMS rows', async () => {
+        const interruptedRow = {
+            id: 'q-sms-1',
+            device_id: 'device-1',
+            command: 'send-sms',
+            message_id: 'send-sms_recover_1',
+            status: 'waiting_response',
+            last_error: null,
+            payload: JSON.stringify({ smsId: 55, to: '+8801555123456' })
+        };
+        const ambiguousRow = {
+            ...interruptedRow,
+            status: 'ambiguous',
+            last_error: 'dashboard restarted during non-replay-safe command'
+        };
+        global.app.locals.db = {
+            all: jest.fn()
+                .mockResolvedValueOnce([])
+                .mockResolvedValueOnce([interruptedRow])
+                .mockResolvedValueOnce([ambiguousRow])
+                .mockResolvedValueOnce([{
+                    id: 56,
+                    device_id: 'device-1',
+                    external_id: 'send-sms_orphan_1'
+                }]),
+            run: jest.fn().mockResolvedValue({ changes: 1 })
+        };
+        svc._emitDeviceQueueState = jest.fn().mockResolvedValue();
+
+        await svc._recoverPersistentQueue();
+
+        expect(global.app.locals.db.run).toHaveBeenCalledWith(
+            expect.stringContaining('UPDATE sms'),
+            ['ambiguous', 'dashboard restarted during non-replay-safe command', 'send-sms_recover_1', 55]
+        );
+        expect(global.app.locals.db.run).toHaveBeenCalledWith(
+            expect.stringContaining('SMS command status was not confirmed before queue tracking ended'),
+            [56]
+        );
+        expect(svc._emitDeviceQueueState).toHaveBeenCalledWith('device-1');
     });
 
     test('classifies high-value commands into stable domains and priorities', () => {

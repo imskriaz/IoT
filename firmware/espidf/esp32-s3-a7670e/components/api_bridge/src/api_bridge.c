@@ -1110,6 +1110,7 @@ static unified_action_response_t api_bridge_execute_send_sms(
     size_t payload_len
 ) {
     unified_action_response_t response = {0};
+    sms_service_send_options_t send_options = {0};
     bool force_multipart = false;
     char escaped_encoding[32] = {0};
     char escaped_transport_encoding[32] = {0};
@@ -1126,9 +1127,26 @@ static unified_action_response_t api_bridge_execute_send_sms(
         force_multipart = true;
     }
 
-    response = force_multipart
-        ? sms_service_send_multipart(request ? request->number : NULL, request ? request->text : NULL, action ? action->timeout_ms : 0U)
-        : sms_service_send(request ? request->number : NULL, request ? request->text : NULL, action ? action->timeout_ms : 0U);
+    send_options.force_multipart = force_multipart;
+    if (request) {
+        send_options.expected_parts = request->sms_parts;
+        if (request->sms_transport_encoding[0] != '\0') {
+            send_options.use_ucs2_present = true;
+            send_options.use_ucs2 = strcmp(request->sms_transport_encoding, "ucs2") == 0 ||
+                strcmp(request->sms_transport_encoding, "UCS2") == 0;
+        } else if (request->sms_encoding[0] != '\0') {
+            send_options.use_ucs2_present = true;
+            send_options.use_ucs2 = strcmp(request->sms_encoding, "unicode") == 0 ||
+                strcmp(request->sms_encoding, "UNICODE") == 0;
+        }
+    }
+
+    response = sms_service_send_with_options(
+        request ? request->number : NULL,
+        request ? request->text : NULL,
+        action ? action->timeout_ms : 0U,
+        &send_options
+    );
     if (action) {
         response.action = *action;
     }

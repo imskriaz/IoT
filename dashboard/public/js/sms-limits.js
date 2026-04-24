@@ -10,6 +10,7 @@
 
     const gsmExtensionCharSet = new Set(['^', '{', '}', '\\', '[', '~', ']', '|', '\u20AC']);
     const UCS2_BMP_MAX_CODEPOINT = 0xFFFF;
+    const FORCE_SINGLE_GSM_TEXT_MODE_UCS2 = true;
     const utf8Encoder = typeof TextEncoder === 'function' ? new TextEncoder() : null;
 
     function getUtf8ByteLength(text) {
@@ -52,9 +53,13 @@
 
         const utf8Bytes = getUtf8ByteLength(normalized);
         const characters = countUnicodeCharacters(normalized);
-        const singlePartLimit = encoding === 'gsm7' ? GSM_SINGLE_PART_LIMIT : UCS2_SINGLE_PART_LIMIT;
-        const multiPartLimit = encoding === 'gsm7' ? GSM_MULTI_PART_LIMIT : UCS2_MULTI_PART_LIMIT;
-        const units = encoding === 'gsm7' ? gsmUnits : characters;
+        const transportEncoding = encoding === 'unicode' ||
+            (FORCE_SINGLE_GSM_TEXT_MODE_UCS2 && gsmUnits <= GSM_SINGLE_PART_LIMIT)
+            ? 'ucs2'
+            : 'ira';
+        const singlePartLimit = transportEncoding === 'ira' ? GSM_SINGLE_PART_LIMIT : UCS2_SINGLE_PART_LIMIT;
+        const multiPartLimit = transportEncoding === 'ira' ? GSM_MULTI_PART_LIMIT : UCS2_MULTI_PART_LIMIT;
+        const units = transportEncoding === 'ira' ? gsmUnits : characters;
         let parts = 1;
 
         if (units > singlePartLimit) {
@@ -76,7 +81,7 @@
             overPartLimit: parts > SMS_MAX_PARTS,
             unsupportedUnicode,
             unsupportedCharacters,
-            transportEncoding: encoding === 'unicode' ? 'ucs2' : 'ira',
+            transportEncoding,
             valid: !unsupportedUnicode && utf8Bytes <= SMS_MAX_UTF8_BYTES && parts <= SMS_MAX_PARTS
         };
     }

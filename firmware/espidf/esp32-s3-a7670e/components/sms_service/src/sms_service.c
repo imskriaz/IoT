@@ -193,22 +193,37 @@ static unified_action_response_t sms_service_send_with_transport(
     const char *number,
     const char *text,
     uint32_t timeout_ms,
-    bool force_multipart
+    bool force_multipart,
+    const sms_service_send_options_t *options
 ) {
     modem_a7670_status_t modem_status = {0};
+    modem_a7670_sms_send_options_t modem_options = {0};
+    const modem_a7670_sms_send_options_t *modem_options_ptr = NULL;
     unified_sms_payload_t outgoing = {0};
     char *modem_response = NULL;
     esp_err_t err = ESP_FAIL;
-    const unified_action_command_t command = force_multipart
-        ? UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART
-        : UNIFIED_ACTION_CMD_SEND_SMS;
     const uint32_t requested_timeout_ms = sms_service_requested_timeout_ms(timeout_ms);
-    const char *success_detail = force_multipart ? "sms_multipart_sent" : "sms_sent";
-    const char *timeout_detail = force_multipart ? "sms_multipart_timeout" : "sms_send_timeout";
-    const char *failed_detail = force_multipart ? "sms_multipart_failed" : "sms_send_failed";
+    unified_action_command_t command = UNIFIED_ACTION_CMD_SEND_SMS;
+    const char *success_detail = "sms_sent";
+    const char *timeout_detail = "sms_send_timeout";
+    const char *failed_detail = "sms_send_failed";
     uint32_t effective_timeout_ms = requested_timeout_ms;
     size_t text_len = 0U;
     bool requires_unicode_timeout = false;
+    uint16_t expected_parts = 0U;
+
+    if (options) {
+        expected_parts = options->expected_parts;
+        force_multipart = options->force_multipart || expected_parts > 1U;
+        modem_options.use_ucs2_present = options->use_ucs2_present;
+        modem_options.use_ucs2 = options->use_ucs2;
+        modem_options.expected_parts = options->expected_parts;
+        modem_options_ptr = &modem_options;
+    }
+    command = force_multipart ? UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART : UNIFIED_ACTION_CMD_SEND_SMS;
+    success_detail = force_multipart ? "sms_multipart_sent" : "sms_sent";
+    timeout_detail = force_multipart ? "sms_multipart_timeout" : "sms_send_timeout";
+    failed_detail = force_multipart ? "sms_multipart_failed" : "sms_send_failed";
 
     if (!number || !text || number[0] == '\0' || text[0] == '\0') {
         return sms_service_build_response(
@@ -221,7 +236,9 @@ static unified_action_response_t sms_service_send_with_transport(
     }
 
     text_len = strlen(text);
-    requires_unicode_timeout = sms_service_requires_unicode_timeout(text);
+    requires_unicode_timeout = options && options->use_ucs2_present
+        ? options->use_ucs2
+        : sms_service_requires_unicode_timeout(text);
     effective_timeout_ms = sms_service_effective_send_timeout_ms(
         text_len,
         requires_unicode_timeout,
@@ -231,10 +248,11 @@ static unified_action_response_t sms_service_send_with_transport(
 
     ESP_LOGI(
         TAG,
-        "send command=%d text_len=%u unicode=%u timeout_ms=%" PRIu32,
+        "send command=%d text_len=%u unicode=%u parts=%u timeout_ms=%" PRIu32,
         (int)command,
         (unsigned)text_len,
         requires_unicode_timeout ? 1U : 0U,
+        (unsigned)expected_parts,
         effective_timeout_ms
     );
 
@@ -270,8 +288,22 @@ static unified_action_response_t sms_service_send_with_transport(
     }
 
     err = force_multipart
-        ? modem_a7670_send_sms_multipart(number, text, modem_response, SMS_SERVICE_MODEM_RESPONSE_LEN, effective_timeout_ms)
-        : modem_a7670_send_sms(number, text, modem_response, SMS_SERVICE_MODEM_RESPONSE_LEN, effective_timeout_ms);
+        ? modem_a7670_send_sms_multipart_with_options(
+            number,
+            text,
+            modem_response,
+            SMS_SERVICE_MODEM_RESPONSE_LEN,
+            effective_timeout_ms,
+            modem_options_ptr
+        )
+        : modem_a7670_send_sms_with_options(
+            number,
+            text,
+            modem_response,
+            SMS_SERVICE_MODEM_RESPONSE_LEN,
+            effective_timeout_ms,
+            modem_options_ptr
+        );
     if (err != ESP_OK) {
         printf(
             "sms_service_send_failed err=%s response=%s\n",
@@ -533,11 +565,26 @@ esp_err_t sms_service_init(void) {
 }
 
 unified_action_response_t sms_service_send(const char *number, const char *text, uint32_t timeout_ms) {
-    return sms_service_send_with_transport(number, text, timeout_ms, false);
+    return sms_service_send_with_transport(number, text, timeout_ms, false, NULL);
 }
 
 unified_action_response_t sms_service_send_multipart(const char *number, const char *text, uint32_t timeout_ms) {
-    return sms_service_send_with_transport(number, text, timeout_ms, true);
+    return sms_service_send_with_transport(number, text, timeout_ms, true, NULL);
+}
+
+unified_action_response_t sms_service_send_with_options(
+    const char *number,
+    const char *text,
+    uint32_t timeout_ms,
+    const sms_service_send_options_t *options
+) {
+    return sms_service_send_with_transport(
+        number,
+        text,
+        timeout_ms,
+        options ? options->force_multipart : false,
+        options
+    );
 }
 
 void sms_service_get_status(sms_service_status_t *out_status) {

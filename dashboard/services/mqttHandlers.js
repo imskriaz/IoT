@@ -21,7 +21,7 @@ const {
 const { syncDeviceSimInventory } = require('./simInventoryService');
 const { parseUssdMenuOptions } = require('../utils/ussdSession');
 const { extractSimScope, appendSimScopeCondition } = require('../utils/simScope');
-const { normalizeSmsDeliveryReport } = require('../utils/smsDeliveryReports');
+const { normalizeSmsDeliveryPayload, normalizeSmsDeliveryReport } = require('../utils/smsDeliveryReports');
 
 const INITIAL_STATUS_PRIME_DELAY_MS = 20000;
 const INITIAL_STATUS_PRIME_SPREAD_MS = 1000;
@@ -1479,7 +1479,7 @@ class MQTTHandlers {
                                 FROM sms
                                 WHERE device_id = ?
                                   AND to_number = ?
-                                  AND status IN ('queued', 'sending', 'sent')
+                                  AND status IN ('queued', 'sending', 'sent', 'ambiguous')
                                 ORDER BY timestamp DESC
                                 LIMIT 1
                             )
@@ -1496,16 +1496,17 @@ class MQTTHandlers {
         this.mqttService.on('sms:delivery', async (deviceId, data = {}) => {
             if (this.isDeletedDevice(deviceId)) return;
 
-            const deliveryReport = normalizeSmsDeliveryReport(data);
+            const normalizedData = normalizeSmsDeliveryPayload(data);
+            const deliveryReport = normalizeSmsDeliveryReport(normalizedData);
             const deliveryStatus = deliveryReport.status;
             const errorText = deliveryStatus === 'failed'
-                ? (data?.error || data?.message || data?.detail || 'SMS delivery failed')
+                ? (normalizedData?.error || normalizedData?.message || normalizedData?.detail || 'SMS delivery failed')
                 : null;
 
             try {
                 const db = this.app.locals.db;
                 if (db && deliveryStatus !== 'pending') {
-                    const messageId = String(data?.messageId || data?.action_id || '').trim();
+                    const messageId = String(normalizedData?.messageId || normalizedData?.action_id || '').trim();
                     if (messageId) {
                         await db.run(
                             `UPDATE sms
@@ -1527,11 +1528,11 @@ class MQTTHandlers {
                                 FROM sms
                                 WHERE device_id = ?
                                   AND to_number = ?
-                                  AND status IN ('queued', 'sending', 'sent')
+                                  AND status IN ('queued', 'sending', 'sent', 'ambiguous')
                                 ORDER BY timestamp DESC
                                 LIMIT 1
                             )
-                        `, [deliveryStatus, deliveryStatus, errorText, deviceId, data.to || data.number || '']);
+                        `, [deliveryStatus, deliveryStatus, errorText, deviceId, normalizedData.to || normalizedData.number || '']);
                     }
                 }
             } catch (error) {
@@ -1543,7 +1544,7 @@ class MQTTHandlers {
                 deliveryStatus === 'delivered'
                     ? 'sms:delivered'
                     : (deliveryStatus === 'failed' ? 'sms:send-failed' : 'sms:delivery'),
-                { deviceId, ...data, status: deliveryStatus, error: errorText }
+                { deviceId, ...normalizedData, status: deliveryStatus, error: errorText }
             );
         });
     }

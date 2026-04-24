@@ -458,6 +458,16 @@ describe('sidebar navigation coverage', () => {
         expect(smsJs).toContain('title="${esc(previewText)}"');
     });
 
+    test('dashboard SMS refresh renders linked conversation previews', () => {
+        const mainJs = fs.readFileSync(mainJsPath, 'utf8');
+
+        expect(mainJs).toContain("/api/sms/conversations?limit=3");
+        expect(mainJs).toContain('function renderDashboardConversationPreviewRows(conversations)');
+        expect(mainJs).toContain('data-device-aware-href="${escapeHtml(href)}"');
+        expect(mainJs).toContain('buildDashboardConversationHref(thread)');
+        expect(mainJs).not.toContain("/api/sms?limit=3");
+    });
+
     test('header status panel exposes queue and device shortcut links', () => {
         const html = fs.readFileSync(headerPath, 'utf8');
 

@@ -10,12 +10,91 @@ function firstFiniteNumber(...values) {
     return null;
 }
 
+function unquoteField(value) {
+    const trimmed = String(value || '').trim();
+    if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+        return trimmed.slice(1, -1).replace(/""/g, '"');
+    }
+    return trimmed;
+}
+
+function splitCsvFields(value) {
+    const fields = [];
+    let current = '';
+    let quoted = false;
+    const raw = String(value || '');
+
+    for (let i = 0; i < raw.length; i += 1) {
+        const ch = raw[i];
+        if (ch === '"') {
+            if (quoted && raw[i + 1] === '"') {
+                current += '"';
+                i += 1;
+            } else {
+                quoted = !quoted;
+                current += ch;
+            }
+        } else if (ch === ',' && !quoted) {
+            fields.push(current.trim());
+            current = '';
+        } else {
+            current += ch;
+        }
+    }
+    fields.push(current.trim());
+    return fields;
+}
+
+function parseRawSmsDeliveryReport(value) {
+    const raw = String(value || '').trim();
+    const marker = raw.indexOf('+CDS:');
+    if (marker < 0) {
+        return {};
+    }
+
+    const lineEnd = raw.indexOf('\n', marker);
+    const line = raw.slice(marker, lineEnd >= 0 ? lineEnd : raw.length).trim();
+    const colon = line.indexOf(':');
+    if (colon < 0) {
+        return {};
+    }
+
+    const fields = splitCsvFields(line.slice(colon + 1).trim());
+    if (fields.length < 7) {
+        return {};
+    }
+
+    const messageReference = firstFiniteNumber(fields[1]);
+    const statusReportStatus = firstFiniteNumber(fields[fields.length - 1]);
+    const to = unquoteField(fields[2]);
+
+    return {
+        to: to || null,
+        messageReference,
+        statusReportStatus
+    };
+}
+
 function normalizeSmsDeliveryReport(data = {}) {
+    const rawFields = parseRawSmsDeliveryReport(
+        data?.raw_report ||
+        data?.rawReport ||
+        data?.raw ||
+        data?.report ||
+        ''
+    );
     const rawStatus = String(data?.status || data?.delivery_status || '').trim().toLowerCase();
     const statusReportStatus = firstFiniteNumber(
         data?.status_report_status,
         data?.statusReportStatus,
-        data?.st
+        data?.st,
+        rawFields.statusReportStatus
+    );
+    const messageReference = firstFiniteNumber(
+        data?.message_reference,
+        data?.messageReference,
+        data?.mr,
+        rawFields.messageReference
     );
     let status = 'pending';
 
@@ -46,10 +125,34 @@ function normalizeSmsDeliveryReport(data = {}) {
         delivered: status === 'delivered',
         failed: status === 'failed',
         pending: status === 'pending',
-        statusReportStatus
+        statusReportStatus,
+        messageReference,
+        to: String(data?.to || data?.number || rawFields.to || '').trim() || null
     };
 }
 
+function normalizeSmsDeliveryPayload(data = {}) {
+    const report = normalizeSmsDeliveryReport(data);
+    const payload = {
+        ...(data || {}),
+        status: report.status
+    };
+
+    if (!payload.to && !payload.number && report.to) {
+        payload.to = report.to;
+    }
+    if (payload.status_report_status === undefined && report.statusReportStatus !== null) {
+        payload.status_report_status = report.statusReportStatus;
+    }
+    if (payload.message_reference === undefined && report.messageReference !== null) {
+        payload.message_reference = report.messageReference;
+    }
+
+    return payload;
+}
+
 module.exports = {
+    parseRawSmsDeliveryReport,
+    normalizeSmsDeliveryPayload,
     normalizeSmsDeliveryReport
 };

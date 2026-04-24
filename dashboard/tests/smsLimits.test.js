@@ -34,11 +34,25 @@ describe('smsLimits', () => {
         const analysis = analyzeSmsText('x'.repeat(1023));
 
         expect(analysis.encoding).toBe('gsm7');
+        expect(analysis.transportEncoding).toBe('ira');
         expect(analysis.utf8Bytes).toBe(1023);
         expect(analysis.parts).toBe(Math.ceil(1023 / 153));
         expect(analysis.overByteLimit).toBe(false);
         expect(analysis.overPartLimit).toBe(false);
         expect(() => validateSmsMessageSize('x'.repeat(1023))).not.toThrow();
+    });
+
+    test('uses UCS2 transport for regular single-part text to avoid the flaky IRA CMGS path', () => {
+        const resolved = resolveSmsCommand('regular sms test');
+
+        expect(resolved.command).toBe('send-sms');
+        expect(resolved.metadata).toEqual(expect.objectContaining({
+            sms_encoding: 'gsm7',
+            sms_transport_encoding: 'ucs2',
+            sms_parts: 1,
+            sms_multipart: false
+        }));
+        expect(resolved.timeoutMs).toBe(45000);
     });
 
     test('rejects messages that exceed the transport byte cap', () => {

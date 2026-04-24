@@ -19,7 +19,20 @@ typedef struct {
     char last_detail[UNIFIED_TEXT_MEDIUM_LEN];
 } sms_service_status_t;
 
+typedef struct {
+    bool force_multipart;
+    bool use_ucs2_present;
+    bool use_ucs2;
+    uint16_t expected_parts;
+} sms_service_send_options_t;
+
 esp_err_t sms_service_init(void);
 unified_action_response_t sms_service_send(const char *number, const char *text, uint32_t timeout_ms);
 unified_action_response_t sms_service_send_multipart(const char *number, const char *text, uint32_t timeout_ms);
+unified_action_response_t sms_service_send_with_options(
+    const char *number,
+    const char *text,
+    uint32_t timeout_ms,
+    const sms_service_send_options_t *options
+);
 void sms_service_get_status(sms_service_status_t *out_status);

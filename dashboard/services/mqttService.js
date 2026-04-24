@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
 const { resolveSmsCommand, buildSmsTransportMetadata, resolveSmsTimeoutMs } = require('../utils/smsLimits');
 const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
-const { normalizeSmsDeliveryReport } = require('../utils/smsDeliveryReports');
+const { normalizeSmsDeliveryPayload, normalizeSmsDeliveryReport } = require('../utils/smsDeliveryReports');
 
 function hasEnv(name) {
     return Object.prototype.hasOwnProperty.call(process.env, name);
@@ -1617,6 +1617,20 @@ class MQTTService extends EventEmitter {
         const db = this._db();
         if (!this._hasDbMethods(db, ['run'])) return;
 
+        const canReadRows = this._hasDbMethods(db, ['all']);
+        const replaySafeRows = canReadRows ? await db.all(
+            `SELECT *
+             FROM device_command_queue
+             WHERE status IN ('dispatching', 'waiting_response')
+               AND replay_safe = 1`
+        ) : [];
+        const nonReplaySafeRows = canReadRows ? await db.all(
+            `SELECT *
+             FROM device_command_queue
+             WHERE status IN ('dispatching', 'waiting_response')
+               AND replay_safe = 0`
+        ) : [];
+
         await db.run(
             `UPDATE device_command_queue
              SET status = 'pending',
@@ -1634,6 +1648,24 @@ class MQTTService extends EventEmitter {
              WHERE status IN ('dispatching', 'waiting_response')
                AND replay_safe = 0`
         );
+
+        for (const row of replaySafeRows) {
+            await this._syncSmsStatusFromQueueRow({
+                ...row,
+                status: 'pending',
+                last_error: row.last_error || 'dashboard restarted before command completion'
+            }, 'queued', null);
+        }
+        for (const row of nonReplaySafeRows) {
+            const detail = row.last_error || 'dashboard restarted during non-replay-safe command';
+            await this._syncSmsStatusFromQueueRow({
+                ...row,
+                status: 'ambiguous',
+                last_error: detail
+            }, 'ambiguous', detail);
+        }
+        await this._reconcileSmsRowsFromQueueState();
+        await this._markStaleSmsWithoutQueue();
 
         this._persistentQueueRecovered = true;
     }
@@ -1792,6 +1824,68 @@ class MQTTService extends EventEmitter {
                  WHERE external_id = ?`,
                 [nextStatus, nextError, tracking.messageId]
             );
+        }
+    }
+
+    async _reconcileSmsRowsFromQueueState(limit = 100) {
+        const db = this._db();
+        if (!this._hasDbMethods(db, ['all'])) return;
+
+        const rows = await db.all(
+            `SELECT *
+             FROM device_command_queue
+             WHERE command IN ('send-sms', 'send-sms-multipart')
+               AND status IN ('pending', 'dispatching', 'waiting_response', 'failed', 'ambiguous')
+             ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC
+             LIMIT ?`,
+            [limit]
+        );
+
+        for (const row of rows) {
+            await this._syncSmsStatusFromQueueRow(row);
+        }
+    }
+
+    async _markStaleSmsWithoutQueue(maxAgeMs = 120000) {
+        const db = this._db();
+        if (!this._hasDbMethods(db, ['all', 'run'])) return;
+
+        const cutoff = this._sqlTimestamp(Date.now() - maxAgeMs);
+        const rows = await db.all(
+            `SELECT id, device_id, external_id
+             FROM sms s
+             WHERE s.type = 'outgoing'
+               AND s.status IN ('queued', 'sending')
+               AND s.external_id LIKE 'send-sms%'
+               AND datetime(REPLACE(substr(s.timestamp, 1, 19), 'T', ' ')) <= datetime(?)
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM device_command_queue q
+                   WHERE q.device_id = s.device_id
+                     AND q.message_id = s.external_id
+               )
+             ORDER BY datetime(REPLACE(substr(s.timestamp, 1, 19), 'T', ' ')) ASC
+             LIMIT 50`,
+            [cutoff]
+        );
+
+        const touchedDevices = new Set();
+        for (const row of rows) {
+            await db.run(
+                `UPDATE sms
+                 SET status = 'ambiguous',
+                     error = COALESCE(error, 'SMS command status was not confirmed before queue tracking ended')
+                 WHERE id = ?
+                   AND status IN ('queued', 'sending')`,
+                [row.id]
+            );
+            if (row.device_id) {
+                touchedDevices.add(row.device_id);
+            }
+        }
+
+        for (const deviceId of touchedDevices) {
+            await this._emitDeviceQueueState(deviceId);
         }
     }
 
@@ -1962,8 +2056,9 @@ class MQTTService extends EventEmitter {
     }
 
     async _settlePersistentQueueFromSmsDelivery(deviceId, data) {
-        const deliveryReport = normalizeSmsDeliveryReport(data);
-        const row = await this._findPersistentSmsQueueRow(deviceId, data);
+        const normalizedData = normalizeSmsDeliveryPayload(data);
+        const deliveryReport = normalizeSmsDeliveryReport(normalizedData);
+        const row = await this._findPersistentSmsQueueRow(deviceId, normalizedData);
         if (!row) return false;
 
         if (deliveryReport.pending) {
@@ -1971,10 +2066,10 @@ class MQTTService extends EventEmitter {
         }
 
         if (deliveryReport.failed) {
-            const detail = data?.error || data?.message || data?.detail || 'SMS delivery failed';
+            const detail = normalizedData?.error || normalizedData?.message || normalizedData?.detail || 'SMS delivery failed';
             await this._updatePersistentQueueRow(row.id, {
                 status: 'failed',
-                response_payload: JSON.stringify(data),
+                response_payload: JSON.stringify(normalizedData),
                 completed_at: this._sqlTimestamp(),
                 last_error: detail,
                 next_attempt_at: null
@@ -1994,10 +2089,10 @@ class MQTTService extends EventEmitter {
         }
 
         await this._markPersistentQueueCompleted(row, {
-            ...data,
+            ...normalizedData,
             success: true,
-            result: data?.result || 'completed',
-            detail: data?.detail || 'sms_delivered'
+            result: normalizedData?.result || 'completed',
+            detail: normalizedData?.detail || 'sms_delivered'
         });
         return true;
     }

@@ -13,6 +13,12 @@ typedef enum {
 } modem_a7670_backend_t;
 
 typedef struct {
+    bool use_ucs2_present;
+    bool use_ucs2;
+    uint16_t expected_parts;
+} modem_a7670_sms_send_options_t;
+
+typedef struct {
     unified_service_runtime_t runtime;
     modem_a7670_backend_t backend;
     bool sim_ready;
@@ -45,12 +51,28 @@ esp_err_t modem_a7670_send_sms(
     size_t response_len,
     uint32_t timeout_ms
 );
+esp_err_t modem_a7670_send_sms_with_options(
+    const char *number,
+    const char *text,
+    char *response,
+    size_t response_len,
+    uint32_t timeout_ms,
+    const modem_a7670_sms_send_options_t *options
+);
 esp_err_t modem_a7670_send_sms_multipart(
     const char *number,
     const char *text,
     char *response,
     size_t response_len,
     uint32_t timeout_ms
+);
+esp_err_t modem_a7670_send_sms_multipart_with_options(
+    const char *number,
+    const char *text,
+    char *response,
+    size_t response_len,
+    uint32_t timeout_ms,
+    const modem_a7670_sms_send_options_t *options
 );
 esp_err_t modem_a7670_dial(
     const char *number,
