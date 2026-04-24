@@ -1156,7 +1156,7 @@ router.get('/users', adminMiddleware, async (req, res) => {
 // Add new user
 router.post('/users', adminMiddleware, [
     body('username').notEmpty().withMessage('Username is required'),
-    body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+    body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
     body('name').optional(),
     body('email').optional().isEmail(),
     body('role').isIn(['user', 'admin']).withMessage('Invalid role')
@@ -1216,7 +1216,7 @@ router.put('/users/:id', adminMiddleware, [
     body('name').optional(),
     body('email').optional().isEmail(),
     body('role').isIn(['user', 'admin']).withMessage('Invalid role'),
-    body('password').optional().isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
+    body('password').optional().isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
 ], async (req, res) => {
     try {
         const errors = validationResult(req);
