@@ -2,7 +2,7 @@
 
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
-const { resolveSmsCommand } = require('../utils/smsLimits');
+const { resolveSmsCommandForRecipient } = require('../utils/smsLimits');
 const notificationService = require('./notificationService');
 
 class AutomationEngine {
@@ -412,7 +412,7 @@ class AutomationEngine {
                     {
                         const to = this._interpolate(cfg.to || '', context);
                         const message = this._interpolate(cfg.message || '', context);
-                        const resolved = resolveSmsCommand(message);
+                        const resolved = resolveSmsCommandForRecipient(to, message);
                         await this._publishCommand(context.deviceId, resolved.command, {
                             to,
                             message,

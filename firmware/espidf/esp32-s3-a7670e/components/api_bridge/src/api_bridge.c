@@ -1231,6 +1231,7 @@ static unified_action_response_t api_bridge_execute_send_sms(
     bool force_multipart = false;
     char escaped_encoding[32] = {0};
     char escaped_transport_encoding[32] = {0};
+    const bool has_dashboard_pdu = request && request->sms_pdu[0] != '\0' && request->sms_pdu_length > 0U;
 
     if (request) {
         if (request->sms_parts > 1U) {
@@ -1247,6 +1248,10 @@ static unified_action_response_t api_bridge_execute_send_sms(
     send_options.force_multipart = force_multipart;
     if (request) {
         send_options.expected_parts = request->sms_parts;
+        if (has_dashboard_pdu) {
+            send_options.pdu_hex = request->sms_pdu;
+            send_options.pdu_length = request->sms_pdu_length;
+        }
         if (request->sms_transport_encoding[0] != '\0') {
             send_options.use_ucs2_present = true;
             send_options.use_ucs2 = strcmp(request->sms_transport_encoding, "ucs2") == 0 ||
@@ -1282,14 +1287,16 @@ static unified_action_response_t api_bridge_execute_send_sms(
         if (snprintf(
                 payload,
                 payload_len,
-                "{\"sms_encoding\":\"%s\",\"sms_transport_encoding\":\"%s\",\"sms_parts\":%u,\"sms_units\":%u,\"sms_utf8_bytes\":%u,\"sms_characters\":%u,\"sms_multipart\":%s}",
+                "{\"sms_encoding\":\"%s\",\"sms_transport_encoding\":\"%s\",\"sms_parts\":%u,\"sms_units\":%u,\"sms_utf8_bytes\":%u,\"sms_characters\":%u,\"sms_multipart\":%s,\"sms_pdu_length\":%u,\"sms_pdu\":%s}",
                 escaped_encoding,
                 escaped_transport_encoding,
                 (unsigned int)request->sms_parts,
                 (unsigned int)request->sms_units,
                 (unsigned int)request->sms_utf8_bytes,
                 (unsigned int)request->sms_characters,
-                force_multipart ? "true" : "false") >= (int)payload_len) {
+                force_multipart ? "true" : "false",
+                (unsigned int)(has_dashboard_pdu ? request->sms_pdu_length : 0U),
+                has_dashboard_pdu ? "true" : "false") >= (int)payload_len) {
             payload[0] = '\0';
         }
     }

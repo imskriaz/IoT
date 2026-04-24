@@ -4,7 +4,8 @@ const {
     analyzeSmsText,
     formatSmsLimitError,
     validateSmsMessageSize,
-    resolveSmsCommand
+    resolveSmsCommand,
+    resolveSmsCommandForRecipient
 } = require('../utils/smsLimits');
 
 describe('smsLimits', () => {
@@ -42,17 +43,33 @@ describe('smsLimits', () => {
         expect(() => validateSmsMessageSize('x'.repeat(1023))).not.toThrow();
     });
 
-    test('uses UCS2 transport for regular single-part text to avoid the flaky IRA CMGS path', () => {
+    test('uses IRA transport for regular single-part text', () => {
         const resolved = resolveSmsCommand('regular sms test');
 
         expect(resolved.command).toBe('send-sms');
         expect(resolved.metadata).toEqual(expect.objectContaining({
             sms_encoding: 'gsm7',
-            sms_transport_encoding: 'ucs2',
+            sms_transport_encoding: 'ira',
             sms_parts: 1,
             sms_multipart: false
         }));
         expect(resolved.timeoutMs).toBe(45000);
+    });
+
+    test('builds a dashboard-side UCS2 PDU for single-part Unicode SMS', () => {
+        const resolved = resolveSmsCommandForRecipient('+8801887300993', '\u09AC\u09BE\u0982\u09B2\u09BE 123');
+
+        expect(resolved.command).toBe('send-sms');
+        expect(resolved.metadata).toEqual(expect.objectContaining({
+            sms_encoding: 'unicode',
+            sms_transport_encoding: 'ucs2',
+            sms_parts: 1,
+            sms_multipart: false,
+            sms_pdu_encoding: 'ucs2',
+            sms_pdu_length: 32,
+            sms_status_report_requested: true
+        }));
+        expect(resolved.metadata.sms_pdu).toBe('0021000D91881088370099F300081209AC09BE098209B209BE0020003100320033');
     });
 
     test('rejects messages that exceed the transport byte cap', () => {

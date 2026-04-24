@@ -100,7 +100,7 @@ describe('sms route queue-first delivery', () => {
                 message: 'queued hello',
                 smsId: 41,
                 sms_encoding: 'gsm7',
-                sms_transport_encoding: 'ucs2',
+                sms_transport_encoding: 'ira',
                 sms_parts: 1,
                 sms_multipart: false,
                 timeout: 45000
@@ -214,6 +214,9 @@ describe('sms route queue-first delivery', () => {
                 sms_transport_encoding: 'ucs2',
                 sms_parts: 1,
                 sms_multipart: false,
+                sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
+                sms_pdu_length: expect.any(Number),
+                sms_pdu_encoding: 'ucs2',
                 timeout: 45000
             }),
             false,

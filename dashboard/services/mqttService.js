@@ -3,7 +3,11 @@ const logger = require('../utils/logger');
 const EventEmitter = require('events');
 const crypto = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
-const { resolveSmsCommand, buildSmsTransportMetadata, resolveSmsTimeoutMs } = require('../utils/smsLimits');
+const {
+    resolveSmsCommandForRecipient,
+    buildSmsTransportMetadataForRecipient,
+    resolveSmsTimeoutMs
+} = require('../utils/smsLimits');
 const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
 const { normalizeSmsDeliveryPayload, normalizeSmsDeliveryReport } = require('../utils/smsDeliveryReports');
 
@@ -471,15 +475,16 @@ class MQTTService extends EventEmitter {
 
         if (normalizedCommand === 'send-sms' || normalizedCommand === 'send-sms-multipart') {
             const text = String(payload.message || payload.text || '');
+            const number = String(payload.to || payload.number || '').trim();
             const smsMetadata = {
-                ...buildSmsTransportMetadata(text),
+                ...buildSmsTransportMetadataForRecipient(number, text),
                 ...Object.fromEntries(
                     Object.entries(payload || {}).filter(([key]) => key.startsWith('sms_'))
                 )
             };
             const message = {
                 action_id: messageId,
-                number: String(payload.to || payload.number || '').trim(),
+                number,
                 text,
                 command: normalizedCommand === 'send-sms-multipart' ? 'send_sms_multipart' : 'send_sms',
                 ...smsMetadata
@@ -2624,7 +2629,7 @@ class MQTTService extends EventEmitter {
 
     // SMS Commands
     sendSms(deviceId, to, message) {
-        const resolved = resolveSmsCommand(message);
+        const resolved = resolveSmsCommandForRecipient(to, message);
         return this.publishCommand(
             deviceId,
             resolved.command,

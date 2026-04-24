@@ -1,5 +1,7 @@
 'use strict';
 
+const { buildSmsSubmitPdu } = require('./smsPdu');
+
 const SMS_MAX_UTF8_BYTES = 1023;
 const SMS_MAX_PARTS = 15;
 const GSM_SINGLE_PART_LIMIT = 160;
@@ -9,7 +11,7 @@ const UCS2_MULTI_PART_LIMIT = 67;
 
 const GSM_EXTENSION_CHAR_SET = new Set(['^', '{', '}', '\\', '[', '~', ']', '|', '\u20AC']);
 const UCS2_BMP_MAX_CODEPOINT = 0xFFFF;
-const FORCE_SINGLE_GSM_TEXT_MODE_UCS2 = true;
+const FORCE_SINGLE_GSM_TEXT_MODE_UCS2 = false;
 
 function getUtf8ByteLength(text) {
     return Buffer.byteLength(String(text || ''), 'utf8');
@@ -148,6 +150,23 @@ function buildSmsTransportMetadata(valueOrAnalysis) {
     };
 }
 
+function buildSmsTransportMetadataForRecipient(number, valueOrAnalysis) {
+    const analysis = typeof valueOrAnalysis === 'object' && valueOrAnalysis
+        ? valueOrAnalysis
+        : analyzeSmsText(valueOrAnalysis);
+    const metadata = buildSmsTransportMetadata(analysis);
+
+    if (metadata.sms_transport_encoding === 'ucs2' && metadata.sms_parts === 1) {
+        const pdu = buildSmsSubmitPdu(number, analysis.text, { requestStatusReport: true });
+        metadata.sms_pdu = pdu.pdu;
+        metadata.sms_pdu_length = pdu.length;
+        metadata.sms_pdu_encoding = pdu.encoding;
+        metadata.sms_status_report_requested = pdu.statusReportRequested;
+    }
+
+    return metadata;
+}
+
 function resolveSmsCommand(value) {
     const analysis = analyzeSmsText(value);
     if (analysis.unsupportedUnicode || analysis.overByteLimit || analysis.overPartLimit) {
@@ -163,6 +182,15 @@ function resolveSmsCommand(value) {
     };
 }
 
+function resolveSmsCommandForRecipient(number, value) {
+    const resolved = resolveSmsCommand(value);
+
+    return {
+        ...resolved,
+        metadata: buildSmsTransportMetadataForRecipient(number, resolved.analysis)
+    };
+}
+
 module.exports = {
     SMS_MAX_UTF8_BYTES,
     SMS_MAX_PARTS,
@@ -175,5 +203,7 @@ module.exports = {
     validateSmsMessageSize,
     resolveSmsTimeoutMs,
     buildSmsTransportMetadata,
+    buildSmsTransportMetadataForRecipient,
+    resolveSmsCommandForRecipient,
     resolveSmsCommand
 };

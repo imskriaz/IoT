@@ -10,7 +10,7 @@
 
     const gsmExtensionCharSet = new Set(['^', '{', '}', '\\', '[', '~', ']', '|', '\u20AC']);
     const UCS2_BMP_MAX_CODEPOINT = 0xFFFF;
-    const FORCE_SINGLE_GSM_TEXT_MODE_UCS2 = true;
+    const FORCE_SINGLE_GSM_TEXT_MODE_UCS2 = false;
     const utf8Encoder = typeof TextEncoder === 'function' ? new TextEncoder() : null;
 
     function getUtf8ByteLength(text) {

@@ -3480,13 +3480,21 @@ function updateUnreadBadge(unreadCountOverride) {
 
 // Show toast notification
 function showToast(message, type = 'info', title = 'Notification') {
-    const toastEl = document.getElementById('liveToast');
-    if (!toastEl || !window.bootstrap) return;
-    
-    const toast = new bootstrap.Toast(toastEl, {
-        autohide: true,
-        delay: 5000
-    });
+    const toastTemplate = document.getElementById('liveToast');
+    if (!toastTemplate || !window.bootstrap) return;
+
+    const notificationArea = document.getElementById('dashboardNotificationArea') || toastTemplate.parentElement;
+    const toastEl = toastTemplate.cloneNode(true);
+    toastEl.removeAttribute('id');
+    toastEl.removeAttribute('data-toast-template');
+    toastEl.classList.remove('d-none');
+
+    const titleEl = toastEl.querySelector('#toastTitle');
+    const messageEl = toastEl.querySelector('#toastMessage');
+    const timeEl = toastEl.querySelector('#toastTime');
+    titleEl?.removeAttribute('id');
+    messageEl?.removeAttribute('id');
+    timeEl?.removeAttribute('id');
     
     // Set icon based on type
     const iconMap = {
@@ -3500,9 +3508,20 @@ function showToast(message, type = 'info', title = 'Notification') {
     icon.className = iconMap[type] || 'bi-info-circle-fill text-info';
     
     // Set title and message
-    document.getElementById('toastTitle').textContent = title;
-    document.getElementById('toastMessage').textContent = message;
-    document.getElementById('toastTime').textContent = 'just now';
+    if (titleEl) titleEl.textContent = title;
+    if (messageEl) messageEl.textContent = message;
+    if (timeEl) timeEl.textContent = 'just now';
+
+    toastEl.addEventListener('hidden.bs.toast', function () {
+        toastEl.remove();
+    });
+
+    notificationArea.appendChild(toastEl);
+
+    const toast = new bootstrap.Toast(toastEl, {
+        autohide: true,
+        delay: 5000
+    });
     
     toast.show();
 }

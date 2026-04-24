@@ -218,6 +218,8 @@ static unified_action_response_t sms_service_send_with_transport(
         modem_options.use_ucs2_present = options->use_ucs2_present;
         modem_options.use_ucs2 = options->use_ucs2;
         modem_options.expected_parts = options->expected_parts;
+        modem_options.pdu_hex = options->pdu_hex;
+        modem_options.pdu_length = options->pdu_length;
         modem_options_ptr = &modem_options;
     }
     command = force_multipart ? UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART : UNIFIED_ACTION_CMD_SEND_SMS;

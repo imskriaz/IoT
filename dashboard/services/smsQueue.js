@@ -3,7 +3,7 @@ const { formatPhoneNumber } = require('../utils/phoneNumber');
 const { attachSmsToConversation } = require('./smsConversations');
 const { assertSmsWithinPackageLimit } = require('./packageService');
 const { assertUserSmsWithinLimits } = require('./userAccessService');
-const { resolveSmsCommand } = require('../utils/smsLimits');
+const { resolveSmsCommandForRecipient } = require('../utils/smsLimits');
 
 function buildSmsCommandMessageId(command = 'send-sms') {
     const normalized = String(command || 'send-sms').trim().toLowerCase();
@@ -82,7 +82,7 @@ async function queueSmsForDelivery({
     await assertSmsWithinPackageLimit(db, deviceId, 1);
     await assertUserSmsWithinLimits(db, userId, source, 1);
 
-    const resolvedSmsCommand = resolveSmsCommand(message);
+    const resolvedSmsCommand = resolveSmsCommandForRecipient(formattedNumber, message);
     const smsCommand = resolvedSmsCommand.command;
     const smsTransport = resolvedSmsCommand.metadata || {};
     const smsTimeoutMs = resolvedSmsCommand.timeoutMs || 60000;

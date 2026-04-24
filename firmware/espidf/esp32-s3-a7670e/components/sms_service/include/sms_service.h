@@ -24,6 +24,8 @@ typedef struct {
     bool use_ucs2_present;
     bool use_ucs2;
     uint16_t expected_parts;
+    const char *pdu_hex;
+    uint16_t pdu_length;
 } sms_service_send_options_t;
 
 esp_err_t sms_service_init(void);

@@ -259,20 +259,19 @@
     <div class="card-header bg-white py-3 d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3">
         <div>
             <h5 class="mb-1"><i class="bi bi-headset me-2"></i>Call Workspace</h5>
-            <p class="text-muted mb-0 small">Dial, pick contacts, and manage the active call without blocking the rest of the page.</p>
         </div>
         <div class="btn-group btn-group-sm" role="group" aria-label="Call workspace view">
-            <button class="btn btn-outline-primary active" type="button" id="callWorkspaceDialerTab" onclick="openDialerModal()">
+            <button class="btn btn-outline-primary" type="button" id="callWorkspaceDialerTab" onclick="openDialerModal()">
                 <i class="bi bi-dialpad me-1"></i>Dial Pad
             </button>
-            <button class="btn btn-outline-primary" type="button" id="callWorkspaceContactsTab" onclick="openContactsModal()">
+            <button class="btn btn-outline-primary active" type="button" id="callWorkspaceContactsTab" onclick="openContactsModal()">
                 <i class="bi bi-person-lines-fill me-1"></i>Contacts
             </button>
         </div>
     </div>
     <div class="card-body">
         <div class="row g-4">
-            <div class="col-12 col-xl-5">
+            <div class="col-12 col-xl-5 d-none" id="callWorkspaceDialerColumn">
                 <section id="callWorkspaceDialerSection">
                     <div id="dialerOfflineWarning" class="alert alert-warning py-2 d-none">
                         <i class="bi bi-exclamation-triangle me-2"></i>
@@ -381,8 +380,8 @@
                 </section>
             </div>
 
-            <div class="col-12 col-xl-7">
-                <section id="callWorkspaceContactsSection" class="call-workspace-section d-none">
+            <div class="col-12">
+                <section id="callWorkspaceContactsSection" class="call-workspace-section">
                     <div class="row g-2 mb-3">
                         <div class="col-12 col-md-8">
                             <div class="input-group">
@@ -418,6 +417,18 @@
                     </div>
                 </section>
             </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="dialerModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-dialpad me-2"></i>Dial Pad</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="dialerModalBody"></div>
         </div>
     </div>
 </div>

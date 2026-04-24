@@ -633,6 +633,8 @@ static esp_err_t automation_bridge_parse_item(
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "text"), out_request->text, sizeof(out_request->text));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "sms_encoding"), out_request->sms_encoding, sizeof(out_request->sms_encoding));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "sms_transport_encoding"), out_request->sms_transport_encoding, sizeof(out_request->sms_transport_encoding));
+    automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "sms_pdu"), out_request->sms_pdu, sizeof(out_request->sms_pdu));
+    automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "sms_pdu_encoding"), out_request->sms_pdu_encoding, sizeof(out_request->sms_pdu_encoding));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "code"), out_request->code, sizeof(out_request->code));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "key"), out_request->key, sizeof(out_request->key));
     automation_bridge_copy_json_scalar(cJSON_GetObjectItemCaseSensitive(payload, "value"), out_request->value, sizeof(out_request->value));
@@ -688,6 +690,10 @@ static esp_err_t automation_bridge_parse_item(
     node = cJSON_GetObjectItemCaseSensitive(payload, "sms_characters");
     if (cJSON_IsNumber(node) && node->valuedouble > 0) {
         out_request->sms_characters = (uint16_t)node->valuedouble;
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "sms_pdu_length");
+    if (cJSON_IsNumber(node) && node->valuedouble > 0) {
+        out_request->sms_pdu_length = (uint16_t)node->valuedouble;
     }
     node = cJSON_GetObjectItemCaseSensitive(payload, "sms_multipart");
     if (cJSON_IsBool(node)) {

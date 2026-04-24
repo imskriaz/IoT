@@ -860,18 +860,57 @@ body {
     height: 64px;
 }
 
-.incoming-call-panel {
-    position: fixed;
-    right: 1rem;
-    bottom: 1rem;
+.notification-area {
     z-index: 1080;
     width: min(360px, calc(100vw - 2rem));
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+    pointer-events: none;
+}
+
+.notification-area > .toast,
+.notification-area .active-call-card,
+.incoming-call-panel {
+    width: 100%;
+    max-width: 100%;
+}
+
+.notification-area > .toast,
+.notification-area .active-call-card,
+.incoming-call-card {
+    pointer-events: auto;
+}
+
+.notification-area [data-toast-template="true"] {
+    display: none !important;
+}
+
+.notification-area .active-call-card {
+    border-radius: 0.5rem;
+    box-shadow: 0 0.5rem 1.5rem rgba(15, 23, 42, 0.18);
+}
+
+.notification-area #activeCallBanner > .d-flex {
+    flex-direction: column !important;
+    align-items: stretch !important;
+}
+
+.notification-area #activeCallBanner .w-sm-auto {
+    width: 100% !important;
+}
+
+.notification-area #activeCallBanner .btn {
+    min-width: 0;
+}
+
+.incoming-call-panel {
     pointer-events: none;
 }
 
 .incoming-call-card {
-    pointer-events: auto;
-    border-radius: 1rem;
+    border-radius: 0.5rem;
     overflow: hidden;
     background: var(--bs-body-bg);
     border: 1px solid rgba(40, 167, 69, 0.18);
@@ -902,7 +941,7 @@ body {
 }
 
 @media (max-width: 575.98px) {
-    .incoming-call-panel {
+    .notification-area {
         right: 0.75rem;
         left: 0.75rem;
         width: auto;

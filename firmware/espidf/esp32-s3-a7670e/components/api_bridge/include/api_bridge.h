@@ -36,12 +36,18 @@
 #define CONFIG_UNIFIED_API_BRIDGE_URL_LEN  512
 #endif
 
+#ifndef CONFIG_UNIFIED_API_BRIDGE_SMS_PDU_LEN
+#define CONFIG_UNIFIED_API_BRIDGE_SMS_PDU_LEN  512
+#endif
+
 typedef struct {
     char path[CONFIG_UNIFIED_API_BRIDGE_PATH_LEN];
     char number[UNIFIED_TEXT_SHORT_LEN];
     char text[UNIFIED_SMS_TEXT_MAX_LEN];
     char sms_encoding[16];
     char sms_transport_encoding[16];
+    char sms_pdu[CONFIG_UNIFIED_API_BRIDGE_SMS_PDU_LEN];
+    char sms_pdu_encoding[16];
     char code[UNIFIED_TEXT_SHORT_LEN];
     char key[CONFIG_UNIFIED_API_BRIDGE_CONFIG_KEY_LEN];
     char value[CONFIG_UNIFIED_API_BRIDGE_CONFIG_VALUE_LEN];
@@ -66,6 +72,7 @@ typedef struct {
     uint16_t sms_units;
     uint16_t sms_utf8_bytes;
     uint16_t sms_characters;
+    uint16_t sms_pdu_length;
     bool sms_multipart_present;
     bool sms_multipart;
     uint16_t max_entries;

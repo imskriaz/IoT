@@ -99,7 +99,7 @@ describe('mqttService firmware compatibility', () => {
         expect(payload.action_id).toMatch(/^sms_/);
         expect(payload.timeout).toBe(5000);
         expect(payload.sms_encoding).toBe('gsm7');
-        expect(payload.sms_transport_encoding).toBe('ucs2');
+        expect(payload.sms_transport_encoding).toBe('ira');
         expect(payload.sms_parts).toBe(1);
         expect(payload.sms_multipart).toBe(false);
         expect(payload.messageId).toBeUndefined();

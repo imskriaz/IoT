@@ -39,9 +39,9 @@ static const char *TAG = "mqtt_mgr";
 #define MQTT_MGR_ESP_START_INTERNAL_MARGIN_BYTES 1024U
 #define MQTT_MGR_WIFI_PRIMARY_MIN_RSSI_DBM   (-85)
 #define MQTT_MGR_ESP_CONNECT_GRACE_MS      20000U
-#define MQTT_MGR_MODEM_RESUBSCRIBE_MS      10000U
+#define MQTT_MGR_MODEM_RESUBSCRIBE_MS     300000U
 #define MQTT_MGR_ACTION_RESULT_BATCH_LIMIT     6U
-#define MQTT_MGR_TASK_STACK_LEN            5120U
+#define MQTT_MGR_TASK_STACK_LEN            8192U
 
 typedef enum {
     MQTT_MGR_TRANSPORT_NONE = 0,
@@ -531,10 +531,10 @@ static esp_err_t mqtt_mgr_subscribe_modem_command_topics_locked(void) {
         bool primary;
     } modem_command_topic_t;
     static const modem_command_topic_t command_topics[] = {
+        { "command/+", true },
         { "command/get-status", true },
         { "command/send-sms", true },
-        { "command/send-sms-multipart", true },
-        { "command/+", false }
+        { "command/send-sms-multipart", true }
     };
     char topic[160] = {0};
     char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
@@ -554,6 +554,9 @@ static esp_err_t mqtt_mgr_subscribe_modem_command_topics_locked(void) {
             success_count++;
             if (command_topics[index].primary) {
                 primary_command_topic_subscribed = true;
+                if (index == 0U) {
+                    break;
+                }
             }
         }
     }
@@ -1403,7 +1406,6 @@ static void mqtt_mgr_task(void *arg) {
             bool process_modem_messages = true;
             bool resubscribe_modem = false;
             if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
-                uint32_t now_ms = unified_tick_now_ms();
                 if (!s_modem_connection_seen) {
                     s_modem_connection_seen = true;
                 }
@@ -1411,8 +1413,7 @@ static void mqtt_mgr_task(void *arg) {
                     process_modem_messages = false;
                 } else {
                     resubscribe_modem = s_last_modem_subscribe_ms == 0U ||
-                                        !s_status.subscribed ||
-                                        (now_ms - s_last_modem_subscribe_ms) >= MQTT_MGR_MODEM_RESUBSCRIBE_MS;
+                                        !s_status.subscribed;
                     s_transport = MQTT_MGR_TRANSPORT_MODEM;
                     s_status.connected = true;
                     s_status.runtime.running = true;

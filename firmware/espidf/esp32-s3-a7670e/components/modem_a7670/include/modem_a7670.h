@@ -16,6 +16,8 @@ typedef struct {
     bool use_ucs2_present;
     bool use_ucs2;
     uint16_t expected_parts;
+    const char *pdu_hex;
+    uint16_t pdu_length;
 } modem_a7670_sms_send_options_t;
 
 typedef struct {
