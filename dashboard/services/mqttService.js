@@ -484,7 +484,7 @@ class MQTTService extends EventEmitter {
             const payloadProvidesPdu = typeof payloadSmsMetadata.sms_pdu === 'string' &&
                 payloadSmsMetadata.sms_pdu.trim();
             const smsMetadata = {
-                ...buildSmsTransportMetadataForRecipient(number, text),
+                ...(payloadProvidesPdu ? {} : buildSmsTransportMetadataForRecipient(number, text)),
                 ...payloadSmsMetadata
             };
             const metadataPduIsMultipart = Number(smsMetadata.sms_pdu_count) > 1 ||

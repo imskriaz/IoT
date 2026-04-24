@@ -135,6 +135,29 @@ describe('mqttService firmware compatibility', () => {
         expect(payload.sms_characters).toBeUndefined();
     });
 
+    test('publishCommand uses queued dashboard PDU parts without regenerating from empty text', async () => {
+        const queuedPdu = '0021000D91881055153254F6000005E8329BFD06';
+        await svc.publishCommand(
+            'device-1',
+            'send-sms',
+            {
+                to: '+8801555123456',
+                message: '',
+                sms_pdu: queuedPdu,
+                sms_pdu_encoding: 'gsm7'
+            },
+            false,
+            45000,
+            { skipPersistentQueue: true, messageId: 'send-sms_queued_pdu' }
+        );
+
+        const payload = JSON.parse(svc.client.publish.mock.calls[0][1]);
+        expect(payload).toEqual({
+            action_id: 'send-sms_queued_pdu',
+            sms_pdu: queuedPdu
+        });
+    });
+
     test('publishCommand keeps SMS action IDs within the firmware correlation buffer', async () => {
         await svc.publishCommand(
             'device-1',
