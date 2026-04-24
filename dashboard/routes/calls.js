@@ -83,6 +83,25 @@ function buildCallSimMeta(scope = {}) {
     return payload;
 }
 
+async function reconcileInactiveCallRows(db, deviceId, simScope = {}) {
+    if (!db || !deviceId) {
+        return 0;
+    }
+
+    const conditions = ['device_id = ?', "status IN ('dialing', 'ringing', 'connected', 'answered', 'ending', 'online')"];
+    const params = ['ended', deviceId];
+    appendSimScopeCondition(conditions, params, simScope);
+
+    const result = await db.run(`
+        UPDATE calls
+        SET status = ?,
+            end_time = COALESCE(end_time, CURRENT_TIMESTAMP)
+        WHERE ${conditions.join(' AND ')}
+    `, params);
+
+    return Number(result?.changes || 0);
+}
+
 /**
  * @swagger
  * tags:
@@ -635,6 +654,18 @@ router.get('/status', async (req, res) => {
                 }
             });
         } else {
+            const modemStatus = global.modemService?.getStatus?.(deviceId) || {};
+            const callExplicitlyInactive = modemStatus?.call?.active === false;
+            if (callExplicitlyInactive) {
+                const reconciled = await reconcileInactiveCallRows(db, deviceId, simScope);
+                if (reconciled > 0) {
+                    emitDeviceEvent(deviceId, 'call:ended', {
+                        deviceId,
+                        status: 'ended',
+                        reconciled
+                    });
+                }
+            }
             res.json({
                 success: true,
                 data: { active: false }

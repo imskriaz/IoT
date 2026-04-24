@@ -178,4 +178,29 @@ describe('calls API device scoping', () => {
             ['device-call']
         );
     });
+
+    test('reconciles stale active call rows when live device state reports no active call', async () => {
+        global.modemService = {
+            getStatus: jest.fn().mockReturnValue({
+                call: { active: false }
+            })
+        };
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue(null),
+            run: jest.fn().mockResolvedValue({ changes: 2 })
+        });
+        const app = buildApp(db);
+
+        const res = await request(app)
+            .get('/api/calls/status?deviceId=device-call&simSlot=0');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.data).toEqual({ active: false });
+        expect(global.modemService.getStatus).toHaveBeenCalledWith('device-call');
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining("status IN ('dialing', 'ringing', 'connected', 'answered', 'ending', 'online')"),
+            ['ended', 'device-call', 0]
+        );
+    });
 });
