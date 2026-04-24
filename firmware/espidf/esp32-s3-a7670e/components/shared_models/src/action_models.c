@@ -49,6 +49,7 @@ const char *unified_action_command_name(unified_action_command_t command) {
         case UNIFIED_ACTION_CMD_ROUTING_CONFIGURE: return "routing_configure";
         case UNIFIED_ACTION_CMD_STATUS_WATCH: return "status_watch";
         case UNIFIED_ACTION_CMD_GET_SMS_HISTORY: return "get_sms_history";
+        case UNIFIED_ACTION_CMD_OTA_UPDATE: return "ota_update";
         case UNIFIED_ACTION_CMD_NONE:
         default:
             return "none";

@@ -400,6 +400,9 @@ static unified_action_command_t automation_bridge_parse_command_name(const char 
     if (strcmp(normalized, "get_status") == 0) {
         return UNIFIED_ACTION_CMD_GET_STATUS;
     }
+    if (strcmp(normalized, "ota_update") == 0) {
+        return UNIFIED_ACTION_CMD_OTA_UPDATE;
+    }
     if (strcmp(normalized, "send_sms") == 0) {
         return UNIFIED_ACTION_CMD_SEND_SMS;
     }
@@ -637,6 +640,7 @@ static esp_err_t automation_bridge_parse_item(
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "username"), out_request->username, sizeof(out_request->username));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "password"), out_request->password, sizeof(out_request->password));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "auth"), out_request->auth, sizeof(out_request->auth));
+    automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "url"), out_request->url, sizeof(out_request->url));
     node = cJSON_GetObjectItemCaseSensitive(payload, "enabled");
     if (cJSON_IsBool(node)) {
         out_request->enabled_present = true;

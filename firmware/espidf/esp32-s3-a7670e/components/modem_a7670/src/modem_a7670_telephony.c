@@ -624,11 +624,23 @@ static bool modem_a7670_sms_should_use_ucs2(
     const char *text,
     const modem_a7670_sms_send_options_t *options
 ) {
-    if (modem_a7670_sms_requires_ucs2(text)) {
-        return true;
+    if (options && options->use_ucs2_present) {
+        return options->use_ucs2;
     }
 
-    return options && options->use_ucs2_present ? options->use_ucs2 : false;
+    return modem_a7670_sms_requires_ucs2(text);
+}
+
+static size_t modem_a7670_sms_resolve_segment_count(
+    const char *text,
+    bool use_ucs2,
+    const modem_a7670_sms_send_options_t *options
+) {
+    if (options && options->expected_parts > 0U) {
+        return (size_t)options->expected_parts;
+    }
+
+    return modem_a7670_sms_segment_count_for_encoding(text, use_ucs2);
 }
 
 static bool modem_a7670_parse_sms_list_index(const char *response, int *out_index) {
@@ -900,7 +912,7 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
     const uint8_t ctrl_z = 0x1AU;
     const bool use_ucs2 = modem_a7670_sms_should_use_ucs2(text, options);
     const bool use_gsm7_units = !use_ucs2;
-    const size_t total_segments = modem_a7670_sms_segment_count_for_encoding(text, use_ucs2);
+    const size_t total_segments = modem_a7670_sms_resolve_segment_count(text, use_ucs2, options);
     const uint8_t message_reference = modem_a7670_sms_message_reference();
     const uint8_t destination_type = modem_a7670_sms_type_of_address(number);
     const char *segment_cursor = text;
@@ -913,15 +925,6 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
 
     if (total_segments < 2U || total_segments > MODEM_A7670_SMS_MAX_SEGMENTS) {
         return ESP_ERR_INVALID_SIZE;
-    }
-    if (options && options->expected_parts > 0U && options->expected_parts != total_segments) {
-        ESP_LOGW(
-            TAG,
-            "sms dashboard parts hint mismatch expected=%u actual=%u ucs2=%u",
-            (unsigned)options->expected_parts,
-            (unsigned)total_segments,
-            use_ucs2 ? 1U : 0U
-        );
     }
     if (use_ucs2) {
         encoded_segment = modem_a7670_sms_alloc_zeroed(MODEM_A7670_SMS_UCS2_TEXT_LEN);
@@ -1039,6 +1042,10 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
         err = modem_a7670_read_response_locked(response, response_len, remaining_timeout_ms, false);
         segment_cursor += segment_len;
     }
+    if (err == ESP_OK && segment_cursor[0] != '\0') {
+        ESP_LOGW(TAG, "sms multipart dashboard parts hint ended before text was fully segmented");
+        err = ESP_ERR_INVALID_SIZE;
+    }
 
 cleanup:
     modem_a7670_sms_free(encoded_segment);
@@ -1103,7 +1110,7 @@ esp_err_t modem_a7670_send_sms_with_options(
     esp_err_t err = ESP_FAIL;
     const uint8_t ctrl_z = 0x1AU;
     const bool use_ucs2 = modem_a7670_sms_should_use_ucs2(text, options);
-    const size_t total_segments = modem_a7670_sms_segment_count_for_encoding(text, use_ucs2);
+    const size_t total_segments = modem_a7670_sms_resolve_segment_count(text, use_ucs2, options);
     const uint8_t destination_type = modem_a7670_sms_type_of_address(number);
     char *encoded_text = NULL;
     char *encoded_number = NULL;
@@ -1126,6 +1133,11 @@ esp_err_t modem_a7670_send_sms_with_options(
     remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
     if (remaining_timeout_ms == 0U || xSemaphoreTake(s_lock, pdMS_TO_TICKS(remaining_timeout_ms)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
+    }
+
+    if (total_segments == 0U) {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_SIZE;
     }
 
     if (total_segments > 1U) {

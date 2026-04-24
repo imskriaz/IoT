@@ -11,6 +11,9 @@
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_crt_bundle.h"
+#include "esp_http_client.h"
+#include "esp_https_ota.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 
@@ -29,6 +32,9 @@ static const char *TAG = "api_bridge";
 
 enum {
     API_BRIDGE_WIFI_SCAN_MAX_RESULTS = 12,
+    API_BRIDGE_OTA_MIN_TIMEOUT_MS = 180000,
+    API_BRIDGE_OTA_DEFAULT_TIMEOUT_MS = 300000,
+    API_BRIDGE_OTA_RESTART_DELAY_MS = 1500,
 };
 
 typedef struct {
@@ -174,6 +180,45 @@ static void api_bridge_escape_json(const char *input, char *output, size_t outpu
         }
     }
     output[write_index] = '\0';
+}
+
+static bool api_bridge_ota_url_supported(const char *url) {
+    return url &&
+           (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0);
+}
+
+static uint32_t api_bridge_ota_timeout_ms(const unified_action_envelope_t *action) {
+    const uint32_t requested_timeout_ms = action && action->timeout_ms > 0U
+        ? action->timeout_ms
+        : API_BRIDGE_OTA_DEFAULT_TIMEOUT_MS;
+
+    return requested_timeout_ms < API_BRIDGE_OTA_MIN_TIMEOUT_MS
+        ? API_BRIDGE_OTA_MIN_TIMEOUT_MS
+        : requested_timeout_ms;
+}
+
+static void api_bridge_delayed_restart_task(void *arg) {
+    const uint32_t delay_ms = (uint32_t)(uintptr_t)arg;
+
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    esp_restart();
+}
+
+static void api_bridge_schedule_restart(uint32_t delay_ms) {
+    BaseType_t task_ok = xTaskCreate(
+        api_bridge_delayed_restart_task,
+        "ota_restart",
+        CONFIG_UNIFIED_TASK_STACK_SMALL,
+        (void *)(uintptr_t)delay_ms,
+        3,
+        NULL
+    );
+
+    if (task_ok != pdPASS) {
+        ESP_LOGW(TAG, "failed to schedule OTA restart; restarting inline");
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+        esp_restart();
+    }
 }
 
 static unified_action_response_t api_bridge_execute_config_set(
@@ -1103,6 +1148,78 @@ static unified_action_response_t api_bridge_execute_status_watch(
     return api_bridge_build_response(action, UNIFIED_ACTION_RESULT_COMPLETED, ESP_OK, UNIFIED_FEATURE_REASON_NONE, "status_watch_updated");
 }
 
+static unified_action_response_t api_bridge_execute_ota_update(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    unified_action_envelope_t effective_action = {0};
+    esp_http_client_config_t http_config = {0};
+    esp_https_ota_config_t ota_config = {0};
+    esp_err_t err = ESP_FAIL;
+    const uint32_t timeout_ms = api_bridge_ota_timeout_ms(action);
+    char escaped_url[CONFIG_UNIFIED_API_BRIDGE_URL_LEN * 2U] = {0};
+
+    if (!request || !api_bridge_ota_url_supported(request->url)) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_INVALID_ARG,
+            UNIFIED_FEATURE_REASON_NONE,
+            "invalid_ota_url"
+        );
+    }
+
+    if (action) {
+        effective_action = *action;
+        effective_action.timeout_ms = timeout_ms;
+    }
+
+    ESP_LOGI(TAG, "OTA update starting url=%s timeout_ms=%" PRIu32, request->url, timeout_ms);
+
+    http_config.url = request->url;
+    http_config.timeout_ms = (int)timeout_ms;
+    http_config.keep_alive_enable = true;
+    http_config.crt_bundle_attach = esp_crt_bundle_attach;
+
+    ota_config.http_config = &http_config;
+
+    err = esp_https_ota(&ota_config);
+    if (payload && payload_len > 0U) {
+        api_bridge_escape_json(request->url, escaped_url, sizeof(escaped_url));
+        if (snprintf(
+                payload,
+                payload_len,
+                "{\"url\":\"%s\",\"restart\":%s}",
+                escaped_url,
+                err == ESP_OK ? "true" : "false") >= (int)payload_len) {
+            payload[0] = '\0';
+        }
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "OTA update failed err=%s", esp_err_to_name(err));
+        return api_bridge_build_response(
+            action ? &effective_action : action,
+            err == ESP_ERR_TIMEOUT ? UNIFIED_ACTION_RESULT_TIMEOUT : UNIFIED_ACTION_RESULT_FAILED,
+            err,
+            UNIFIED_FEATURE_REASON_NONE,
+            "ota_update_failed"
+        );
+    }
+
+    ESP_LOGI(TAG, "OTA update applied; reboot scheduled");
+    api_bridge_schedule_restart(API_BRIDGE_OTA_RESTART_DELAY_MS);
+    return api_bridge_build_response(
+        action ? &effective_action : action,
+        UNIFIED_ACTION_RESULT_COMPLETED,
+        ESP_OK,
+        UNIFIED_FEATURE_REASON_NONE,
+        "ota_update_applied_rebooting"
+    );
+}
+
 static unified_action_response_t api_bridge_execute_send_sms(
     const unified_action_envelope_t *action,
     const api_bridge_request_t *request,
@@ -1215,6 +1332,8 @@ static unified_action_response_t api_bridge_dispatch_action(
             return api_bridge_execute_routing_configure(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_STATUS_WATCH:
             return api_bridge_execute_status_watch(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_OTA_UPDATE:
+            return api_bridge_execute_ota_update(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_SEND_SMS:
         case UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART:
             return api_bridge_execute_send_sms(action, request, payload, payload_len);

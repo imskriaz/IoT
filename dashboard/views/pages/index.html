@@ -117,6 +117,8 @@
         || (homeDeviceLane === 'esp32' ? 'ESP32' : null)
         || deviceStatus.deviceName
         || 'Not reported by device';
+    const homeShowModelDetail = homeDeviceLane !== 'esp32';
+    const homeDetailColumnClass = homeShowModelDetail ? 'col-6 col-md-2' : 'col-6 col-md-3';
     const homeOfflineAlertText = {
         esp32: 'Check power, MQTT broker, Wi-Fi/APN, SIM/modem path, and device firmware heartbeat.',
         android: 'Open the Android Bridge app and check transport mode, background service, SMS permissions, and battery restrictions.'
@@ -416,23 +418,25 @@
     <div class="card mb-3 dashboard-actions">
         <div class="card-body py-2">
             <div class="row g-2 align-items-center">
-                <div class="col-6 col-md-2">
+                <div class="<%= homeDetailColumnClass %>">
                     <div class="dashboard-detail-label text-muted">Temp</div>
                     <div class="fw-semibold"><%= deviceStatus.temperature !== null ? (deviceStatus.temperature + ' C') : 'N/A' %></div>
                 </div>
-                <div class="col-6 col-md-2">
+                <div class="<%= homeDetailColumnClass %>">
                     <div class="dashboard-detail-label text-muted">Uptime</div>
                     <div class="fw-semibold"><%= deviceStatus.uptime || 'Not reported' %></div>
                 </div>
-                <div class="col-6 col-md-2">
+                <% if (homeShowModelDetail) { %>
+                <div class="<%= homeDetailColumnClass %>">
                     <div class="dashboard-detail-label text-muted">Model</div>
                     <div id="deviceModel" class="dashboard-detail-value fw-semibold text-truncate" title="<%= homeModelLabel %>"><%= homeModelLabel %></div>
                 </div>
-                <div class="col-6 col-md-2">
+                <% } %>
+                <div class="<%= homeDetailColumnClass %>">
                     <div id="deviceHardwareIdLabel" class="dashboard-detail-label text-muted"><%= deviceStatus.androidId ? 'Android ID' : (deviceStatus.imei ? 'IMEI' : 'Android ID / IMEI') %></div>
                     <div id="deviceHardwareId" class="dashboard-detail-value fw-semibold text-truncate" title="<%= deviceStatus.androidId || deviceStatus.imei || 'Not reported by device' %>"><%= deviceStatus.androidId || deviceStatus.imei || 'Not reported by device' %></div>
                 </div>
-                <div class="col-6 col-md-2">
+                <div class="<%= homeDetailColumnClass %>">
                     <div class="dashboard-detail-label text-muted">Health</div>
                     <div id="deviceHealth" class="fw-semibold <%= typeof healthScore === 'number' ? (healthScore >= 70 ? 'text-success' : healthScore >= 40 ? 'text-warning' : 'text-danger') : '' %>">
                         <% if (typeof healthScore === 'number') { %>

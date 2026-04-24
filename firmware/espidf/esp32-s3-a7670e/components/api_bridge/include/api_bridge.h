@@ -32,6 +32,10 @@
 #define CONFIG_UNIFIED_API_BRIDGE_CONFIG_VALUE_LEN  128
 #endif
 
+#ifndef CONFIG_UNIFIED_API_BRIDGE_URL_LEN
+#define CONFIG_UNIFIED_API_BRIDGE_URL_LEN  512
+#endif
+
 typedef struct {
     char path[CONFIG_UNIFIED_API_BRIDGE_PATH_LEN];
     char number[UNIFIED_TEXT_SHORT_LEN];
@@ -45,6 +49,7 @@ typedef struct {
     char username[64];
     char password[64];
     char auth[16];
+    char url[CONFIG_UNIFIED_API_BRIDGE_URL_LEN];
     bool enabled_present;
     bool enabled;
     bool failover_present;

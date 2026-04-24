@@ -18,6 +18,7 @@ const { admin: adminMiddleware } = require('../middleware/auth');
 
 const FIRMWARE_DIR = path.join(__dirname, '../data/firmware');
 const LOCAL_OTA_DIR = path.resolve(__dirname, '../../ota');
+const OTA_COMMAND_TIMEOUT_MS = 300000;
 fs.mkdirSync(FIRMWARE_DIR, { recursive: true });
 
 const upload = multer({
@@ -303,7 +304,13 @@ router.post('/flash', adminMiddleware, async (req, res) => {
             });
         }
 
-        await global.mqttService.publishCommand(deviceId, 'ota-update', { url: firmwareUrl });
+        await global.mqttService.publishCommand(
+            deviceId,
+            'ota-update',
+            { url: firmwareUrl, timeout: OTA_COMMAND_TIMEOUT_MS },
+            false,
+            OTA_COMMAND_TIMEOUT_MS
+        );
 
         // Record in history and keep only last 10 per device
         const db = req.app.locals.db;
@@ -387,7 +394,13 @@ router.post('/rollback', adminMiddleware, async (req, res) => {
             });
         }
 
-        await global.mqttService.publishCommand(deviceId, 'ota-update', { url: firmwareUrl });
+        await global.mqttService.publishCommand(
+            deviceId,
+            'ota-update',
+            { url: firmwareUrl, timeout: OTA_COMMAND_TIMEOUT_MS },
+            false,
+            OTA_COMMAND_TIMEOUT_MS
+        );
 
         // Record rollback in history and prune
         await db.run(
