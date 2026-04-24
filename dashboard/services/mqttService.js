@@ -493,13 +493,8 @@ class MQTTService extends EventEmitter {
             };
             if (hasDashboardPdu) {
                 Object.assign(message, {
-                    sms_encoding: smsMetadata.sms_encoding,
-                    sms_transport_encoding: smsMetadata.sms_transport_encoding,
-                    sms_parts: smsMetadata.sms_parts,
-                    sms_multipart: smsMetadata.sms_multipart,
                     sms_pdu: smsMetadata.sms_pdu,
-                    sms_pdu_length: Number(smsMetadata.sms_pdu_length),
-                    sms_pdu_encoding: smsMetadata.sms_pdu_encoding
+                    sms_pdu_length: Number(smsMetadata.sms_pdu_length)
                 });
             } else {
                 message.text = text;

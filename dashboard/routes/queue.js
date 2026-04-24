@@ -22,6 +22,28 @@ const ACTIVE_STATUSES = ['dispatching'];
 const OPEN_STATUSES = ['pending', 'dispatching', 'waiting_response', 'failed', 'ambiguous'];
 const CLEARABLE_BULK_STATUSES = ['pending', 'waiting_response', 'failed', 'ambiguous', 'completed'];
 const FILTERABLE_STATUSES = ['all', 'open', ...OPEN_STATUSES, 'completed'];
+const SORT_FIELDS = {
+    command: {
+        expression: 'LOWER(command)',
+        fallback: 'datetime(updated_at) DESC, datetime(created_at) DESC'
+    },
+    status: {
+        expression: 'LOWER(status)',
+        fallback: 'datetime(updated_at) DESC, datetime(created_at) DESC'
+    },
+    attempts: {
+        expression: 'attempt_count',
+        fallback: (direction) => `max_attempts ${direction}, datetime(updated_at) DESC, datetime(created_at) DESC`
+    },
+    created: {
+        expression: 'datetime(created_at)',
+        fallback: 'datetime(updated_at) DESC'
+    },
+    updated: {
+        expression: 'datetime(updated_at)',
+        fallback: 'datetime(created_at) DESC'
+    }
+};
 
 function normalizeDeviceId(value) {
     return String(value || '').trim();
@@ -47,6 +69,28 @@ function normalizeScope(value) {
 function normalizeStatusFilter(value) {
     const status = String(value || 'all').trim().toLowerCase();
     return FILTERABLE_STATUSES.includes(status) ? status : 'all';
+}
+
+function normalizeSortField(value) {
+    const sort = String(value || 'updated').trim().toLowerCase();
+    return Object.prototype.hasOwnProperty.call(SORT_FIELDS, sort) ? sort : 'updated';
+}
+
+function defaultSortDirection(sort) {
+    return sort === 'command' || sort === 'status' ? 'ASC' : 'DESC';
+}
+
+function normalizeSortDirection(value, sort) {
+    const direction = String(value || '').trim().toLowerCase();
+    if (direction === 'asc') return 'ASC';
+    if (direction === 'desc') return 'DESC';
+    return defaultSortDirection(sort);
+}
+
+function buildOrderBy(sort, direction) {
+    const sortSpec = SORT_FIELDS[sort] || SORT_FIELDS.updated;
+    const fallback = typeof sortSpec.fallback === 'function' ? sortSpec.fallback(direction) : sortSpec.fallback;
+    return `ORDER BY ${sortSpec.expression} ${direction}, ${fallback}, id DESC`;
 }
 
 function clearableStatusesForFilter(status) {
@@ -97,6 +141,8 @@ router.get('/', async (req, res) => {
         const scope = normalizeScope(req.query.scope);
         const status = normalizeStatusFilter(req.query.status);
         const limit = clamp(req.query.limit, 10, 200, 60);
+        const sort = normalizeSortField(req.query.sort);
+        const direction = normalizeSortDirection(req.query.direction, sort);
         const params = [deviceId];
         let whereSql = 'WHERE device_id = ?';
         whereSql += buildScopeWhere(scope, params);
@@ -135,8 +181,7 @@ router.get('/', async (req, res) => {
                     updated_at AS updatedAt
              FROM device_command_queue
              ${whereSql}
-             ORDER BY datetime(updated_at) DESC,
-                      datetime(created_at) DESC
+             ${buildOrderBy(sort, direction)}
              LIMIT ?`,
             params
         );
@@ -154,6 +199,8 @@ router.get('/', async (req, res) => {
                 deviceId,
                 scope,
                 status,
+                sort,
+                direction: direction.toLowerCase(),
                 summary: queueState?.summary || null,
                 domains: queueState?.domains || {},
                 runtime: queueState?.runtime || null,

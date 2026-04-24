@@ -785,6 +785,13 @@ describe('sidebar navigation coverage', () => {
         expect(queueHtml).toContain("${topDomain.name} lane - ${topDomain.totalOpen} open");
         expect(queueHtml).toContain("recentText += ' - device busy';");
         expect(queueHtml).toContain("recentText += ' - queued';");
+        expect(queueHtml).toContain('data-qm-sort="command"');
+        expect(queueHtml).toContain('data-qm-sort="status"');
+        expect(queueHtml).toContain('data-qm-sort="attempts"');
+        expect(queueHtml).toContain('data-qm-sort="created"');
+        expect(queueHtml).toContain('data-qm-sort="updated"');
+        expect(queueHtml).toContain('sort=${encodeURIComponent(queueSort.field)}');
+        expect(queueHtml).toContain('function sortQueueItems(items)');
 
         expect(modemHtml).toContain('id="mobileOperator">-<');
         expect(modemHtml).toContain('id="simNumber">-<');

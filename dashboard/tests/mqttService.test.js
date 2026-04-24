@@ -118,17 +118,16 @@ describe('mqttService firmware compatibility', () => {
         const payload = JSON.parse(svc.client.publish.mock.calls[0][1]);
         expect(payload).toEqual(expect.objectContaining({
             action_id: 'send-sms_pdu_test',
-            number: '+8801887300993',
             command: 'send_sms',
-            sms_encoding: 'unicode',
-            sms_transport_encoding: 'ucs2',
-            sms_parts: 1,
-            sms_multipart: false,
-            sms_pdu_length: 32,
-            sms_pdu_encoding: 'ucs2'
+            sms_pdu_length: 32
         }));
         expect(payload.sms_pdu).toBe('0021000D91881088370099F300081209AC09BE098209B209BE0020003100320033');
+        expect(payload.number).toBeUndefined();
         expect(payload.text).toBeUndefined();
+        expect(payload.sms_encoding).toBeUndefined();
+        expect(payload.sms_transport_encoding).toBeUndefined();
+        expect(payload.sms_parts).toBeUndefined();
+        expect(payload.sms_multipart).toBeUndefined();
         expect(payload.sms_utf8_bytes).toBeUndefined();
         expect(payload.sms_characters).toBeUndefined();
     });

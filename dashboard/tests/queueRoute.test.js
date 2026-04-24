@@ -197,10 +197,82 @@ describe('queue route list ordering', () => {
         expect(res.status).toBe(200);
         expect(res.body.success).toBe(true);
         expect(res.body.data.items).toHaveLength(1);
+        expect(res.body.data).toEqual(expect.objectContaining({
+            sort: 'updated',
+            direction: 'desc'
+        }));
 
         const sql = db.all.mock.calls[0][0];
         expect(sql).toContain('ORDER BY datetime(updated_at) DESC');
         expect(sql).toContain('datetime(created_at) DESC');
         expect(sql).not.toContain('WHEN status');
+    });
+
+    test('sorts by requested created timestamp direction', async () => {
+        const db = makeDbMock();
+        const router = require('../routes/queue');
+        const app = buildApp(router, { id: 1, role: 'admin', username: 'admin', deviceId: 'device-7' }, db);
+
+        const res = await request(app)
+            .get('/api/queue')
+            .query({ deviceId: 'device-7', scope: 'all', status: 'all', sort: 'created', direction: 'asc' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toEqual(expect.objectContaining({
+            sort: 'created',
+            direction: 'asc'
+        }));
+
+        const sql = db.all.mock.calls[0][0];
+        expect(sql).toContain('ORDER BY datetime(created_at) ASC');
+    });
+
+    test('sorts by requested attempts direction', async () => {
+        const db = makeDbMock();
+        const router = require('../routes/queue');
+        const app = buildApp(router, { id: 1, role: 'admin', username: 'admin', deviceId: 'device-7' }, db);
+
+        const res = await request(app)
+            .get('/api/queue')
+            .query({ deviceId: 'device-7', scope: 'all', status: 'all', sort: 'attempts', direction: 'desc' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toEqual(expect.objectContaining({
+            sort: 'attempts',
+            direction: 'desc'
+        }));
+
+        const sql = db.all.mock.calls[0][0];
+        expect(sql).toContain('ORDER BY attempt_count DESC');
+        expect(sql).toContain('max_attempts DESC');
+    });
+
+    test('defaults command sort to ascending and rejects unknown sort fields', async () => {
+        const db = makeDbMock();
+        const router = require('../routes/queue');
+        const app = buildApp(router, { id: 1, role: 'admin', username: 'admin', deviceId: 'device-7' }, db);
+
+        const commandRes = await request(app)
+            .get('/api/queue')
+            .query({ deviceId: 'device-7', scope: 'all', status: 'all', sort: 'command' });
+
+        expect(commandRes.status).toBe(200);
+        expect(commandRes.body.data).toEqual(expect.objectContaining({
+            sort: 'command',
+            direction: 'asc'
+        }));
+        expect(db.all.mock.calls[0][0]).toContain('ORDER BY LOWER(command) ASC');
+
+        const unsafeRes = await request(app)
+            .get('/api/queue')
+            .query({ deviceId: 'device-7', scope: 'all', status: 'all', sort: 'updated_at DESC; DROP TABLE users', direction: 'sideways' });
+
+        expect(unsafeRes.status).toBe(200);
+        expect(unsafeRes.body.data).toEqual(expect.objectContaining({
+            sort: 'updated',
+            direction: 'desc'
+        }));
+        expect(db.all.mock.calls[1][0]).toContain('ORDER BY datetime(updated_at) DESC');
+        expect(db.all.mock.calls[1][0]).not.toContain('DROP TABLE');
     });
 });

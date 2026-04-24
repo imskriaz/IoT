@@ -159,6 +159,7 @@ static void modem_a7670_append_fragment(char *dest, size_t dest_len, const char 
 static bool modem_a7670_mqtt_topic_is_command(const char *topic);
 static bool modem_a7670_infer_mqtt_topic_from_payload_locked(char *topic, size_t topic_len, const char *payload);
 static void modem_a7670_queue_mqtt_message_locked(const char *topic, const char *payload);
+static void modem_a7670_queue_completed_mqtt_rx_locked(void);
 static void modem_a7670_queue_sms_index_locked(int index);
 static void modem_a7670_queue_sms_delivery_locked(const unified_sms_delivery_payload_t *payload);
 static void modem_a7670_queue_ussd_result_locked(const unified_ussd_payload_t *payload);
@@ -675,6 +676,37 @@ static void modem_a7670_queue_mqtt_message_locked(const char *topic, const char 
     if (listener) {
         listener();
     }
+}
+
+static void modem_a7670_trim_mqtt_json_payload_locked(void) {
+    char *json_end = NULL;
+
+    if (s_mqtt_rx_payload[0] != '{') {
+        return;
+    }
+
+    json_end = strrchr(s_mqtt_rx_payload, '}');
+    if (json_end && json_end[1] != '\0') {
+        json_end[1] = '\0';
+        s_mqtt_rx_payload_bytes = strlen(s_mqtt_rx_payload);
+    }
+}
+
+static void modem_a7670_queue_completed_mqtt_rx_locked(void) {
+    if (!modem_a7670_mqtt_topic_is_command(s_mqtt_rx_topic)) {
+        s_mqtt_rx_topic[0] = '\0';
+        (void)modem_a7670_infer_mqtt_topic_from_payload_locked(
+            s_mqtt_rx_topic,
+            sizeof(s_mqtt_rx_topic),
+            s_mqtt_rx_payload
+        );
+    }
+
+    modem_a7670_trim_mqtt_json_payload_locked();
+    if (s_mqtt_rx_topic[0] != '\0' && s_mqtt_rx_payload[0] != '\0') {
+        modem_a7670_queue_mqtt_message_locked(s_mqtt_rx_topic, s_mqtt_rx_payload);
+    }
+    modem_a7670_reset_mqtt_rx_locked();
 }
 
 static void modem_a7670_queue_sms_index_locked(int index) {
@@ -1213,18 +1245,11 @@ static void modem_a7670_parse_line_locked(const char *line) {
 
     if (strncmp(line, "+CMQTTRXEND:", 11) == 0) {
         ESP_LOGI(TAG, "CMQTTRXEND topic=%s payload_len=%u", s_mqtt_rx_topic, (unsigned)s_mqtt_rx_payload_bytes);
-        if (!modem_a7670_mqtt_topic_is_command(s_mqtt_rx_topic)) {
-            s_mqtt_rx_topic[0] = '\0';
-            (void)modem_a7670_infer_mqtt_topic_from_payload_locked(
-                s_mqtt_rx_topic,
-                sizeof(s_mqtt_rx_topic),
-                s_mqtt_rx_payload
-            );
+        if (s_mqtt_rx_payload_bytes > 0U) {
+            modem_a7670_queue_completed_mqtt_rx_locked();
+        } else {
+            modem_a7670_reset_mqtt_rx_locked();
         }
-        if (s_mqtt_rx_topic[0] != '\0') {
-            modem_a7670_queue_mqtt_message_locked(s_mqtt_rx_topic, s_mqtt_rx_payload);
-        }
-        modem_a7670_reset_mqtt_rx_locked();
         return;
     }
 
@@ -1955,6 +1980,10 @@ void modem_a7670_parse_response_locked(const char *response) {
                 s_mqtt_rx_expect_topic = false;
             } else {
                 s_mqtt_rx_expect_payload = false;
+                if (s_mqtt_rx_expected_payload_len > 0U &&
+                    s_mqtt_rx_payload_bytes >= s_mqtt_rx_expected_payload_len) {
+                    modem_a7670_queue_completed_mqtt_rx_locked();
+                }
             }
             cursor = modem_a7670_skip_crlf_bytes(fragment, fragment_used + copy_len, cursor);
             continue;

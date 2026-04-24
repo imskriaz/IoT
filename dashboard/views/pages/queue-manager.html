@@ -104,16 +104,37 @@
             <table class="table table-hover align-middle mb-0">
                 <thead class="table-light">
                     <tr>
-                        <th>Command</th>
-                        <th>Status</th>
-                        <th>Attempts</th>
-                        <th>Updated</th>
+                        <th aria-sort="none">
+                            <button type="button" class="btn btn-link btn-sm p-0 text-dark text-decoration-none fw-semibold qm-sort-btn" data-qm-sort="command">
+                                Command <i class="bi bi-chevron-expand ms-1" data-qm-sort-icon="command"></i>
+                            </button>
+                        </th>
+                        <th aria-sort="none">
+                            <button type="button" class="btn btn-link btn-sm p-0 text-dark text-decoration-none fw-semibold qm-sort-btn" data-qm-sort="status">
+                                Status <i class="bi bi-chevron-expand ms-1" data-qm-sort-icon="status"></i>
+                            </button>
+                        </th>
+                        <th aria-sort="none">
+                            <button type="button" class="btn btn-link btn-sm p-0 text-dark text-decoration-none fw-semibold qm-sort-btn" data-qm-sort="attempts">
+                                Attempts <i class="bi bi-chevron-expand ms-1" data-qm-sort-icon="attempts"></i>
+                            </button>
+                        </th>
+                        <th aria-sort="none">
+                            <button type="button" class="btn btn-link btn-sm p-0 text-dark text-decoration-none fw-semibold qm-sort-btn" data-qm-sort="created">
+                                Created <i class="bi bi-chevron-expand ms-1" data-qm-sort-icon="created"></i>
+                            </button>
+                        </th>
+                        <th aria-sort="descending">
+                            <button type="button" class="btn btn-link btn-sm p-0 text-dark text-decoration-none fw-semibold qm-sort-btn" data-qm-sort="updated">
+                                Updated <i class="bi bi-caret-down-fill ms-1" data-qm-sort-icon="updated"></i>
+                            </button>
+                        </th>
                         <th>Error / Response</th>
                         <th class="text-end">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="qmRows">
-                    <tr><td colspan="6" class="text-center text-muted py-4">Loading queue data...</td></tr>
+                    <tr><td colspan="7" class="text-center text-muted py-4">Loading queue data...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -149,6 +170,8 @@
 (function () {
     'use strict';
     const queueItemsById = new Map();
+    const queueSort = { field: 'updated', direction: 'desc' };
+    const sortableFields = new Set(['command', 'status', 'attempts', 'created', 'updated']);
 
     function activeDeviceId() {
         return window.getActiveDeviceId ? window.getActiveDeviceId() : '';
@@ -233,6 +256,104 @@
         }
     }
 
+    function defaultDirectionForSort(field) {
+        return field === 'command' || field === 'status' ? 'asc' : 'desc';
+    }
+
+    function parseTime(value) {
+        const time = Date.parse(String(value || '').replace(' ', 'T'));
+        return Number.isFinite(time) ? time : 0;
+    }
+
+    function compareValues(left, right, direction) {
+        if (left < right) return direction === 'asc' ? -1 : 1;
+        if (left > right) return direction === 'asc' ? 1 : -1;
+        return 0;
+    }
+
+    function compareQueueItems(left, right, field, direction) {
+        let comparison = 0;
+        switch (field) {
+            case 'command':
+                comparison = compareValues(
+                    String(left.command || '').toLowerCase(),
+                    String(right.command || '').toLowerCase(),
+                    direction
+                );
+                break;
+            case 'status':
+                comparison = compareValues(
+                    String(left.status || '').toLowerCase(),
+                    String(right.status || '').toLowerCase(),
+                    direction
+                );
+                break;
+            case 'attempts':
+                comparison = compareValues(Number(left.attemptCount || 0), Number(right.attemptCount || 0), direction);
+                if (comparison === 0) {
+                    comparison = compareValues(Number(left.maxAttempts || 0), Number(right.maxAttempts || 0), direction);
+                }
+                break;
+            case 'created':
+                comparison = compareValues(parseTime(left.createdAt), parseTime(right.createdAt), direction);
+                break;
+            case 'updated':
+            default:
+                comparison = compareValues(parseTime(left.updatedAt), parseTime(right.updatedAt), direction);
+                break;
+        }
+        if (comparison !== 0) return comparison;
+
+        comparison = compareValues(parseTime(left.updatedAt), parseTime(right.updatedAt), 'desc');
+        if (comparison !== 0) return comparison;
+        comparison = compareValues(parseTime(left.createdAt), parseTime(right.createdAt), 'desc');
+        if (comparison !== 0) return comparison;
+        return compareValues(String(left.id || ''), String(right.id || ''), 'desc');
+    }
+
+    function sortQueueItems(items) {
+        return [...items].sort((left, right) =>
+            compareQueueItems(left, right, queueSort.field, queueSort.direction)
+        );
+    }
+
+    function sortIconClass(direction) {
+        return direction === 'asc' ? 'bi-caret-up-fill' : 'bi-caret-down-fill';
+    }
+
+    function updateSortHeaders() {
+        document.querySelectorAll('.qm-sort-btn[data-qm-sort]').forEach((button) => {
+            const field = button.dataset.qmSort;
+            const active = field === queueSort.field;
+            const icon = button.querySelector('[data-qm-sort-icon]');
+            const th = button.closest('th');
+            const nextDirection = active
+                ? (queueSort.direction === 'asc' ? 'desc' : 'asc')
+                : defaultDirectionForSort(field);
+            button.classList.toggle('text-primary', active);
+            button.classList.toggle('text-dark', !active);
+            button.setAttribute('aria-label', `Sort by ${field} ${nextDirection === 'asc' ? 'ascending' : 'descending'}`);
+            if (icon) {
+                icon.className = `bi ${active ? sortIconClass(queueSort.direction) : 'bi-chevron-expand'} ms-1`;
+            }
+            if (th) {
+                th.setAttribute('aria-sort', active ? (queueSort.direction === 'asc' ? 'ascending' : 'descending') : 'none');
+            }
+        });
+    }
+
+    function setQueueSort(field) {
+        if (!sortableFields.has(field)) return;
+        if (queueSort.field === field) {
+            queueSort.direction = queueSort.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+            queueSort.field = field;
+            queueSort.direction = defaultDirectionForSort(field);
+        }
+        updateSortHeaders();
+        refreshQueueManager();
+    }
+
     function renderSummary(data) {
         const summary = data?.summary || {};
         const domains = data?.domains || {};
@@ -270,11 +391,11 @@
         const tbody = document.getElementById('qmRows');
         queueItemsById.clear();
         if (!Array.isArray(items) || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No queue rows for this filter.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No queue rows for this filter.</td></tr>';
             return;
         }
 
-        tbody.innerHTML = items.map((item) => {
+        tbody.innerHTML = sortQueueItems(items).map((item) => {
             queueItemsById.set(String(item.id), item);
             const errorText = item.lastError || shortJson(item.responsePayload) || shortJson(item.payload) || '-';
             const clearDisabled = item.status === 'dispatching';
@@ -289,6 +410,7 @@
                         <span class="badge ${badgeClass(item.status)}">${esc(item.status)}</span>
                     </td>
                     <td class="small">${Number(item.attemptCount || 0)} / ${Number(item.maxAttempts || 0)}</td>
+                    <td class="small text-muted">${esc(item.createdAt || '-')}</td>
                     <td class="small text-muted">${esc(item.updatedAt || item.createdAt || '-')}</td>
                     <td class="small">
                         <div class="text-break">${esc(errorText)}</div>
@@ -349,11 +471,16 @@
         }
 
         const { scope, status, limit } = selectedQueueFilters();
-        const url = `/api/queue?deviceId=${encodeURIComponent(activeDeviceId())}&scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(status)}&limit=${encodeURIComponent(limit)}`;
+        const url = `/api/queue?deviceId=${encodeURIComponent(activeDeviceId())}&scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(status)}&limit=${encodeURIComponent(limit)}&sort=${encodeURIComponent(queueSort.field)}&direction=${encodeURIComponent(queueSort.direction)}`;
         const response = await fetch(url, { cache: 'no-store' });
         const payload = await response.json();
         if (!payload.success) {
             throw new Error(payload.message || 'Failed to load queue');
+        }
+        if (sortableFields.has(payload.data?.sort)) {
+            queueSort.field = payload.data.sort;
+            queueSort.direction = payload.data.direction === 'asc' ? 'asc' : 'desc';
+            updateSortHeaders();
         }
         renderSummary(payload.data);
         renderRows(payload.data.items || []);
@@ -361,13 +488,19 @@
 
     window.refreshQueueManager = async function () {
         const tbody = document.getElementById('qmRows');
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">Loading queue data...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Loading queue data...</td></tr>';
         try {
             await loadQueue();
         } catch (error) {
-            tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger py-4">${esc(error.message || 'Queue load failed')}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="7" class="text-center text-danger py-4">${esc(error.message || 'Queue load failed')}</td></tr>`;
         }
     };
+
+    document.querySelectorAll('.qm-sort-btn[data-qm-sort]').forEach((button) => {
+        button.addEventListener('click', function () {
+            setQueueSort(this.dataset.qmSort);
+        });
+    });
 
     document.getElementById('qmRows')?.addEventListener('click', function (event) {
         if (event.target.closest('button, a, input, select')) return;
@@ -452,6 +585,7 @@
         refreshQueueManager();
     });
 
+    updateSortHeaders();
     refreshQueueManager();
 })();
 </script>
