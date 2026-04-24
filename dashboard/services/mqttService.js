@@ -1877,6 +1877,10 @@ class MQTTService extends EventEmitter {
 
         const smsId = Number(payload?.smsId || payload?.sms_id || 0);
         const messageId = String(row?.message_id || '').trim();
+        const baseMessageId = String(payload?.sms_base_message_id || '').trim() ||
+            (messageId ? messageId.replace(/_p\d+$/i, '') : '');
+        const partIndex = Number(payload?.sms_part_index || payload?.sms_part || 0);
+        const partCount = Number(payload?.sms_part_count || payload?.sms_parts_total || 0);
 
         if (!smsId && !messageId) {
             return null;
@@ -1884,8 +1888,49 @@ class MQTTService extends EventEmitter {
 
         return {
             smsId: Number.isFinite(smsId) && smsId > 0 ? smsId : null,
-            messageId: messageId || null
+            messageId: messageId || null,
+            baseMessageId: baseMessageId || messageId || null,
+            partIndex: Number.isFinite(partIndex) && partIndex > 0 ? partIndex : null,
+            partCount: Number.isFinite(partCount) && partCount > 1 ? partCount : null
         };
+    }
+
+    async _resolveSmsStatusFromQueueTracking(row, tracking, requestedStatus) {
+        if (requestedStatus !== 'sent' || !tracking?.partCount || !tracking.baseMessageId) {
+            return requestedStatus;
+        }
+
+        const db = this._db();
+        if (!this._hasDbMethods(db, ['all'])) {
+            return 'sending';
+        }
+
+        const rows = await db.all(
+            `SELECT message_id, status
+             FROM device_command_queue
+             WHERE device_id = ?
+               AND command IN ('send-sms', 'send-sms-multipart')
+               AND (message_id = ? OR message_id LIKE ?)`,
+            [row.device_id, tracking.baseMessageId, `${tracking.baseMessageId}_p%`]
+        );
+
+        const completedParts = new Set();
+        for (const candidate of rows || []) {
+            const candidateStatus = String(candidate?.status || '').trim().toLowerCase();
+            const candidateId = String(candidate?.message_id || '').trim();
+            const match = candidateId.match(/_p(\d+)$/i);
+            if (candidateStatus === 'completed' && match) {
+                completedParts.add(Number(match[1]));
+            }
+        }
+
+        for (let index = 1; index <= tracking.partCount; index++) {
+            if (!completedParts.has(index)) {
+                return 'sending';
+            }
+        }
+
+        return 'sent';
     }
 
     async _syncSmsStatusFromQueueRow(row, explicitStatus = null, explicitError = null) {
@@ -1893,7 +1938,8 @@ class MQTTService extends EventEmitter {
         const tracking = this._extractSmsTracking(row);
         if (!db || !tracking || !this._canDbRun(db)) return;
 
-        const nextStatus = explicitStatus || this._mapSmsStatusFromQueueState(row.status);
+        const requestedStatus = explicitStatus || this._mapSmsStatusFromQueueState(row.status);
+        const nextStatus = await this._resolveSmsStatusFromQueueTracking(row, tracking, requestedStatus);
         const nextError = nextStatus === 'failed' || nextStatus === 'ambiguous'
             ? (explicitError || row.last_error || `SMS ${nextStatus}`)
             : null;
@@ -1905,7 +1951,7 @@ class MQTTService extends EventEmitter {
                      error = ?,
                      external_id = COALESCE(external_id, ?)
                  WHERE id = ?`,
-                [nextStatus, nextError, tracking.messageId, tracking.smsId]
+                [nextStatus, nextError, tracking.baseMessageId || tracking.messageId, tracking.smsId]
             );
             return;
         }

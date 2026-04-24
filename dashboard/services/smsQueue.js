@@ -184,7 +184,10 @@ async function queueSmsForDelivery({
                         sim_slot: normalizedSimSlot,
                         sms_pdu: pduParts[index].pdu,
                         sms_pdu_encoding: pduParts[index].encoding,
-                        sms_status_report_requested: pduParts[index].statusReportRequested
+                        sms_status_report_requested: pduParts[index].statusReportRequested,
+                        sms_base_message_id: messageId,
+                        sms_part_index: index + 1,
+                        sms_part_count: pduParts.length
                     },
                     false,
                     smsTimeoutMs,

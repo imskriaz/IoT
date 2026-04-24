@@ -1392,6 +1392,66 @@ describe('mqttService durable SMS queue', () => {
         );
     });
 
+    test('multipart SMS queue parts keep the logical SMS sending until every part completes', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 1 }),
+            all: jest.fn().mockResolvedValue([
+                { message_id: 'sms_multi_p1', status: 'completed' },
+                { message_id: 'sms_multi_p2', status: 'waiting_response' }
+            ])
+        };
+        global.app.locals.db = db;
+
+        await svc._syncSmsStatusFromQueueRow({
+            id: 'queue-part-1',
+            device_id: 'device-1',
+            command: 'send-sms',
+            status: 'completed',
+            message_id: 'sms_multi_p1',
+            payload: JSON.stringify({
+                smsId: 88,
+                sms_base_message_id: 'sms_multi',
+                sms_part_index: 1,
+                sms_part_count: 2
+            })
+        }, 'sent', null);
+
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('UPDATE sms'),
+            ['sending', null, 'sms_multi', 88]
+        );
+    });
+
+    test('multipart SMS queue parts mark the logical SMS sent after all parts complete', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 1 }),
+            all: jest.fn().mockResolvedValue([
+                { message_id: 'sms_multi_p1', status: 'completed' },
+                { message_id: 'sms_multi_p2', status: 'completed' }
+            ])
+        };
+        global.app.locals.db = db;
+
+        await svc._syncSmsStatusFromQueueRow({
+            id: 'queue-part-2',
+            device_id: 'device-1',
+            command: 'send-sms',
+            status: 'completed',
+            message_id: 'sms_multi_p2',
+            payload: JSON.stringify({
+                smsId: 88,
+                sms_base_message_id: 'sms_multi',
+                sms_part_index: 2,
+                sms_part_count: 2
+            })
+        }, 'sent', null);
+
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('UPDATE sms'),
+            ['sent', null, 'sms_multi', 88]
+        );
+    });
+
     test('late action/result can settle an ambiguous SMS row by message id', async () => {
         global.app.locals.db = {
             get: jest.fn().mockResolvedValue({
