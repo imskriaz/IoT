@@ -1272,8 +1272,8 @@ class MQTTHandlers {
                 if (db && messageId) {
                     await db.run(
                         `UPDATE sms
-                         SET status = ?,
-                             error = ?
+                         SET status = CASE WHEN status = 'delivered' THEN status ELSE ? END,
+                             error = CASE WHEN status = 'delivered' THEN NULL ELSE ? END
                          WHERE device_id = ?
                            AND external_id = ?`,
                         [
@@ -1378,6 +1378,14 @@ class MQTTHandlers {
                     const inserted = Number(result?.changes || 0) > 0;
                     if (!inserted) {
                         logger.info(`Duplicate incoming SMS ignored from ${decodedFrom}`);
+                        if (!isOutgoing && !data.sync) {
+                            await this.reconcileOutgoingSmsFromIncoming(deviceId, {
+                                from: decodedFrom,
+                                message: decodedMessage,
+                                timestamp: smsTimestamp,
+                                simSlot: simScope.simSlot
+                            });
+                        }
                         return;
                     }
 
@@ -1419,13 +1427,11 @@ class MQTTHandlers {
                     });
 
                     if (!isOutgoing && !data.sync) {
-                        this.reconcileOutgoingSmsFromIncoming(deviceId, {
+                        await this.reconcileOutgoingSmsFromIncoming(deviceId, {
                             from: decodedFrom,
                             message: decodedMessage,
                             timestamp: smsTimestamp,
                             simSlot: simScope.simSlot
-                        }).catch((reconcileError) => {
-                            logger.error('Error reconciling outgoing SMS from incoming evidence:', reconcileError);
                         });
                         // Fire notification + webhooks (non-blocking)
                         notificationService.notifySms(fromNumber, decodedMessage).catch(() => {});

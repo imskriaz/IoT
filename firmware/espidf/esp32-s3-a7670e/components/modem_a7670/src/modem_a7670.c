@@ -1225,6 +1225,8 @@ static void modem_a7670_parse_line_locked(const char *line) {
         char recv_payload[CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN] = {0};
 
         ESP_LOGI(TAG, "CMQTTRECV raw=%s", line);
+        s_mqtt_service_started = true;
+        s_mqtt_connected = true;
         if (modem_a7670_parse_cmqttrecv_line(line, recv_topic, sizeof(recv_topic), recv_payload, sizeof(recv_payload))) {
             modem_a7670_queue_mqtt_message_locked(recv_topic, recv_payload);
         } else {
@@ -2649,11 +2651,13 @@ esp_err_t modem_a7670_mqtt_connect(
     }
 
     for (int attempt = 0; attempt < 2; ++attempt) {
-        /* Vendor docs require CMQTTSTART before other MQTT commands. In
-         * practice, stale service state on the modem can make a fresh START
-         * return plain ERROR, so reset the CMQTT state before each attempt. */
-        (void)modem_a7670_mqtt_shutdown_locked(shutdown_response, sizeof(shutdown_response), shutdown_timeout_ms);
-        vTaskDelay(pdMS_TO_TICKS(attempt == 0 ? 500 : 800));
+        if (attempt > 0) {
+            /* Only tear down after a real START failure. If a command publish
+             * arrives during reconnect, +CMQTTRECV proves the existing session
+             * is still useful and must not be destroyed mid-frame. */
+            (void)modem_a7670_mqtt_shutdown_locked(shutdown_response, sizeof(shutdown_response), shutdown_timeout_ms);
+            vTaskDelay(pdMS_TO_TICKS(800));
+        }
         (void)modem_a7670_read_until_quiet_locked(shutdown_response, sizeof(shutdown_response), 250);
 
         ESP_LOGI(TAG, "mqtt connect using CMQTT host=%s port=%u attempt=%d", host, (unsigned)port, attempt + 1);
@@ -2674,6 +2678,11 @@ esp_err_t modem_a7670_mqtt_connect(
         if (err == ESP_OK && modem_a7670_response_has_mqtt_start_ready(response)) {
             break;
         }
+        if (s_mqtt_connected) {
+            snprintf(response, response_len, "%s", "mqtt_already_connected");
+            xSemaphoreGive(s_lock);
+            return ESP_OK;
+        }
         if (attempt == 0) {
             ESP_LOGW(
                 TAG,
@@ -2683,6 +2692,11 @@ esp_err_t modem_a7670_mqtt_connect(
                 response[0] ? response : "<empty>"
             );
         }
+    }
+    if (s_mqtt_connected) {
+        snprintf(response, response_len, "%s", "mqtt_already_connected");
+        xSemaphoreGive(s_lock);
+        return ESP_OK;
     }
     if (err != ESP_OK || !modem_a7670_response_has_mqtt_start_ready(response)) {
         ESP_LOGW(
