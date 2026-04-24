@@ -80,7 +80,7 @@ describe('mqttService firmware compatibility', () => {
         delete global.io;
     });
 
-    test('publishCommand includes firmware-compatible SMS fields', async () => {
+    test('publishCommand sends only runtime SMS fields to firmware', async () => {
         await svc.publishCommand(
             'device-1',
             'send-sms',
@@ -98,10 +98,10 @@ describe('mqttService firmware compatibility', () => {
         expect(payload.text).toBe('hello from test');
         expect(payload.action_id).toMatch(/^sms_/);
         expect(payload.timeout).toBe(5000);
-        expect(payload.sms_encoding).toBe('gsm7');
         expect(payload.sms_transport_encoding).toBe('ira');
         expect(payload.sms_parts).toBe(1);
-        expect(payload.sms_multipart).toBe(false);
+        expect(payload.sms_encoding).toBeUndefined();
+        expect(payload.sms_multipart).toBeUndefined();
         expect(payload.messageId).toBeUndefined();
     });
 
@@ -151,6 +151,10 @@ describe('mqttService firmware compatibility', () => {
         expect(payload.command).toBe('send_sms_multipart');
         expect(payload.action_id).toMatch(/^sms_/);
         expect(payload.timeout).toBe(5000);
+        expect(payload.sms_transport_encoding).toBe('ira');
+        expect(payload.sms_parts).toBe(2);
+        expect(payload.sms_encoding).toBeUndefined();
+        expect(payload.sms_multipart).toBeUndefined();
         expect(payload.messageId).toBeUndefined();
     });
 

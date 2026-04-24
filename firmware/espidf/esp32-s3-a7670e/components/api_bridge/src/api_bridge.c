@@ -1229,8 +1229,6 @@ static unified_action_response_t api_bridge_execute_send_sms(
     unified_action_response_t response = {0};
     sms_service_send_options_t send_options = {0};
     bool force_multipart = false;
-    char escaped_encoding[32] = {0};
-    char escaped_transport_encoding[32] = {0};
     const bool has_dashboard_pdu = request && request->sms_pdu[0] != '\0' && request->sms_pdu_length > 0U;
 
     if (request) {
@@ -1273,32 +1271,8 @@ static unified_action_response_t api_bridge_execute_send_sms(
         response.action = *action;
     }
 
-    if (payload && payload_len > 0U && request) {
-        api_bridge_escape_json(
-            request->sms_encoding[0] ? request->sms_encoding : "auto",
-            escaped_encoding,
-            sizeof(escaped_encoding)
-        );
-        api_bridge_escape_json(
-            request->sms_transport_encoding[0] ? request->sms_transport_encoding : "auto",
-            escaped_transport_encoding,
-            sizeof(escaped_transport_encoding)
-        );
-        if (snprintf(
-                payload,
-                payload_len,
-                "{\"sms_encoding\":\"%s\",\"sms_transport_encoding\":\"%s\",\"sms_parts\":%u,\"sms_units\":%u,\"sms_utf8_bytes\":%u,\"sms_characters\":%u,\"sms_multipart\":%s,\"sms_pdu_length\":%u,\"sms_pdu\":%s}",
-                escaped_encoding,
-                escaped_transport_encoding,
-                (unsigned int)request->sms_parts,
-                (unsigned int)request->sms_units,
-                (unsigned int)request->sms_utf8_bytes,
-                (unsigned int)request->sms_characters,
-                force_multipart ? "true" : "false",
-                (unsigned int)(has_dashboard_pdu ? request->sms_pdu_length : 0U),
-                has_dashboard_pdu ? "true" : "false") >= (int)payload_len) {
-            payload[0] = '\0';
-        }
+    if (payload && payload_len > 0U) {
+        payload[0] = '\0';
     }
 
     return response;

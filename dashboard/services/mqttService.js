@@ -498,7 +498,12 @@ class MQTTService extends EventEmitter {
             } else {
                 message.number = number;
                 message.text = text;
-                Object.assign(message, smsMetadata);
+                if (smsMetadata.sms_transport_encoding) {
+                    message.sms_transport_encoding = smsMetadata.sms_transport_encoding;
+                }
+                if (Number.isFinite(Number(smsMetadata.sms_parts)) && Number(smsMetadata.sms_parts) > 0) {
+                    message.sms_parts = Number(smsMetadata.sms_parts);
+                }
             }
             if (Number.isFinite(Number(payload.timeout)) && Number(payload.timeout) > 0) {
                 message.timeout = Number(payload.timeout);
