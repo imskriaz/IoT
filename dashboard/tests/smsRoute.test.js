@@ -111,7 +111,7 @@ describe('sms route queue-first delivery', () => {
                 source: 'dashboard-sms',
                 userId: 7,
                 priority: 50,
-                messageId: expect.stringMatching(/^send-sms_/)
+                messageId: expect.stringMatching(/^sms_/)
             })
         );
     });
@@ -165,7 +165,7 @@ describe('sms route queue-first delivery', () => {
             false,
             75000,
             expect.objectContaining({
-                messageId: expect.stringMatching(/^send-sms-multipart_/)
+                messageId: expect.stringMatching(/^sms_/)
             })
         );
     });
@@ -222,7 +222,7 @@ describe('sms route queue-first delivery', () => {
             false,
             45000,
             expect.objectContaining({
-                messageId: expect.stringMatching(/^send-sms_/)
+                messageId: expect.stringMatching(/^sms_/)
             })
         );
     });
@@ -260,23 +260,39 @@ describe('sms route queue-first delivery', () => {
             queued: true,
             id: 72
         }));
-        expect(global.mqttService.publishCommand).toHaveBeenCalledWith(
+        expect(global.mqttService.publishCommand).toHaveBeenCalledTimes(2);
+        expect(global.mqttService.publishCommand).toHaveBeenNthCalledWith(
+            1,
             'device-1',
-            'send-sms-multipart',
+            'send-sms',
             expect.objectContaining({
                 to: '+8801555123456',
-                message: banglaMultipartMessage,
+                message: '',
                 smsId: 72,
-                sms_encoding: 'unicode',
-                sms_transport_encoding: 'ucs2',
-                sms_parts: 2,
-                sms_multipart: true,
-                timeout: 60000
+                sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
+                sms_pdu_encoding: 'ucs2'
             }),
             false,
             60000,
             expect.objectContaining({
-                messageId: expect.stringMatching(/^send-sms-multipart_/)
+                messageId: expect.stringMatching(/^sms_.*_p1$/)
+            })
+        );
+        expect(global.mqttService.publishCommand).toHaveBeenNthCalledWith(
+            2,
+            'device-1',
+            'send-sms',
+            expect.objectContaining({
+                to: '+8801555123456',
+                message: '',
+                smsId: 72,
+                sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
+                sms_pdu_encoding: 'ucs2'
+            }),
+            false,
+            60000,
+            expect.objectContaining({
+                messageId: expect.stringMatching(/^sms_.*_p2$/)
             })
         );
     });

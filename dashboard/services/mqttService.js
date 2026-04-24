@@ -11,6 +11,8 @@ const {
 const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
 const { normalizeSmsDeliveryPayload, normalizeSmsDeliveryReport } = require('../utils/smsDeliveryReports');
 
+const FIRMWARE_ACTION_ID_MAX_LENGTH = 31;
+
 function hasEnv(name) {
     return Object.prototype.hasOwnProperty.call(process.env, name);
 }
@@ -476,19 +478,20 @@ class MQTTService extends EventEmitter {
         if (normalizedCommand === 'send-sms' || normalizedCommand === 'send-sms-multipart') {
             const text = String(payload.message || payload.text || '');
             const number = String(payload.to || payload.number || '').trim();
+            const payloadSmsMetadata = Object.fromEntries(
+                Object.entries(payload || {}).filter(([key]) => key.startsWith('sms_'))
+            );
+            const payloadProvidesPdu = typeof payloadSmsMetadata.sms_pdu === 'string' &&
+                payloadSmsMetadata.sms_pdu.trim();
             const smsMetadata = {
                 ...buildSmsTransportMetadataForRecipient(number, text),
-                ...Object.fromEntries(
-                    Object.entries(payload || {}).filter(([key]) => key.startsWith('sms_'))
-                )
+                ...payloadSmsMetadata
             };
+            const metadataPduIsMultipart = Number(smsMetadata.sms_pdu_count) > 1 ||
+                (typeof smsMetadata.sms_pdu === 'string' && smsMetadata.sms_pdu.includes(';'));
             const hasDashboardPdu = typeof smsMetadata.sms_pdu === 'string' &&
                 smsMetadata.sms_pdu.trim() &&
-                (
-                    (Number.isFinite(Number(smsMetadata.sms_pdu_length)) && Number(smsMetadata.sms_pdu_length) > 0) ||
-                    Number(smsMetadata.sms_pdu_count) > 1 ||
-                    smsMetadata.sms_pdu.includes(';')
-                );
+                (payloadProvidesPdu || !metadataPduIsMultipart);
             const message = {
                 action_id: messageId,
                 command: normalizedCommand === 'send-sms-multipart' ? 'send_sms_multipart' : 'send_sms'
@@ -498,8 +501,9 @@ class MQTTService extends EventEmitter {
                 if (Number.isFinite(Number(smsMetadata.sms_pdu_length)) && Number(smsMetadata.sms_pdu_length) > 0) {
                     message.sms_pdu_length = Number(smsMetadata.sms_pdu_length);
                 }
-                if (Number.isFinite(Number(smsMetadata.sms_pdu_count)) && Number(smsMetadata.sms_pdu_count) > 1) {
-                    message.sms_parts = Number(smsMetadata.sms_pdu_count);
+                const pduCount = Number(smsMetadata.sms_pdu_count);
+                if (Number.isFinite(pduCount) && pduCount > 1 && normalizedCommand !== 'send-sms-multipart') {
+                    message.sms_parts = pduCount;
                 }
             } else {
                 message.number = number;
@@ -511,7 +515,7 @@ class MQTTService extends EventEmitter {
                     message.sms_parts = Number(smsMetadata.sms_parts);
                 }
             }
-            if (Number.isFinite(Number(payload.timeout)) && Number(payload.timeout) > 0) {
+            if (!hasDashboardPdu && Number.isFinite(Number(payload.timeout)) && Number(payload.timeout) > 0) {
                 message.timeout = Number(payload.timeout);
             }
             if (payload.sim_slot !== null && payload.sim_slot !== undefined && payload.sim_slot !== '') {
@@ -1224,6 +1228,20 @@ class MQTTService extends EventEmitter {
         return `${prefix}_${stamp}_${nonce}`;
     }
 
+    _normalizeCommandMessageId(command, value) {
+        const raw = String(value || '').trim() || this._generateCommandMessageId(command);
+        if (raw.length <= FIRMWARE_ACTION_ID_MAX_LENGTH) {
+            return raw;
+        }
+
+        const rawCommand = String(command || '').trim().toLowerCase();
+        const prefix = rawCommand === 'send-sms' || rawCommand === 'send-sms-multipart'
+            ? 'sms'
+            : (rawCommand.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 10) || 'cmd');
+        const digest = crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12);
+        return `${prefix}_${digest}`.slice(0, FIRMWARE_ACTION_ID_MAX_LENGTH);
+    }
+
     _generatePersistentQueueId() {
         return `dcq_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     }
@@ -1289,6 +1307,30 @@ class MQTTService extends EventEmitter {
         }
 
         return !await this._isAndroidDevice(row.device_id);
+    }
+
+    async _hasActivePersistentCommandInDomain(deviceId, command, excludeId = null) {
+        const normalizedDeviceId = this._normalizeDeviceId(deviceId);
+        const domain = this._commandDomain(command);
+        const db = this._db();
+        if (!normalizedDeviceId || domain !== 'telephony' || !this._hasDbMethods(db, ['all'])) {
+            return false;
+        }
+
+        const rows = await db.all(
+            `SELECT id, command
+             FROM device_command_queue
+             WHERE device_id = ?
+               AND status IN ('dispatching', 'waiting_response')`,
+            [normalizedDeviceId]
+        );
+
+        return (rows || []).some((row) => {
+            if (excludeId && row.id === excludeId) {
+                return false;
+            }
+            return this._commandDomain(row.command) === domain;
+        });
     }
 
     _commandDomain(command, options = {}) {
@@ -1624,7 +1666,7 @@ class MQTTService extends EventEmitter {
             normalizedPayload.timeout = Number(timeout || 30000);
         }
         const topic = `device/${deviceId}/command/${command}`;
-        const messageId = options.messageId || this._generateCommandMessageId(command);
+        const messageId = this._normalizeCommandMessageId(command, options.messageId);
         const compatibilityResponse = this._maybeHandleCompatibilityCommand(deviceId, command, messageId, options);
         const message = this._buildFirmwareCompatibleMessage(command, normalizedPayload, messageId, options.source || 'dashboard');
 
@@ -2353,6 +2395,7 @@ class MQTTService extends EventEmitter {
                 const queueKey = this._normalizeDeviceId(row.device_id);
                 if (!queueKey || scheduledDevices.has(queueKey)) continue;
                 if (!this.connected) continue;
+                if (await this._hasActivePersistentCommandInDomain(queueKey, row.command, row.id)) continue;
                 scheduledDevices.add(queueKey);
                 this._processPersistentQueueRow(row);
             }
@@ -2389,7 +2432,7 @@ class MQTTService extends EventEmitter {
 
         const normalizedPayload = normalizeMqttContractPayload(payload);
         const queueId = this._generatePersistentQueueId();
-        const messageId = options.messageId || this._generateCommandMessageId(command);
+        const messageId = this._normalizeCommandMessageId(command, options.messageId);
         const requiresResponse = this._requiresDurableAck(command, waitForResponse, options);
         const nowSql = this._sqlTimestamp();
 
@@ -2537,7 +2580,7 @@ class MQTTService extends EventEmitter {
         }
 
         const topic = `device/${normalizedDeviceId}/command/${command}`;
-        const messageId = options?.messageId || this._generateCommandMessageId(command);
+        const messageId = this._normalizeCommandMessageId(command, options?.messageId);
         const compatibilityResponse = this._maybeHandleCompatibilityCommand(normalizedDeviceId, command, messageId, options);
 
         const executePublish = async () => {

@@ -132,7 +132,13 @@ function buildSmsSubmitPdus(number, text, options = {}) {
         return [buildSmsSubmitPdu(number, text, options)];
     }
 
-    const segments = segmentUcs2Text(text, 67);
+    const requestedSegmentSize = Number(options.segmentSize);
+    const segmentSize = Number.isInteger(requestedSegmentSize) &&
+        requestedSegmentSize > 0 &&
+        requestedSegmentSize <= 67
+        ? requestedSegmentSize
+        : 50;
+    const segments = segmentUcs2Text(text, segmentSize);
     const reference = Number.isInteger(options.concatReference)
         ? options.concatReference
         : Math.floor(Math.random() * 256);

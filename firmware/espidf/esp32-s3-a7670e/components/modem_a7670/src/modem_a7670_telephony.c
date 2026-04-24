@@ -1016,7 +1016,7 @@ static esp_err_t modem_a7670_consume_concat_sms_indexes_locked(
     size_t response_len,
     int64_t deadline_us
 ) {
-    unified_sms_payload_t segment = {0};
+    unified_sms_payload_t *segment = NULL;
     esp_err_t err = ESP_OK;
     uint32_t remaining_timeout_ms = 0U;
 
@@ -1024,23 +1024,29 @@ static esp_err_t modem_a7670_consume_concat_sms_indexes_locked(
         return ESP_ERR_INVALID_ARG;
     }
 
+    segment = modem_a7670_sms_alloc_zeroed(sizeof(*segment));
+    if (!segment) {
+        return ESP_ERR_NO_MEM;
+    }
+
     memset(out_payload, 0, sizeof(*out_payload));
     for (size_t i = 0U; i < index_count; ++i) {
-        memset(&segment, 0, sizeof(segment));
-        err = modem_a7670_read_sms_locked(indexes[i], &segment, response, response_len, deadline_us, false);
+        memset(segment, 0, sizeof(*segment));
+        err = modem_a7670_read_sms_locked(indexes[i], segment, response, response_len, deadline_us, false);
         if (err != ESP_OK) {
-            return err;
+            goto cleanup;
         }
 
         if (i == 0U) {
-            *out_payload = segment;
+            *out_payload = *segment;
             out_payload->text[0] = '\0';
         }
-        if (strlcat(out_payload->text, segment.text, sizeof(out_payload->text)) >= sizeof(out_payload->text)) {
-            return ESP_ERR_INVALID_SIZE;
+        if (strlcat(out_payload->text, segment->text, sizeof(out_payload->text)) >= sizeof(out_payload->text)) {
+            err = ESP_ERR_INVALID_SIZE;
+            goto cleanup;
         }
         out_payload->sim_slot = 0U;
-        out_payload->timestamp_ms = segment.timestamp_ms;
+        out_payload->timestamp_ms = segment->timestamp_ms;
         out_payload->outgoing = false;
         snprintf(out_payload->detail, sizeof(out_payload->detail), "%s", "incoming_sms_concat");
     }
@@ -1048,16 +1054,21 @@ static esp_err_t modem_a7670_consume_concat_sms_indexes_locked(
     for (size_t i = 0U; i < index_count; ++i) {
         remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
         if (remaining_timeout_ms == 0U) {
-            return ESP_ERR_TIMEOUT;
+            err = ESP_ERR_TIMEOUT;
+            goto cleanup;
         }
         err = modem_a7670_delete_sms_locked(indexes[i], response, response_len, remaining_timeout_ms);
         if (err != ESP_OK) {
-            return err;
+            goto cleanup;
         }
     }
 
     modem_a7670_drop_sms_indexes_locked(indexes, index_count);
-    return ESP_OK;
+    err = ESP_OK;
+
+cleanup:
+    modem_a7670_sms_free(segment);
+    return err;
 }
 
 static esp_err_t modem_a7670_delete_sms_locked(

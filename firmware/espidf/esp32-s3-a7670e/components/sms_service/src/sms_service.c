@@ -240,9 +240,11 @@ static unified_action_response_t sms_service_send_with_transport(
     }
 
     text_len = text ? strlen(text) : 0U;
-    requires_unicode_timeout = options && options->use_ucs2_present
+    requires_unicode_timeout = has_dashboard_pdu
+        ? true
+        : (options && options->use_ucs2_present
         ? options->use_ucs2
-        : sms_service_requires_unicode_timeout(text);
+        : sms_service_requires_unicode_timeout(text));
     effective_timeout_ms = sms_service_effective_send_timeout_ms(
         text_len,
         requires_unicode_timeout,
@@ -291,16 +293,8 @@ static unified_action_response_t sms_service_send_with_transport(
         );
     }
 
-    err = force_multipart
-        ? modem_a7670_send_sms_multipart_with_options(
-            number,
-            text,
-            modem_response,
-            SMS_SERVICE_MODEM_RESPONSE_LEN,
-            effective_timeout_ms,
-            modem_options_ptr
-        )
-        : modem_a7670_send_sms_with_options(
+    if (has_dashboard_pdu) {
+        err = modem_a7670_send_sms_with_options(
             number,
             text,
             modem_response,
@@ -308,6 +302,25 @@ static unified_action_response_t sms_service_send_with_transport(
             effective_timeout_ms,
             modem_options_ptr
         );
+    } else if (force_multipart) {
+        err = modem_a7670_send_sms_multipart_with_options(
+            number,
+            text,
+            modem_response,
+            SMS_SERVICE_MODEM_RESPONSE_LEN,
+            effective_timeout_ms,
+            modem_options_ptr
+        );
+    } else {
+        err = modem_a7670_send_sms_with_options(
+            number,
+            text,
+            modem_response,
+            SMS_SERVICE_MODEM_RESPONSE_LEN,
+            effective_timeout_ms,
+            modem_options_ptr
+        );
+    }
     if (err != ESP_OK) {
         printf(
             "sms_service_send_failed err=%s response=%s\n",
@@ -416,8 +429,8 @@ static void sms_service_handle_modem_sms_event(void) {
 
 static void sms_service_task(void *arg) {
     modem_a7670_status_t modem_status = {0};
-    unified_sms_payload_t payload = {0};
-    unified_sms_delivery_payload_t delivery = {0};
+    unified_sms_payload_t *payload = NULL;
+    unified_sms_delivery_payload_t *delivery = NULL;
     int sms_index = -1;
     bool event_consumed = false;
     bool saw_event = false;
@@ -435,6 +448,16 @@ static void sms_service_task(void *arg) {
     const char *cycle_health_detail = "running";
 
     (void)arg;
+
+    payload = sms_service_alloc_zeroed(sizeof(*payload));
+    delivery = sms_service_alloc_zeroed(sizeof(*delivery));
+    if (!payload || !delivery) {
+        ESP_LOGE(TAG, "sms task scratch allocation failed");
+        sms_service_free(payload);
+        sms_service_free(delivery);
+        vTaskDelete(NULL);
+        return;
+    }
 
     s_task_handle = xTaskGetCurrentTaskHandle();
     ESP_ERROR_CHECK(task_registry_register_expected("sms_task"));
@@ -471,21 +494,24 @@ static void sms_service_task(void *arg) {
         } else {
             while (modem_a7670_pop_sms_index(&sms_index)) {
                 saw_event = true;
-                if (modem_a7670_consume_sms_index(sms_index, &payload, event_timeout_ms) == ESP_OK) {
+                memset(payload, 0, sizeof(*payload));
+                if (modem_a7670_consume_sms_index(sms_index, payload, event_timeout_ms) == ESP_OK) {
                     event_consumed = true;
                     last_urc_success_ms = now_ms;
-                    sms_service_emit_incoming(&payload, "incoming_sms_urc");
+                    sms_service_emit_incoming(payload, "incoming_sms_urc");
                     cycle_detail = "incoming_sms";
                 }
             }
 
-            while (modem_a7670_pop_sms_delivery(&delivery)) {
+            memset(delivery, 0, sizeof(*delivery));
+            while (modem_a7670_pop_sms_delivery(delivery)) {
                 saw_event = true;
                 event_consumed = true;
                 last_urc_success_ms = now_ms;
-                (void)mqtt_mgr_publish_sms_delivery(&delivery);
+                (void)mqtt_mgr_publish_sms_delivery(delivery);
                 (void)modem_a7670_acknowledge_new_message(event_timeout_ms);
                 cycle_detail = "sms_delivery_report";
+                memset(delivery, 0, sizeof(*delivery));
             }
 
             if (!event_consumed &&
@@ -495,11 +521,13 @@ static void sms_service_task(void *arg) {
                  last_fallback_poll_ms == 0U ||
                  (now_ms - last_fallback_poll_ms) >= SMS_SERVICE_FALLBACK_POLL_INTERVAL_MS)) {
                 last_fallback_poll_ms = now_ms;
-                if (modem_a7670_consume_pending_sms(&payload, background_timeout_ms) == ESP_OK) {
+                memset(payload, 0, sizeof(*payload));
+                if (modem_a7670_consume_pending_sms(payload, background_timeout_ms) == ESP_OK) {
                     do {
-                        sms_service_emit_incoming(&payload, "incoming_sms_fallback");
+                        sms_service_emit_incoming(payload, "incoming_sms_fallback");
                         cycle_detail = "incoming_sms_fallback";
-                    } while (modem_a7670_consume_pending_sms(&payload, background_timeout_ms) == ESP_OK);
+                        memset(payload, 0, sizeof(*payload));
+                    } while (modem_a7670_consume_pending_sms(payload, background_timeout_ms) == ESP_OK);
                 }
             }
 

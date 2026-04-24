@@ -1245,9 +1245,27 @@ static void modem_a7670_parse_line_locked(const char *line) {
 
     if (strncmp(line, "+CMQTTRXEND:", 11) == 0) {
         ESP_LOGI(TAG, "CMQTTRXEND topic=%s payload_len=%u", s_mqtt_rx_topic, (unsigned)s_mqtt_rx_payload_bytes);
-        if (s_mqtt_rx_payload_bytes > 0U) {
+        const bool topic_complete = s_mqtt_rx_expected_topic_len == 0U ||
+            s_mqtt_rx_topic_bytes >= s_mqtt_rx_expected_topic_len;
+        const bool payload_complete = s_mqtt_rx_expected_payload_len == 0U ||
+            s_mqtt_rx_payload_bytes >= s_mqtt_rx_expected_payload_len;
+
+        if (s_mqtt_rx_payload_bytes > 0U && topic_complete && payload_complete) {
             modem_a7670_queue_completed_mqtt_rx_locked();
         } else {
+            if (s_mqtt_rx_topic[0] != '\0' ||
+                s_mqtt_rx_payload[0] != '\0' ||
+                s_mqtt_rx_expected_topic_len > 0U ||
+                s_mqtt_rx_expected_payload_len > 0U) {
+                ESP_LOGW(
+                    TAG,
+                    "dropping incomplete CMQTTRX frame topic=%u/%u payload=%u/%u",
+                    (unsigned)s_mqtt_rx_topic_bytes,
+                    (unsigned)s_mqtt_rx_expected_topic_len,
+                    (unsigned)s_mqtt_rx_payload_bytes,
+                    (unsigned)s_mqtt_rx_expected_payload_len
+                );
+            }
             modem_a7670_reset_mqtt_rx_locked();
         }
         return;

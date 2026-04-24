@@ -4,10 +4,12 @@ const { attachSmsToConversation } = require('./smsConversations');
 const { assertSmsWithinPackageLimit } = require('./packageService');
 const { assertUserSmsWithinLimits } = require('./userAccessService');
 const { resolveSmsCommandForRecipient } = require('../utils/smsLimits');
+const { buildSmsSubmitPdus } = require('../utils/smsPdu');
 
 function buildSmsCommandMessageId(command = 'send-sms') {
     const normalized = String(command || 'send-sms').trim().toLowerCase();
-    return `${normalized}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const prefix = normalized === 'send-sms' || normalized === 'send-sms-multipart' ? 'sms' : 'cmd';
+    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
 function normalizeQueuedSmsRowStatus(queueResult) {
@@ -157,28 +159,66 @@ async function queueSmsForDelivery({
     }
 
     try {
-        const queueResult = await mqttService.publishCommand(
-            deviceId,
-            smsCommand,
-            {
-                to: formattedNumber,
-                message,
-                smsId,
-                sim_slot: normalizedSimSlot,
-                timeout: smsTimeoutMs,
-                ...smsTransport
-            },
-            false,
-            smsTimeoutMs,
-            {
-                source: `${source}-sms`,
-                userId,
-                messageId,
-                priority: 50
-            }
-        );
+        const pduSegments = smsTransport.sms_transport_encoding === 'ucs2' &&
+            Number(smsTransport.sms_parts) > 1
+            ? buildSmsSubmitPdus(formattedNumber, message, {
+                requestStatusReport: true,
+                segmentSize: 50
+            }).map((pdu) => pdu.pdu)
+            : [];
+        const queueResults = [];
 
-        const smsStatus = normalizeQueuedSmsRowStatus(queueResult);
+        if (pduSegments.length > 1) {
+            for (let index = 0; index < pduSegments.length; index++) {
+                queueResults.push(await mqttService.publishCommand(
+                    deviceId,
+                    'send-sms',
+                    {
+                        to: formattedNumber,
+                        message: '',
+                        smsId,
+                        sim_slot: normalizedSimSlot,
+                        sms_pdu: pduSegments[index],
+                        sms_pdu_encoding: smsTransport.sms_pdu_encoding || 'ucs2',
+                        sms_status_report_requested: smsTransport.sms_status_report_requested
+                    },
+                    false,
+                    smsTimeoutMs,
+                    {
+                        source: `${source}-sms`,
+                        userId,
+                        messageId: `${messageId}_p${index + 1}`,
+                        priority: 50 + index
+                    }
+                ));
+            }
+        } else {
+            queueResults.push(await mqttService.publishCommand(
+                deviceId,
+                smsCommand,
+                {
+                    to: formattedNumber,
+                    message,
+                    smsId,
+                    sim_slot: normalizedSimSlot,
+                    timeout: smsTimeoutMs,
+                    ...smsTransport
+                },
+                false,
+                smsTimeoutMs,
+                {
+                    source: `${source}-sms`,
+                    userId,
+                    messageId,
+                    priority: 50
+                }
+            ));
+        }
+
+        const queueResult = queueResults[0] || {};
+        const smsStatus = queueResults.some((result) => normalizeQueuedSmsRowStatus(result) === 'sending')
+            ? 'sending'
+            : normalizeQueuedSmsRowStatus(queueResult);
         await db.run(
             'UPDATE sms SET status = ?, error = NULL WHERE id = ?',
             [smsStatus, smsId]
@@ -194,7 +234,9 @@ async function queueSmsForDelivery({
             command: smsCommand,
             simSlot: normalizedSimSlot,
             sms: smsTransport,
+            segmentedPdu: pduSegments.length > 1,
             queueId: queueResult?.queueId || null,
+            queueIds: queueResults.map((result) => result?.queueId).filter(Boolean),
             messageId
         };
 

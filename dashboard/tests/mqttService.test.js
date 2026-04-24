@@ -132,6 +132,24 @@ describe('mqttService firmware compatibility', () => {
         expect(payload.sms_characters).toBeUndefined();
     });
 
+    test('publishCommand keeps SMS action IDs within the firmware correlation buffer', async () => {
+        await svc.publishCommand(
+            'device-1',
+            'send-sms',
+            { to: '+15551234567', message: 'short id test' },
+            false,
+            5000,
+            {
+                skipPersistentQueue: true,
+                messageId: 'send-sms_REG0424104723_1777027643086'
+            }
+        );
+
+        const payload = JSON.parse(svc.client.publish.mock.calls[0][1]);
+        expect(payload.action_id.length).toBeLessThanOrEqual(31);
+        expect(payload.action_id).toMatch(/^sms_[0-9a-f]{12}$/);
+    });
+
     test('publishCommand includes firmware-compatible multipart SMS fields', async () => {
         await svc.publishCommand(
             'device-1',
@@ -158,7 +176,7 @@ describe('mqttService firmware compatibility', () => {
         expect(payload.messageId).toBeUndefined();
     });
 
-    test('publishCommand trims dashboard-built Unicode multipart PDU SMS payloads', async () => {
+    test('publishCommand avoids generated Unicode multipart PDU bundles on the modem command path', async () => {
         await svc.publishCommand(
             'device-1',
             'send-sms-multipart',
@@ -171,11 +189,12 @@ describe('mqttService firmware compatibility', () => {
         const payload = JSON.parse(svc.client.publish.mock.calls[0][1]);
         expect(payload.command).toBe('send_sms_multipart');
         expect(payload.action_id).toBe('send-sms_unicode_multi_pdu');
-        expect(payload.sms_pdu).toContain(';');
+        expect(payload.sms_pdu).toBeUndefined();
+        expect(payload.number).toBe('+8801887300993');
+        expect(payload.text).toBe('\u0985'.repeat(80));
+        expect(payload.sms_transport_encoding).toBe('ucs2');
         expect(payload.sms_parts).toBe(2);
-        expect(payload.number).toBeUndefined();
-        expect(payload.text).toBeUndefined();
-        expect(payload.sms_transport_encoding).toBeUndefined();
+        expect(payload.timeout).toBe(60000);
         expect(payload.sms_encoding).toBeUndefined();
         expect(payload.sms_multipart).toBeUndefined();
     });
@@ -1425,6 +1444,46 @@ describe('mqttService durable SMS queue', () => {
             })
         );
         expect(svc._markPersistentQueueRetry).not.toHaveBeenCalled();
+    });
+
+    test('durable SMS queue leaves the next SMS pending while one send is still waiting for result', async () => {
+        const pendingRow = {
+            id: 'queue-next-sms',
+            device_id: 'device-1',
+            command: 'send-sms',
+            status: 'pending',
+            message_id: 'send-sms_next',
+            payload: JSON.stringify({ to: '+8801628301525', message: 'next', smsId: 71 })
+        };
+        const activeRow = {
+            id: 'queue-active-sms',
+            device_id: 'device-1',
+            command: 'send-sms',
+            status: 'waiting_response',
+            message_id: 'send-sms_active',
+            payload: JSON.stringify({ to: '+8801628301525', message: 'active', smsId: 70 })
+        };
+        global.app.locals.db = {
+            all: jest.fn()
+                .mockResolvedValueOnce([pendingRow])
+                .mockResolvedValueOnce([activeRow])
+                .mockResolvedValueOnce([]),
+            get: jest.fn().mockResolvedValue(null)
+        };
+
+        svc._recoverPersistentQueue = jest.fn().mockResolvedValue();
+        svc._processPersistentQueueRow = jest.fn();
+        svc._markPersistentQueueRetry = jest.fn().mockResolvedValue();
+        svc._markPersistentQueueAmbiguous = jest.fn().mockResolvedValue();
+
+        await svc.processPersistentQueue();
+
+        expect(svc._processPersistentQueueRow).not.toHaveBeenCalled();
+        expect(global.app.locals.db.all).toHaveBeenNthCalledWith(
+            2,
+            expect.stringContaining("status IN ('dispatching', 'waiting_response')"),
+            ['device-1']
+        );
     });
 
     test('expired replay-safe waiting-response rows are retried from queue timeout', async () => {
