@@ -9,7 +9,11 @@ const {
     resolveSmsTimeoutMs
 } = require('../utils/smsLimits');
 const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
-const { normalizeSmsDeliveryPayload, normalizeSmsDeliveryReport } = require('../utils/smsDeliveryReports');
+const {
+    normalizeSmsDeliveryPayload,
+    normalizeSmsDeliveryReport,
+    parseSmsMessageReference
+} = require('../utils/smsDeliveryReports');
 
 const FIRMWARE_ACTION_ID_MAX_LENGTH = 31;
 
@@ -1947,8 +1951,8 @@ class MQTTService extends EventEmitter {
         if (tracking.smsId) {
             await this._dbRun(db,
                 `UPDATE sms
-                 SET status = ?,
-                     error = ?,
+                 SET status = CASE WHEN status = 'delivered' THEN status ELSE ? END,
+                     error = CASE WHEN status = 'delivered' THEN NULL ELSE ? END,
                      external_id = COALESCE(external_id, ?)
                  WHERE id = ?`,
                 [nextStatus, nextError, tracking.baseMessageId || tracking.messageId, tracking.smsId]
@@ -1959,8 +1963,8 @@ class MQTTService extends EventEmitter {
         if (tracking.messageId) {
             await this._dbRun(db,
                 `UPDATE sms
-                 SET status = ?,
-                     error = ?
+                 SET status = CASE WHEN status = 'delivered' THEN status ELSE ? END,
+                     error = CASE WHEN status = 'delivered' THEN NULL ELSE ? END
                  WHERE external_id = ?`,
                 [nextStatus, nextError, tracking.messageId]
             );
@@ -2113,7 +2117,21 @@ class MQTTService extends EventEmitter {
             result !== 'timeout';
 
         if (success) {
-            await this._markPersistentQueueCompleted(row, data);
+            const messageReference = parseSmsMessageReference(
+                data?.message_reference,
+                data?.messageReference,
+                data?.mr,
+                data?.detail,
+                data?.message,
+                data?.payload
+            );
+            const completedData = messageReference === null
+                ? data
+                : {
+                    ...data,
+                    message_reference: data?.message_reference ?? messageReference
+                };
+            await this._markPersistentQueueCompleted(row, completedData);
             return true;
         }
 
@@ -2158,6 +2176,35 @@ class MQTTService extends EventEmitter {
                 [normalizedDeviceId, correlationId]
             );
             if (row) return row;
+        }
+
+        const deliveryReport = normalizeSmsDeliveryReport(data);
+        if (deliveryReport.messageReference !== null) {
+            const rows = await db.all(
+                `SELECT *
+                 FROM device_command_queue
+                 WHERE device_id = ?
+                   AND command IN ('send-sms', 'send-sms-multipart')
+                   AND status IN ('pending', 'dispatching', 'waiting_response', 'failed', 'ambiguous', 'completed')
+                 ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC
+                 LIMIT 50`,
+                [normalizedDeviceId]
+            );
+
+            for (const row of rows || []) {
+                const references = [];
+                for (const field of ['response_payload', 'payload']) {
+                    if (!row?.[field]) continue;
+                    try {
+                        references.push(parseSmsMessageReference(JSON.parse(row[field])));
+                    } catch (_) {
+                        references.push(parseSmsMessageReference(row[field]));
+                    }
+                }
+                if (references.some((reference) => reference === deliveryReport.messageReference)) {
+                    return row;
+                }
+            }
         }
 
         const deliveredTo = String(data?.to || data?.number || '').trim();

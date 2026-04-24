@@ -75,6 +75,35 @@ function parseRawSmsDeliveryReport(value) {
     };
 }
 
+function parseSmsMessageReference(...values) {
+    for (const value of values) {
+        if (value === null || value === undefined || value === '') {
+            continue;
+        }
+        if (Number.isFinite(Number(value))) {
+            return Number(value);
+        }
+
+        const text = typeof value === 'object'
+            ? JSON.stringify(value)
+            : String(value);
+        const cmgsMatch = text.match(/\+CMGS:\s*(\d+)/i);
+        if (cmgsMatch) {
+            return Number(cmgsMatch[1]);
+        }
+        const detailMatch = text.match(/\bsms_(?:multipart_)?sent_mr_(\d+)\b/i);
+        if (detailMatch) {
+            return Number(detailMatch[1]);
+        }
+        const jsonLikeMatch = text.match(/["']?(?:message_reference|messageReference|mr)["']?\s*[:=]\s*["']?(\d+)/i);
+        if (jsonLikeMatch) {
+            return Number(jsonLikeMatch[1]);
+        }
+    }
+
+    return null;
+}
+
 function normalizeSmsDeliveryReport(data = {}) {
     const rawFields = parseRawSmsDeliveryReport(
         data?.raw_report ||
@@ -94,7 +123,8 @@ function normalizeSmsDeliveryReport(data = {}) {
         data?.message_reference,
         data?.messageReference,
         data?.mr,
-        rawFields.messageReference
+        rawFields.messageReference,
+        parseSmsMessageReference(data?.detail, data?.message, data?.payload)
     );
     let status = 'pending';
 
@@ -153,6 +183,7 @@ function normalizeSmsDeliveryPayload(data = {}) {
 
 module.exports = {
     parseRawSmsDeliveryReport,
+    parseSmsMessageReference,
     normalizeSmsDeliveryPayload,
     normalizeSmsDeliveryReport
 };

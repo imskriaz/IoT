@@ -3,6 +3,7 @@
 const {
     normalizeSmsDeliveryPayload,
     normalizeSmsDeliveryReport,
+    parseSmsMessageReference,
     parseRawSmsDeliveryReport
 } = require('../utils/smsDeliveryReports');
 
@@ -39,6 +40,19 @@ describe('smsDeliveryReports', () => {
             failed: true,
             messageReference: 48,
             statusReportStatus: 64
+        }));
+    });
+
+    test('extracts modem message references from send responses', () => {
+        expect(parseSmsMessageReference('+CMGS: 132')).toBe(132);
+        expect(parseSmsMessageReference('sms_sent_mr_133')).toBe(133);
+        expect(parseSmsMessageReference({ message_reference: 134 })).toBe(134);
+        expect(normalizeSmsDeliveryReport({
+            detail: 'sms_sent_mr_135',
+            status_report_status: 0
+        })).toEqual(expect.objectContaining({
+            status: 'delivered',
+            messageReference: 135
         }));
     });
 });

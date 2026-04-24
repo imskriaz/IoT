@@ -1,6 +1,7 @@
 #include "sms_service.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -189,6 +190,31 @@ static unified_action_response_t sms_service_build_response(
     return response;
 }
 
+static bool sms_service_extract_cmgs_reference(const char *response, uint16_t *out_reference) {
+    const char *cursor = response;
+
+    if (!response || !out_reference) {
+        return false;
+    }
+
+    while ((cursor = strstr(cursor, "+CMGS:")) != NULL) {
+        char *end = NULL;
+        long reference = 0;
+
+        cursor += 6;
+        while (*cursor == ' ') {
+            cursor++;
+        }
+        reference = strtol(cursor, &end, 10);
+        if (end != cursor && reference >= 0 && reference <= UINT16_MAX) {
+            *out_reference = (uint16_t)reference;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static unified_action_response_t sms_service_send_with_transport(
     const char *number,
     const char *text,
@@ -211,7 +237,10 @@ static unified_action_response_t sms_service_send_with_transport(
     size_t text_len = 0U;
     bool requires_unicode_timeout = false;
     uint16_t expected_parts = 0U;
+    uint16_t message_reference = 0U;
     bool has_dashboard_pdu = false;
+    bool has_message_reference = false;
+    char success_detail_with_reference[UNIFIED_TEXT_MEDIUM_LEN] = {0};
 
     if (options) {
         expected_parts = options->expected_parts;
@@ -330,11 +359,25 @@ static unified_action_response_t sms_service_send_with_transport(
     }
     snprintf(outgoing.from, sizeof(outgoing.from), "%s", number ? number : "");
     snprintf(outgoing.text, sizeof(outgoing.text), "%s", text ? text : "");
+    has_message_reference = err == ESP_OK &&
+        sms_service_extract_cmgs_reference(modem_response, &message_reference);
+    if (has_message_reference) {
+        snprintf(
+            success_detail_with_reference,
+            sizeof(success_detail_with_reference),
+            "%s_mr_%u",
+            success_detail,
+            (unsigned)message_reference
+        );
+    }
+
     snprintf(
         outgoing.detail,
         sizeof(outgoing.detail),
         "%s",
-        err == ESP_OK ? success_detail : (err == ESP_ERR_TIMEOUT ? timeout_detail : failed_detail)
+        err == ESP_OK
+            ? success_detail
+            : (err == ESP_ERR_TIMEOUT ? timeout_detail : failed_detail)
     );
     outgoing.sim_slot = 0U;
     outgoing.timestamp_ms = unified_time_now_ms();
@@ -359,7 +402,7 @@ static unified_action_response_t sms_service_send_with_transport(
             command,
             UNIFIED_ACTION_RESULT_COMPLETED,
             ESP_OK,
-            success_detail,
+            has_message_reference ? success_detail_with_reference : success_detail,
             effective_timeout_ms
         );
     }

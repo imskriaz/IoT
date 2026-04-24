@@ -1494,6 +1494,88 @@ describe('mqttService durable SMS queue', () => {
         );
     });
 
+    test('action/result stores modem message reference parsed from firmware detail', async () => {
+        global.app.locals.db = {
+            get: jest.fn().mockResolvedValue({
+                id: 'queue-mr',
+                device_id: 'device-1',
+                command: 'send-sms',
+                message_id: 'send-sms_mr',
+                status: 'waiting_response',
+                payload: JSON.stringify({ to: '+8801628301525', smsId: 69 })
+            }),
+            all: jest.fn().mockResolvedValue([])
+        };
+
+        svc._markPersistentQueueCompleted = jest.fn().mockResolvedValue();
+
+        svc.handleMessage(
+            'device/device-1/action/result',
+            Buffer.from(JSON.stringify({
+                action_id: 'send-sms_mr',
+                command: 'send_sms',
+                result: 'completed',
+                detail: 'sms_sent_mr_132',
+                success: true
+            }))
+        );
+
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(svc._markPersistentQueueCompleted).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'queue-mr'
+            }),
+            expect.objectContaining({
+                action_id: 'send-sms_mr',
+                message_reference: 132
+            })
+        );
+    });
+
+    test('sms/delivery can match a completed queue row by modem message reference', async () => {
+        global.app.locals.db = {
+            get: jest.fn().mockResolvedValue(null),
+            all: jest.fn().mockResolvedValue([{
+                id: 'queue-mr-delivery',
+                device_id: 'device-1',
+                command: 'send-sms',
+                message_id: 'send-sms_mr_delivery',
+                status: 'completed',
+                response_payload: JSON.stringify({
+                    action_id: 'send-sms_mr_delivery',
+                    message_reference: 132
+                }),
+                payload: JSON.stringify({ to: '+8801628301525', smsId: 69 })
+            }])
+        };
+
+        svc._markPersistentQueueCompleted = jest.fn().mockResolvedValue();
+
+        svc.handleMessage(
+            'device/device-1/sms/delivery',
+            Buffer.from(JSON.stringify({
+                status_report_status: 0,
+                message_reference: 132,
+                raw_report: '+CDS: 49,132,"+8801628301525",145,"26/04/24,12:00:00+24","26/04/24,12:00:03+24",0'
+            }))
+        );
+
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(svc._markPersistentQueueCompleted).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'queue-mr-delivery',
+                status: 'completed'
+            }),
+            expect.objectContaining({
+                success: true,
+                message_reference: 132,
+                detail: 'sms_delivered'
+            })
+        );
+    });
+
     test('expired published SMS rows become ambiguous instead of being replayed', async () => {
         global.app.locals.db = {
             all: jest.fn()
@@ -1765,6 +1847,28 @@ describe('mqttService durable SMS queue', () => {
                 status_report_status: 0,
                 message_reference: 47
             })
+        );
+    });
+
+    test('queue sync does not downgrade already delivered SMS rows back to sent', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 1 }),
+            all: jest.fn().mockResolvedValue([])
+        };
+        global.app.locals.db = db;
+
+        await svc._syncSmsStatusFromQueueRow({
+            id: 'queue-delivered',
+            device_id: 'device-1',
+            command: 'send-sms',
+            status: 'completed',
+            message_id: 'send-sms_delivered',
+            payload: JSON.stringify({ smsId: 99 })
+        }, 'sent', null);
+
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining("CASE WHEN status = 'delivered'"),
+            ['sent', null, 'send-sms_delivered', 99]
         );
     });
 });
