@@ -63,7 +63,7 @@ final class BridgeHttpHandler {
 
     void pollOutstandingMessages() {
         BridgeConfig config = service.currentConfig();
-        if (!config.usesHttpTransport() || service.isStopRequested() || !config.bridgeEnabled) {
+        if ((!config.usesHttpTransport() && !config.usesAutoTransport()) || service.isStopRequested() || !config.bridgeEnabled) {
             return;
         }
 

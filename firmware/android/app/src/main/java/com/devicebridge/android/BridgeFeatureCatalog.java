@@ -52,11 +52,11 @@ final class BridgeFeatureCatalog {
                 "Connectivity",
                 "Runtime and transport capabilities the Android bridge can surface now.",
                 items(
-                        new FeatureItem("MQTT transport", "Live", "Dashboard status, command plane", "Real-time status and outbound commands over MQTT."),
-                        new FeatureItem("HTTP API transport", "Live", "HTTP bridge adapter, queued pickup", "Phone can push status and poll the outgoing queue over HTTP."),
+                        new FeatureItem("Realtime channel", "Live", "Dashboard status, command plane", "Real-time status and outbound commands use the live channel when available."),
+                        new FeatureItem("Dashboard HTTP fallback", "Live", "HTTP bridge adapter, queued pickup", "Phone can push status and poll the outgoing queue when realtime is unavailable."),
                         new FeatureItem("Battery, Wi-Fi, operator, storage, queue depth", "Live", "Dashboard status panel and home metrics", "Operational health fields already fit the dashboard status model."),
                         new FeatureItem("Dual-SIM routing and signal detail", "Possible Next", "Internet, SMS routing, device detail", "Expose per-slot signal, operator, and preferred send path."),
-                        new FeatureItem("Network self-heal and fallback rules", "Innovative", "Automation and device health", "App can choose or suggest MQTT/HTTP fallback when one path degrades.")
+                        new FeatureItem("Network self-heal and fallback rules", "Innovative", "Automation and device health", "App can choose the best dashboard path when one connection degrades.")
                 )
         ));
 
@@ -77,7 +77,7 @@ final class BridgeFeatureCatalog {
                 "Bridge lifecycle, onboarding, recovery, and support tooling.",
                 items(
                         new FeatureItem("Compressed QR onboarding", "Live", "Onboarding and recovery", "Dashboard QR opens the app onboarding flow directly without exposing raw credentials."),
-                        new FeatureItem("Separate settings surface", "Live", "Device Settings parity", "Transport, dashboard access, and diagnostics live in a dedicated settings screen."),
+                        new FeatureItem("Separate settings surface", "Live", "Device Settings parity", "Dashboard access and diagnostics live in a dedicated settings screen."),
                         new FeatureItem("Foreground service controls", "Live", "Dashboard-like control surface", "Start/stop and readiness controls are available in the app home."),
                         new FeatureItem("Support bundle export", "Innovative", "Support and troubleshooting", "Safe summary, readiness score, and logs can be copied without exposing secrets."),
                         new FeatureItem("Incident recovery handoff", "Innovative", "Device recovery workflow", "Recovery actions can guide the operator back into onboarding and settings quickly.")

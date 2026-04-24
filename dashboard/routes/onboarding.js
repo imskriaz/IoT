@@ -64,7 +64,9 @@ function selectedMqttProtocol() {
 }
 
 function selectedAndroidTransportMode(value) {
-    return clean(value).toLowerCase() === 'http' ? 'http' : 'mqtt';
+    const mode = clean(value).toLowerCase();
+    if (mode === 'mqtt' || mode === 'http') return mode;
+    return 'auto';
 }
 
 function isAndroidBridge(body) {
@@ -72,12 +74,12 @@ function isAndroidBridge(body) {
 }
 
 async function buildAndroidProvisioning(req, db, userId, body) {
-    const transportMode = selectedAndroidTransportMode(body.transport_mode);
+    const transportMode = 'auto';
     const serverUrl = normalizePublicBaseUrl(req);
     let apiKey = '';
     let apiKeyName = '';
 
-    if (transportMode === 'http' && userId) {
+    if (userId) {
         apiKeyName = clean(body.name || body.device_id || 'Android Bridge');
         apiKey = generateApiKey();
         const keyPrefix = apiKey.substring(0, 12);
@@ -94,7 +96,7 @@ async function buildAndroidProvisioning(req, db, userId, body) {
         transport: {
             mode: transportMode
         },
-        server_url: transportMode === 'http' ? serverUrl : '',
+        server_url: serverUrl,
         api_key: apiKey,
         device: {
             id: clean(body.device_id),
@@ -120,7 +122,7 @@ async function buildAndroidProvisioning(req, db, userId, body) {
             width: 320
         }),
         summary: {
-            transport_mode: transportMode,
+            transport_mode: 'auto',
             device_id: payload.device.id,
             topic_prefix: payload.device.topic_prefix,
             server_url: serverUrl,
@@ -402,7 +404,7 @@ router.post('/api/onboard/register', [
     body('transport_mode')
         .optional({ nullable: true })
         .trim()
-        .isIn(['mqtt', 'http']).withMessage('Android transport must be mqtt or http'),
+        .isIn(['mqtt', 'http', 'auto']).withMessage('Android connection mode must be auto'),
     body('capabilities')
         .optional({ nullable: true })
 ], async (req, res) => {

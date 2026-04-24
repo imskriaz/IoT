@@ -21,9 +21,9 @@ final class BridgeTestLab {
             BridgeRuntimeState runtime = BridgeRuntimeState.load(activity);
             String detail;
 
-            if ("http".equals(config.transportMode)) {
+            if (config.usesHttpTransport() || (config.usesAutoTransport() && config.hasHttpBridgeConfig() && !runtime.mqttConnected)) {
                 if (!config.hasHttpBridgeConfig()) {
-                    detail = "HTTP status push blocked. Server URL, API key, or device ID is missing.";
+                    detail = "Dashboard status push blocked. Server URL, API key, or device ID is missing.";
                 } else {
                     JSONObject payload = new JSONObject();
                     try {
@@ -39,16 +39,16 @@ final class BridgeTestLab {
                     }
                     BridgeHttpClient.Result result = BridgeHttpClient.postStatus(config, payload);
                     detail = result.success
-                            ? "HTTP status push succeeded. Dashboard auth and device status endpoint responded."
-                            : "HTTP status push failed: " + result.detail;
+                            ? "Dashboard status push succeeded. Dashboard auth and device status endpoint responded."
+                            : "Dashboard status push failed: " + result.detail;
                 }
             } else if (!config.hasProvisionedMqttConfig()) {
-                detail = "MQTT status push blocked. Broker host or device routing details are incomplete.";
+                detail = "Realtime status push blocked. Broker host or device routing details are incomplete.";
             } else {
                 MqttBridgeService.requestImmediateStatusPush(activity);
                 detail = runtime.isTransportConnected(config)
-                        ? "MQTT status push queued through the running bridge."
-                        : "Bridge start/status request sent. If MQTT is reachable the next heartbeat will publish status.";
+                        ? "Realtime status push queued through the running bridge."
+                        : "Bridge start/status request sent. If realtime is reachable the next heartbeat will publish status.";
             }
 
             BridgeEventLog.append(activity, "Test Lab status push: " + detail);
@@ -62,16 +62,16 @@ final class BridgeTestLab {
             BridgeRuntimeState runtime = BridgeRuntimeState.load(activity);
             String detail;
 
-            if (!"http".equals(config.transportMode)) {
-                detail = "Queue pickup is broker-driven in MQTT mode. Local queue depth is " + runtime.queueDepth + ".";
+            if (!config.usesHttpTransport() && !(config.usesAutoTransport() && config.hasHttpBridgeConfig())) {
+                detail = "Queue pickup needs dashboard fallback details. Local queue depth is " + runtime.queueDepth + ".";
             } else if (!config.hasHttpBridgeConfig()) {
-                detail = "HTTP queue pickup blocked. Complete server URL, API key, and device ID first.";
+                detail = "Queue pickup blocked. Complete server URL, API key, and device ID first.";
             } else {
                 try {
                     int count = BridgeHttpClient.fetchOutstandingMessages(config).size();
-                    detail = "HTTP queue pickup responded. Outstanding dashboard messages: " + count + ".";
+                    detail = "Dashboard queue pickup responded. Outstanding dashboard messages: " + count + ".";
                 } catch (Exception error) {
-                    detail = "HTTP queue pickup failed: " + error.getMessage();
+                    detail = "Dashboard queue pickup failed: " + error.getMessage();
                 }
             }
 

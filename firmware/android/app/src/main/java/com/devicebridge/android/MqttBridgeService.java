@@ -344,9 +344,7 @@ public class MqttBridgeService extends Service {
     }
 
     private boolean hasUsableConnection(BridgeConfig cfg) {
-        return cfg != null && (cfg.usesHttpTransport()
-                ? cfg.hasHttpBridgeConfig()
-                : (cfg.hasProvisionedMqttConfig() || (cfg.usesAutoTransport() && cfg.hasHttpBridgeConfig())));
+        return cfg != null && cfg.hasBridgeConnectionConfig();
     }
 
     private void connectInternal() {
@@ -366,7 +364,7 @@ public class MqttBridgeService extends Service {
             closeClientQuietly();
             if (!cfg.hasHttpBridgeConfig()) {
                 logTelemetry("HTTP bridge config is incomplete");
-                updateRuntimeState("http_config_missing", false, "HTTP mode requires server URL, API key, and device ID");
+                updateRuntimeState("http_config_missing", false, "Dashboard fallback requires server URL, API key, and device ID");
                 scheduleReconnect();
                 return;
             }

@@ -13,7 +13,7 @@ public class BootReceiver extends BroadcastReceiver {
         if (!config.bridgeEnabled) {
             return;
         }
-        if (!(config.usesHttpTransport() ? config.hasHttpBridgeConfig() : config.hasProvisionedMqttConfig())) {
+        if (!config.hasBridgeConnectionConfig()) {
             BridgeEventLog.append(context, "Boot start skipped: onboarding required");
             return;
         }

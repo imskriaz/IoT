@@ -40,7 +40,7 @@ final class BridgeSnapshotProvider {
 
         Map<String, Object> state = new HashMap<>();
         state.put("deviceId", safe(config.deviceId, "not set"));
-        state.put("transport", config.usesHttpTransport() ? "HTTP" : "MQTT");
+        state.put("transport", config.transportDisplayLabel());
         state.put("bridgeState", online ? "Online" : (active ? "Standby" : "Stopped"));
         state.put("bridgeEnabled", config.bridgeEnabled);
         state.put("online", online);
@@ -273,12 +273,12 @@ final class BridgeSnapshotProvider {
 
     private static String buildConnectionSummary(Activity activity, BridgeConfig config, BridgeRuntimeState runtime) {
         WifiSummary wifi = captureWifiSummary(activity);
-        String target = config.usesHttpTransport()
-                ? safe(config.serverUrl, "not set")
-                : safe(config.brokerUri(), "not set");
+        String realtimeTarget = safe(config.brokerUri(), "not set");
+        String fallbackTarget = safe(config.serverUrl, "not set");
         return "device_id      = " + safe(config.deviceId, "not set")
-                + "\ntransport      = " + (config.usesHttpTransport() ? "http" : "mqtt")
-                + "\ntarget         = " + target
+                + "\nconnection     = " + config.transportDisplayLabel()
+                + "\nrealtime       = " + realtimeTarget
+                + "\nfallback       = " + fallbackTarget
                 + "\nservice_state  = " + safe(runtime.serviceState, "idle")
                 + "\nconnected      = " + runtime.isBridgeOnline(config)
                 + "\nbridge_enabled = " + config.bridgeEnabled

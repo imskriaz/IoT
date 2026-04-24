@@ -55,7 +55,7 @@
                     <span class="onboard-device-icon"><i class="bi bi-phone"></i></span>
                     <span class="onboard-device-copy">
                         <span class="onboard-device-title">Android</span>
-                        <span class="onboard-device-label">Native Device Bridge app with MQTT or HTTP API transport</span>
+                        <span class="onboard-device-label">Native Device Bridge app with automatic dashboard fallback</span>
                     </span>
                 </button>
             </div>
@@ -245,36 +245,14 @@
                     </div>
 
                     <div class="col-12" data-onboard-scope="android-transport">
-                        <label class="form-label">Android Transport</label>
-                        <select class="form-select app-hidden" id="fAndroidTransport" tabindex="-1" aria-hidden="true">
-                            <option value="mqtt">MQTT Bridge</option>
-                            <option value="http">HTTP API Bridge</option>
-                        </select>
-                        <div class="row g-3">
-                            <div class="col-md-6">
-                                <button type="button" class="card w-100 h-100 border-2 connect-option text-start" id="cardAndroidTransportMqtt" onclick="chooseAndroidTransport('mqtt')">
-                                    <div class="card-body py-4 text-center">
-                                        <div class="mb-3">
-                                            <i class="bi bi-broadcast-pin text-primary" style="font-size:3rem;"></i>
-                                        </div>
-                                        <h5 class="card-title mb-2">MQTT Bridge</h5>
-                                        <p class="card-text text-muted small mb-0">Best for live command delivery, continuous queue sync, and broker-based device control.</p>
-                                    </div>
-                                </button>
-                            </div>
-                            <div class="col-md-6">
-                                <button type="button" class="card w-100 h-100 border-2 connect-option text-start" id="cardAndroidTransportHttp" onclick="chooseAndroidTransport('http')">
-                                    <div class="card-body py-4 text-center">
-                                        <div class="mb-3">
-                                            <i class="bi bi-globe2 text-primary" style="font-size:3rem;"></i>
-                                        </div>
-                                        <h5 class="card-title mb-2">HTTP API Bridge</h5>
-                                        <p class="card-text text-muted small mb-0">Uses the Device Bridge app with a device-scoped API key and direct dashboard HTTP transport.</p>
-                                    </div>
-                                </button>
+                        <input type="hidden" id="fAndroidTransport" value="auto">
+                        <div class="alert alert-info d-flex align-items-start gap-2 mb-0">
+                            <i class="bi bi-shuffle mt-1"></i>
+                            <div>
+                                <div class="fw-semibold">Android connection is automatic</div>
+                                <div class="small">The setup code includes dashboard HTTP access and broker details. The app uses the best live path and falls back when one path is unavailable.</div>
                             </div>
                         </div>
-                        <div class="form-text mt-2">Choose how the Android Device Bridge app will talk to the dashboard.</div>
                     </div>
 
                     <!-- APN -->
@@ -914,21 +892,17 @@ function selectedDeviceTypeLabel() {
 }
 
 function selectedAndroidTransportMode() {
-    return document.getElementById('fAndroidTransport')?.value === 'http' ? 'http' : 'mqtt';
+    return 'auto';
 }
 
 function renderAndroidTransportChoice() {
-    const mode = selectedAndroidTransportMode();
-    document.getElementById('cardAndroidTransportMqtt')?.classList.toggle('selected', mode === 'mqtt');
-    document.getElementById('cardAndroidTransportHttp')?.classList.toggle('selected', mode === 'http');
+    const select = document.getElementById('fAndroidTransport');
+    if (select) select.value = 'auto';
 }
 
 function chooseAndroidTransport(mode) {
-    const normalizedMode = mode === 'http' ? 'http' : 'mqtt';
     const select = document.getElementById('fAndroidTransport');
-    if (select) {
-        select.value = normalizedMode;
-    }
+    if (select) select.value = 'auto';
     renderAndroidTransportChoice();
     applyStep3FieldVisibility();
     if (wizardState.deviceType === 'android') {
@@ -950,7 +924,7 @@ function applyStep3FieldVisibility() {
         const scope = el.dataset.onboardScope;
         let show = true;
         if (scope === 'esp32') show = !bridgeDevice;
-        if (scope === 'mqtt') show = wizardState.deviceType === 'esp32-s3' || (wizardState.deviceType === 'android' && selectedAndroidTransportMode() === 'mqtt');
+        if (scope === 'mqtt') show = wizardState.deviceType === 'esp32-s3';
         if (scope === 'android-transport') show = wizardState.deviceType === 'android';
         if (scope === 'device-id') show = !bridgeDevice;
         el.style.display = show ? '' : 'none';
@@ -962,11 +936,6 @@ function applyStep3FieldVisibility() {
         document.getElementById('fWifiPass').value = '';
         document.getElementById('fFirmwareFile').value = '';
         document.getElementById('fFirmwareUpload').value = '';
-    }
-    if (wizardState.deviceType === 'android' && selectedAndroidTransportMode() === 'http') {
-        document.getElementById('fMqttHost').value = '';
-        document.getElementById('fMqttUser').value = '';
-        document.getElementById('fMqttPass').value = '';
     }
 }
 
@@ -1069,15 +1038,12 @@ function prefillStep3() {
         if (!fId.value || !fId.value.startsWith('android-')) fId.value = generateDeviceIdValue();
         if (!nameInput.value) nameInput.value = 'Android Bridge';
         modelSel.value = 'android-sms-bridge';
-        if (selectedAndroidTransportMode() === 'mqtt') {
-            if (!document.getElementById('fMqttHost').value) document.getElementById('fMqttHost').value = MQTT_HOST;
-            if (!document.getElementById('fMqttUser').value) document.getElementById('fMqttUser').value = MQTT_USER;
-            if (!document.getElementById('fMqttPass').value) document.getElementById('fMqttPass').value = MQTT_PASSWORD;
-        }
+        document.getElementById('fAndroidTransport').value = 'auto';
+        document.getElementById('fMqttHost').value = MQTT_HOST;
+        document.getElementById('fMqttUser').value = MQTT_USER;
+        document.getElementById('fMqttPass').value = MQTT_PASSWORD;
         note.style.display = '';
-        note.innerHTML = selectedAndroidTransportMode() === 'http'
-            ? '<i class="bi bi-phone me-1"></i>Register the Android bridge here, then scan the generated QR in the phone app. HTTP mode auto-creates the device API key and packages the route inside one secure setup code.'
-            : '<i class="bi bi-phone me-1"></i>Register the Android bridge here, then scan the generated QR in the phone app. QR and copy both carry the same secure setup code for this device.';
+        note.innerHTML = '<i class="bi bi-phone me-1"></i>Register the Android bridge here, then scan the generated QR in the phone app. The secure setup code carries both realtime and fallback connection details.';
     }
 
     // Only pre-fill if not already set
@@ -1177,10 +1143,10 @@ function validateAndGoToStep4() {
         location: document.getElementById('fLocation').value.trim(),
         model: document.getElementById('fModel').value,
         apn: document.getElementById('fApn').value.trim(),
-        mqtt_host: document.getElementById('fMqttHost').value.trim(),
+        mqtt_host: wizardState.deviceType === 'android' ? MQTT_HOST : document.getElementById('fMqttHost').value.trim(),
         mqtt_port: MQTT_PORT,
-        mqtt_user: document.getElementById('fMqttUser').value.trim(),
-        mqtt_pass: document.getElementById('fMqttPass').value,
+        mqtt_user: wizardState.deviceType === 'android' ? MQTT_USER : document.getElementById('fMqttUser').value.trim(),
+        mqtt_pass: wizardState.deviceType === 'android' ? MQTT_PASSWORD : document.getElementById('fMqttPass').value,
         transport_mode: selectedAndroidTransportMode(),
         wifi_ssid: document.getElementById('fWifiSsid').value.trim(),
         wifi_pass: document.getElementById('fWifiPass').value,
@@ -1218,19 +1184,17 @@ function populateConfigSummary() {
     rows = rows.filter(([key]) => {
         if (key === 'Board Model') return false;
         if (bridgeDevice && ['APN', 'WiFi SSID', 'Firmware'].includes(key)) return false;
-        if (wizardState.deviceType === 'android' && fd.transport_mode === 'http' && ['MQTT Server', 'MQTT User'].includes(key)) return false;
+        if (bridgeDevice && ['MQTT Server', 'MQTT User'].includes(key)) return false;
         return true;
     });
     rows = rows.map(([key, value]) =>
         key === 'Device Type' ? [key, escHtml(selectedDeviceTypeLabel())] : [key, value]
     );
     if (wizardState.deviceType === 'android') {
-        rows.push(['Android Transport', fd.transport_mode === 'http' ? 'HTTP API Bridge' : 'MQTT Bridge']);
-        if (fd.transport_mode === 'http') {
-            rows.push(['Server URL', '<span class="text-muted">Taken from the dashboard public base URL during provisioning.</span>']);
-            rows.push(['API Key', `<span class="text-muted">Generated automatically as <code>${escHtml(fd.name || fd.device_id)}</code> after registration.</span>`]);
-        }
-    rows.push(['Android Setup', '<span class="text-muted">A secure setup code and scanner-ready QR will be generated after registration.</span>']);
+        rows.push(['Android Connection', 'Automatic realtime + fallback']);
+        rows.push(['Server URL', '<span class="text-muted">Taken from the dashboard public base URL during provisioning.</span>']);
+        rows.push(['API Key', `<span class="text-muted">Generated automatically as <code>${escHtml(fd.name || fd.device_id)}</code> after registration.</span>`]);
+        rows.push(['Android Setup', '<span class="text-muted">A secure setup code and scanner-ready QR will be generated after registration.</span>']);
     }
 
     document.getElementById('configSummaryTable').innerHTML = rows.map(([k, v]) =>
@@ -1248,9 +1212,7 @@ function populateConfigSummary() {
         }
     } else if (wizardState.deviceType === 'android') {
         connInfo.style.display = '';
-        connInfoText.textContent = fd.transport_mode === 'http'
-            ? 'The dashboard will register the Android bridge, auto-create a device API key, and generate one secure HTTP setup code that can be scanned as QR or pasted into the phone app.'
-            : 'The dashboard will register the Android bridge and generate one secure setup code that can be scanned as QR or pasted into the phone app.';
+        connInfoText.textContent = 'The dashboard will register the Android bridge, auto-create a device API key, and generate one secure setup code with realtime and fallback connection details.';
     } else {
         connInfo.style.display = 'none';
     }
@@ -1303,9 +1265,9 @@ async function sendConfig() {
                 capabilities: {
                     ...wizardState.deviceInfo,
                     bridge_type: fd.bridge_type || wizardState.deviceType || 'esp32-s3',
-                    transport_mode: fd.transport_mode || 'mqtt',
-                    mqtt: wizardState.deviceType === 'android' ? fd.transport_mode !== 'http' : true,
-                    http: wizardState.deviceType === 'android' ? fd.transport_mode === 'http' : Boolean(wizardState.deviceInfo.http)
+                    transport_mode: fd.transport_mode || 'auto',
+                    mqtt: wizardState.deviceType === 'android' ? true : true,
+                    http: wizardState.deviceType === 'android' ? true : Boolean(wizardState.deviceInfo.http)
                 }
             })
         });
@@ -1383,10 +1345,10 @@ function showDone() {
     const info = wizardState.deviceInfo;
     const capabilities = [];
     if (wizardState.deviceType === 'android') capabilities.push({ label: 'Android', cls: 'bg-success' });
-    if (wizardState.deviceType === 'android' && fd.transport_mode === 'http') capabilities.push({ label: 'HTTP API', cls: 'bg-info text-dark' });
+    if (wizardState.deviceType === 'android') capabilities.push({ label: 'Auto Fallback', cls: 'bg-info text-dark' });
     if (info.modem || info.a7670e || fd.model?.includes('a7670')) capabilities.push({ label: 'Modem / 4G', cls: 'bg-primary' });
     if (info.sms || fd.model?.includes('sms')) capabilities.push({ label: 'SMS', cls: 'bg-primary' });
-    if (info.mqtt || (wizardState.deviceType === 'android' && fd.transport_mode !== 'http')) capabilities.push({ label: 'MQTT', cls: 'bg-dark' });
+    if (info.mqtt || wizardState.deviceType === 'android') capabilities.push({ label: 'MQTT', cls: 'bg-dark' });
     if (info.http) capabilities.push({ label: 'HTTP Adapter', cls: 'bg-secondary' });
     if (info.gps) capabilities.push({ label: 'GPS', cls: 'bg-success' });
     if (info.battery) capabilities.push({ label: 'Battery Monitor', cls: 'bg-warning text-dark' });
@@ -1432,7 +1394,7 @@ function renderProvisioningPanel() {
                     <h6 class="mb-2">Provisioning summary</h6>
                     <table class="table table-sm align-middle mb-3">
                         <tbody>
-                            <tr><td class="text-muted">Transport</td><td><code>${escHtml(summary.transport_mode || 'mqtt')}</code></td></tr>
+                            <tr><td class="text-muted">Connection</td><td><code>${escHtml(summary.transport_mode || 'auto')}</code></td></tr>
                             <tr><td class="text-muted">Server URL</td><td><code>${escHtml(summary.server_url || '')}</code></td></tr>
                             <tr><td class="text-muted">Device ID</td><td><code>${escHtml(summary.device_id || '')}</code></td></tr>
                             <tr><td class="text-muted">Topic Prefix</td><td><code>${escHtml(summary.topic_prefix || MQTT_TOPIC_PREFIX)}</code></td></tr>
@@ -1506,7 +1468,7 @@ function resetWizard() {
     document.getElementById('fMqttHost').value = '';
     document.getElementById('fMqttUser').value = '';
     document.getElementById('fMqttPass').value = '';
-    document.getElementById('fAndroidTransport').value = 'mqtt';
+    document.getElementById('fAndroidTransport').value = 'auto';
     renderAndroidTransportChoice();
     document.getElementById('fWifiSsid').value = '';
     document.getElementById('fWifiPass').value = '';

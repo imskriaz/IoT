@@ -210,7 +210,7 @@
         setText('systemMemory', formatBytes(system.memory?.rss));
         setText('systemPlatformBadge', system.platform || '-');
         applyLockedState(effective, [
-            { key: 'timezone', ids: ['systemTimezone'] },
+            { key: 'timezone', ids: ['systemTimezone', 'useLocalTimezoneBtn'] },
             { key: 'phoneCountryCode', ids: ['systemPhoneCountryCode'] },
             { key: 'logLevel', ids: ['systemLogLevel'] },
             { key: 'deviceStatusRefreshMs', ids: ['deviceStatusRefreshSeconds'] },

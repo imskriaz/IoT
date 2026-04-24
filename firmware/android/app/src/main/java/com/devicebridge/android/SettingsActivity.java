@@ -11,11 +11,9 @@ import android.graphics.Typeface;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.Spinner;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -29,7 +27,6 @@ public class SettingsActivity extends Activity {
     private EditText apiKey;
     private EditText deviceId;
     private EditText topicPrefix;
-    private Spinner transportModeSpinner;
     private EditText host;
     private EditText port;
     private EditText protocol;
@@ -176,13 +173,13 @@ public class SettingsActivity extends Activity {
     }
 
     private LinearLayout buildTransportSection() {
-        LinearLayout card = BridgeUi.sectionCard(this, "Transport", "");
+        LinearLayout card = BridgeUi.sectionCard(this, "Connection", "");
         host = BridgeUi.input(this, "Broker host");
-        port = BridgeUi.input(this, "MQTT port");
+        port = BridgeUi.input(this, "Realtime port");
         port.setInputType(InputType.TYPE_CLASS_NUMBER);
-        protocol = BridgeUi.input(this, "MQTT protocol");
-        username = BridgeUi.input(this, "MQTT username");
-        password = BridgeUi.passwordInput(this, "MQTT password");
+        protocol = BridgeUi.input(this, "Realtime protocol");
+        username = BridgeUi.input(this, "Realtime username");
+        password = BridgeUi.passwordInput(this, "Realtime password");
 
         mqttHint = BridgeUi.textBlock(this, 12, false);
         mqttHint.setText("Connection details are provisioned by the dashboard setup code. The bridge uses realtime MQTT when available and falls back to dashboard HTTP when needed.");
@@ -312,16 +309,22 @@ public class SettingsActivity extends Activity {
         BridgeConfig current = BridgeConfig.load(this);
         String nextTransportMode = normalizeTransportMode(current.transportMode, "auto");
         String brokerValue = host.getText().toString().trim();
+        boolean hasHttpAccess = !serverUrl.getText().toString().trim().isEmpty()
+                && !apiKey.getText().toString().trim().isEmpty()
+                && !BridgeProvisioning.firstNonEmpty(deviceId.getText().toString(), current.deviceId).isEmpty();
         if (enabled && "mqtt".equals(nextTransportMode) && brokerValue.isEmpty()) {
-            return "MQTT host is required before starting.";
+            return "Realtime host is required before starting.";
         }
         if (enabled && "http".equals(nextTransportMode)) {
             if (serverUrl.getText().toString().trim().isEmpty()) {
-                return "Server URL is required for HTTP mode.";
+                return "Server URL is required before starting.";
             }
             if (apiKey.getText().toString().trim().isEmpty()) {
-                return "API key is required for HTTP mode.";
+                return "API key is required before starting.";
             }
+        }
+        if (enabled && "auto".equals(nextTransportMode) && brokerValue.isEmpty() && !hasHttpAccess) {
+            return "Dashboard setup code is required before starting.";
         }
 
         int parsedPort = current.brokerPort;
@@ -396,23 +399,6 @@ public class SettingsActivity extends Activity {
             BridgeEventLog.append(this, "Console copied to clipboard");
             refreshStatus("Console copied");
         }
-    }
-
-    private Spinner buildTransportModeSpinner() {
-        Spinner spinner = new Spinner(this, Spinner.MODE_DROPDOWN);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_item,
-                new String[] { "mqtt", "http" }
-        );
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinner.setAdapter(adapter);
-        return spinner;
-    }
-
-    private void setTransportModeSelection(String mode) {
-        String normalized = normalizeTransportMode(mode, "mqtt");
-        transportModeSpinner.setSelection("http".equals(normalized) ? 1 : 0);
     }
 
     private String normalizeTransportMode(String value, String fallback) {

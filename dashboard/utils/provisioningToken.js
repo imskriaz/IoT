@@ -17,7 +17,10 @@ function normalizeTopicPrefix(value) {
 }
 
 function normalizeTransportMode(value) {
-    return clean(value).toLowerCase() === 'http' ? 'http' : 'mqtt';
+    const mode = clean(value).toLowerCase();
+    if (mode === 'http') return 'http';
+    if (mode === 'auto') return 'auto';
+    return 'mqtt';
 }
 
 function normalizeProtocol(value) {
@@ -44,11 +47,15 @@ function compactProvisioningPayload(payload) {
         compact.tp = topicPrefix;
     }
 
+    const serverUrl = clean(payload?.server_url);
+    const apiKey = String(payload?.api_key || '');
+    if ((transportMode === 'http' || transportMode === 'auto') && serverUrl) {
+        compact.su = serverUrl;
+    }
+    if ((transportMode === 'http' || transportMode === 'auto') && apiKey) {
+        compact.ak = apiKey;
+    }
     if (transportMode === 'http') {
-        const serverUrl = clean(payload?.server_url);
-        const apiKey = String(payload?.api_key || '');
-        if (serverUrl) compact.su = serverUrl;
-        if (apiKey) compact.ak = apiKey;
         return compact;
     }
 

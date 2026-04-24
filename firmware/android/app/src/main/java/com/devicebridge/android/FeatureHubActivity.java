@@ -188,7 +188,7 @@ public class FeatureHubActivity extends Activity {
                         + "\nReadiness Label: " + BridgeDiagnostics.readinessLabel(this)
                         + "\nDashboard Access: " + config.hasDashboardAccess()
                         + "\nOperational Permissions: " + BridgeDiagnostics.hasOperationalPermissions(this)
-                        + "\nTransport: " + ("http".equals(config.transportMode) ? "HTTP API" : "MQTT")
+                        + "\nConnection: " + config.transportDisplayLabel()
                         + "\nInnovation: support bundle export, feature map mirror, and recovery-first onboarding are active."
         );
         if (permissionSummary != null) {

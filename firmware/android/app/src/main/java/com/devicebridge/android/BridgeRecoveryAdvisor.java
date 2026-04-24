@@ -44,17 +44,25 @@ final class BridgeRecoveryAdvisor {
 
         if (config.usesHttpTransport() && !config.hasHttpBridgeConfig()) {
             actions.add(new ActionItem(
-                    "Complete HTTP bridge setup",
-                    "HTTP mode is selected but the bridge does not have full server/API/device configuration yet.",
+                    "Complete dashboard fallback setup",
+                    "Dashboard HTTP is selected but the bridge does not have full server/API/device configuration yet.",
                     "settings"
             ));
         }
 
-        if (!config.usesHttpTransport() && !config.hasProvisionedMqttConfig()) {
+        if (!config.usesHttpTransport() && !config.usesAutoTransport() && !config.hasProvisionedMqttConfig()) {
             actions.add(new ActionItem(
-                    "Complete MQTT bridge setup",
-                    "MQTT mode is selected but broker or device routing details are incomplete.",
+                    "Complete realtime bridge setup",
+                    "Realtime mode is selected but broker or device routing details are incomplete.",
                     "settings"
+            ));
+        }
+
+        if (config.usesAutoTransport() && !config.hasBridgeConnectionConfig()) {
+            actions.add(new ActionItem(
+                    "Import dashboard setup code",
+                    "Automatic fallback needs dashboard access or realtime routing details before the bridge can start.",
+                    "onboarding"
             ));
         }
 
@@ -69,7 +77,7 @@ final class BridgeRecoveryAdvisor {
         if (config.bridgeEnabled && !"running".equalsIgnoreCase(runtime.serviceState)) {
             actions.add(new ActionItem(
                     "Restart bridge runtime",
-                    "The bridge is enabled but runtime is not currently healthy. Restarting usually recovers MQTT/HTTP watchers.",
+                    "The bridge is enabled but runtime is not currently healthy. Restarting usually recovers dashboard watchers.",
                     "restart"
             ));
         }

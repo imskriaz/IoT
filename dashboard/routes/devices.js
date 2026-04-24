@@ -2687,8 +2687,7 @@ function parseProvisioningCapabilities(device) {
 }
 
 function buildAndroidRecoveryProvisioning(req, device, apiKey = '') {
-    const capabilities = parseProvisioningCapabilities(device);
-    const transportMode = String(capabilities.transport_mode || '').trim().toLowerCase() === 'http' ? 'http' : 'mqtt';
+    const transportMode = 'auto';
     const mqtt = resolveProvisioningMqttConfig(device);
     const parsedMqtt = splitMqttUri(mqtt.uri, process.env.MQTT_PORT || DEFAULT_MQTT_PORT);
     const mqttUsername = mqtt.username || parsedMqtt.username || '';
@@ -2698,7 +2697,7 @@ function buildAndroidRecoveryProvisioning(req, device, apiKey = '') {
         schema: 'iot.android-bridge.v1',
         generated_at: new Date().toISOString(),
         server_url: normalizePublicBaseUrl(req),
-        api_key: transportMode === 'http' ? apiKey : '',
+        api_key: apiKey,
         transport: {
             mode: transportMode
         },
@@ -2721,7 +2720,7 @@ function buildAndroidRecoveryProvisioning(req, device, apiKey = '') {
 
 function buildAndroidProvisioningSummary(payload, apiKeyName = '') {
     return {
-        transport_mode: payload?.transport?.mode === 'http' ? 'http' : 'mqtt',
+        transport_mode: payload?.transport?.mode || 'auto',
         device_id: payload?.device?.id || '',
         topic_prefix: payload?.device?.topic_prefix || DEFAULT_TOPIC_PREFIX,
         server_url: payload?.server_url || '',
@@ -2744,18 +2743,16 @@ router.get('/:id/provisioning-qr', requireDeviceAccess('id'), async (req, res) =
         if (lane === 'android') {
             let apiKey = '';
             let apiKeyName = '';
-            if (String(parseProvisioningCapabilities(device).transport_mode || '').trim().toLowerCase() === 'http') {
-                const userId = req.session?.user?.id || req.user?.id;
-                if (userId) {
-                    apiKey = generateApiKey();
-                    const keyPrefix = apiKey.substring(0, 12);
-                    apiKeyName = `Android ${device.name || device.id} recovery`;
-                    await db.run(
-                        `INSERT INTO api_keys (user_id, name, key_hash, key_prefix, scopes, device_ids, expires_at, rate_limit_rpm)
-                         VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
-                        [userId, apiKeyName, hashApiKey(apiKey), keyPrefix, 'write', JSON.stringify([device.id]), 120]
-                    );
-                }
+            const userId = req.session?.user?.id || req.user?.id;
+            if (userId) {
+                apiKey = generateApiKey();
+                const keyPrefix = apiKey.substring(0, 12);
+                apiKeyName = `Android ${device.name || device.id} recovery`;
+                await db.run(
+                    `INSERT INTO api_keys (user_id, name, key_hash, key_prefix, scopes, device_ids, expires_at, rate_limit_rpm)
+                     VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+                    [userId, apiKeyName, hashApiKey(apiKey), keyPrefix, 'write', JSON.stringify([device.id]), 120]
+                );
             }
             const payload = buildAndroidRecoveryProvisioning(req, device, apiKey);
             const token = encodeProvisioningToken(payload);

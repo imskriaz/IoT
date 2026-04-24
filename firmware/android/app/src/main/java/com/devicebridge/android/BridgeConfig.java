@@ -209,6 +209,26 @@ final class BridgeConfig {
         return "auto".equals(transportMode);
     }
 
+    boolean hasBridgeConnectionConfig() {
+        if (usesHttpTransport()) {
+            return hasHttpBridgeConfig();
+        }
+        if (usesAutoTransport()) {
+            return hasProvisionedMqttConfig() || hasHttpBridgeConfig();
+        }
+        return hasProvisionedMqttConfig();
+    }
+
+    String transportDisplayLabel() {
+        if (usesAutoTransport()) {
+            return "Automatic fallback";
+        }
+        if (usesHttpTransport()) {
+            return "Dashboard HTTP";
+        }
+        return "Realtime MQTT";
+    }
+
     boolean hasProvisionedMqttConfig() {
         return connectionConfigured && !brokerHost.isEmpty() && !deviceId.isEmpty();
     }

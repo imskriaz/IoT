@@ -1,6 +1,12 @@
 'use strict';
 
+const zlib = require('zlib');
+
 const { encodeProvisioningToken } = require('../utils/provisioningToken');
+
+function decodeToken(token) {
+    return JSON.parse(zlib.inflateRawSync(Buffer.from(token, 'base64url')).toString('utf8'));
+}
 
 describe('provisioning token encoder', () => {
     test('emits a compact opaque setup code that is shorter than legacy json base64url', () => {
@@ -51,5 +57,34 @@ describe('provisioning token encoder', () => {
 
         expect(current).not.toMatch(/^[a-z]+\:/i);
         expect(current.length).toBeLessThan(100);
+    });
+
+    test('keeps realtime and dashboard fallback details for automatic Android provisioning', () => {
+        const current = encodeProvisioningToken({
+            transport: { mode: 'auto' },
+            server_url: 'https://dashboard.example.test',
+            api_key: 'dbk_test',
+            device: {
+                id: 'android-auto-01',
+                topic_prefix: 'device'
+            },
+            mqtt: {
+                host: 'broker.example.test',
+                port: 1883,
+                protocol: 'mqtt',
+                username: 'bridge',
+                password: 'secret'
+            }
+        });
+
+        expect(decodeToken(current)).toMatchObject({
+            tm: 'auto',
+            di: 'android-auto-01',
+            su: 'https://dashboard.example.test',
+            ak: 'dbk_test',
+            mh: 'broker.example.test',
+            mu: 'bridge',
+            mw: 'secret'
+        });
     });
 });

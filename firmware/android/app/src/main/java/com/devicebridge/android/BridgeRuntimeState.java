@@ -112,8 +112,9 @@ final class BridgeRuntimeState {
     }
 
     boolean isTransportConnected(BridgeConfig config) {
-        if (config != null && config.usesHttpTransport()) {
-            return "online".equalsIgnoreCase(serviceState);
+        if (config != null && (config.usesHttpTransport() || config.usesAutoTransport())
+                && "online".equalsIgnoreCase(serviceState)) {
+            return true;
         }
         return mqttConnected;
     }

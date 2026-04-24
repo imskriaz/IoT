@@ -17,7 +17,7 @@ final class BridgeAppGate {
 
     static boolean hasConnectionDetails(Activity activity) {
         BridgeConfig config = BridgeConfig.load(activity);
-        return config.usesHttpTransport() ? config.hasHttpBridgeConfig() : config.hasProvisionedMqttConfig();
+        return config.hasBridgeConnectionConfig();
     }
 
     static boolean isOnline(Activity activity) {

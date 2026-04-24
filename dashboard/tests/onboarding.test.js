@@ -98,9 +98,9 @@ describe('onboarding routes', () => {
         expect(html).toContain('data-onboard-scope="android-transport"');
         expect(html).toContain('function applyStep3FieldVisibility()');
         expect(html).toContain("if (scope === 'esp32') show = !bridgeDevice;");
-        expect(html).toContain("if (scope === 'mqtt') show = wizardState.deviceType === 'esp32-s3' || (wizardState.deviceType === 'android' && selectedAndroidTransportMode() === 'mqtt');");
+        expect(html).toContain("if (scope === 'mqtt') show = wizardState.deviceType === 'esp32-s3';");
         expect(html).toContain("if (scope === 'android-transport') show = wizardState.deviceType === 'android';");
-        expect(html).toContain('HTTP mode auto-creates the device API key');
+        expect(html).toContain('The secure setup code carries both realtime and fallback connection details.');
         expect(html).toContain('Register &amp; Generate App Setup');
         expect(html).not.toContain('httpSMS');
         expect(html).not.toContain('typeHttpSms');
@@ -241,7 +241,7 @@ describe('onboarding routes', () => {
         expect(res.body.provisioning.qr_data_url).toMatch(/^data:image\/png;base64,/);
     });
 
-    test('returns Android HTTP provisioning with an auto-generated device API key', async () => {
+    test('returns Android automatic fallback provisioning with an auto-generated device API key', async () => {
         const db = makeDbMock({
             run: jest.fn().mockResolvedValue({ lastID: 88, changes: 1 })
         });
@@ -262,7 +262,7 @@ describe('onboarding routes', () => {
         expect(res.body.success).toBe(true);
         expect(res.body.provisioning.type).toBe('android');
         expect(res.body.provisioning.summary).toMatchObject({
-            transport_mode: 'http',
+            transport_mode: 'auto',
             api_key_name: 'Android HTTP',
             server_url: expect.any(String)
         });

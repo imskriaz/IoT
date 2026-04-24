@@ -28,10 +28,10 @@ final class BridgeDiagnostics {
         builder.append("Product: Device Bridge")
                 .append("\nBridge enabled: ").append(config.bridgeEnabled)
                 .append("\nService state: ").append(runtime.serviceState)
-                .append("\nTransport mode: ").append(BridgeProvisioning.firstNonEmpty(config.transportMode, "mqtt"))
+                .append("\nConnection mode: ").append(config.transportDisplayLabel())
                 .append("\nTransport connected: ").append(runtime.isTransportConnected(config))
-                .append("\nBroker: ").append(config.brokerHost.isEmpty() ? "not set" : config.brokerHost + ":" + config.brokerPort)
-                .append("\nProtocol: ").append(BridgeProvisioning.firstNonEmpty(config.brokerProtocol, "mqtt"))
+                .append("\nRealtime channel: ").append(config.hasProvisionedMqttConfig() ? "ready" : "not provisioned")
+                .append("\nHTTP fallback: ").append(config.hasHttpBridgeConfig() ? "ready" : "not provisioned")
                 .append("\nServer URL: ").append(config.serverUrl.isEmpty() ? "not set" : config.serverUrl)
                 .append("\nDevice ID: ").append(config.deviceId.isEmpty() ? "not set" : config.deviceId)
                 .append("\nTopic prefix: ").append(config.topicPrefix.isEmpty() ? "device" : config.topicPrefix)
@@ -42,9 +42,7 @@ final class BridgeDiagnostics {
                 .append("\nCAMERA: ").append(granted(context, Manifest.permission.CAMERA))
                 .append("\nPOST_NOTIFICATIONS: ").append(notificationPermissionState(context))
                 .append("\nAPI key: ").append(config.apiKey.isEmpty() ? "not set" : "configured")
-                .append("\nDashboard access: ").append(config.hasDashboardAccess())
-                .append("\nProvisioned MQTT: ").append(config.hasProvisionedMqttConfig())
-                .append("\nHTTP bridge config: ").append(config.hasHttpBridgeConfig());
+                .append("\nDashboard access: ").append(config.hasDashboardAccess());
 
         if (runtime.detail != null && !runtime.detail.isEmpty()) {
             builder.append("\nDetail: ").append(runtime.detail);
@@ -94,7 +92,7 @@ final class BridgeDiagnostics {
         int score = 0;
 
         if (config.deviceId != null && !config.deviceId.isEmpty()) score += 20;
-        if (config.usesHttpTransport() ? config.hasHttpBridgeConfig() : config.hasProvisionedMqttConfig()) score += 25;
+        if (config.hasBridgeConnectionConfig()) score += 25;
         if (hasOperationalPermissions(context)) score += 25;
         if (config.hasDashboardAccess()) score += 15;
         if (config.bridgeEnabled) score += 5;
@@ -140,8 +138,8 @@ final class BridgeDiagnostics {
         StorageSnapshot storage = loadStorageSnapshot(context);
 
         StringBuilder builder = new StringBuilder();
-        builder.append("Transport: ")
-                .append("http".equals(config.transportMode) ? "HTTP API" : "MQTT")
+        builder.append("Connection: ")
+                .append(config.transportDisplayLabel())
                 .append(" | Service: ").append(runtime.serviceState)
                 .append(" | Connected: ").append(runtime.isBridgeOnline(config));
 
@@ -171,7 +169,7 @@ final class BridgeDiagnostics {
     static String buildPermissionWatchdog(Context context) {
         List<String> findings = buildWatchdogFindings(context);
         if (findings.isEmpty()) {
-            return "No active drift detected. Permissions, transport config, and bridge runtime look stable.";
+            return "No active drift detected. Permissions, connection config, and bridge runtime look stable.";
         }
         StringBuilder builder = new StringBuilder();
         for (String finding : findings) {
@@ -213,10 +211,13 @@ final class BridgeDiagnostics {
             findings.add("Camera access is missing. QR onboarding and camera-side features are unavailable.");
         }
         if (config.usesHttpTransport() && !config.hasHttpBridgeConfig()) {
-            findings.add("HTTP transport is selected but server URL, API key, or device ID is incomplete.");
+            findings.add("Dashboard HTTP connection is selected but server URL, API key, or device ID is incomplete.");
         }
-        if (!config.usesHttpTransport() && !config.hasProvisionedMqttConfig()) {
-            findings.add("MQTT transport is selected but broker routing details are incomplete.");
+        if (!config.usesHttpTransport() && !config.hasProvisionedMqttConfig() && !config.usesAutoTransport()) {
+            findings.add("Realtime connection is selected but broker routing details are incomplete.");
+        }
+        if (config.usesAutoTransport() && !config.hasBridgeConnectionConfig()) {
+            findings.add("Dashboard connection details are incomplete. Import a setup code from the dashboard.");
         }
         if (config.bridgeEnabled && !"running".equalsIgnoreCase(runtime.serviceState) && !"online".equalsIgnoreCase(runtime.serviceState)) {
             findings.add("Bridge is enabled but runtime is not healthy. Restart the bridge or reopen onboarding.");
@@ -225,7 +226,7 @@ final class BridgeDiagnostics {
             findings.add("Local publish queue is building up (" + runtime.queueDepth + "). Transport may be degraded.");
         }
         if (runtime.publishFailureCount > runtime.publishSuccessCount && runtime.publishFailureCount >= 3) {
-            findings.add("Publish failures are dominating successful sends. Switch transport or inspect broker/server reachability.");
+            findings.add("Publish failures are dominating successful sends. Inspect dashboard, broker, or network reachability.");
         }
         if (storage.freeBytes >= 0 && storage.freeBytes < 512L * 1024L * 1024L) {
             findings.add("Free storage is below 512 MB. Queueing, captures, and logs may become unstable.");
