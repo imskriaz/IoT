@@ -484,17 +484,23 @@ class MQTTService extends EventEmitter {
             };
             const hasDashboardPdu = typeof smsMetadata.sms_pdu === 'string' &&
                 smsMetadata.sms_pdu.trim() &&
-                Number.isFinite(Number(smsMetadata.sms_pdu_length)) &&
-                Number(smsMetadata.sms_pdu_length) > 0;
+                (
+                    (Number.isFinite(Number(smsMetadata.sms_pdu_length)) && Number(smsMetadata.sms_pdu_length) > 0) ||
+                    Number(smsMetadata.sms_pdu_count) > 1 ||
+                    smsMetadata.sms_pdu.includes(';')
+                );
             const message = {
                 action_id: messageId,
                 command: normalizedCommand === 'send-sms-multipart' ? 'send_sms_multipart' : 'send_sms'
             };
             if (hasDashboardPdu) {
-                Object.assign(message, {
-                    sms_pdu: smsMetadata.sms_pdu,
-                    sms_pdu_length: Number(smsMetadata.sms_pdu_length)
-                });
+                message.sms_pdu = smsMetadata.sms_pdu;
+                if (Number.isFinite(Number(smsMetadata.sms_pdu_length)) && Number(smsMetadata.sms_pdu_length) > 0) {
+                    message.sms_pdu_length = Number(smsMetadata.sms_pdu_length);
+                }
+                if (Number.isFinite(Number(smsMetadata.sms_pdu_count)) && Number(smsMetadata.sms_pdu_count) > 1) {
+                    message.sms_parts = Number(smsMetadata.sms_pdu_count);
+                }
             } else {
                 message.number = number;
                 message.text = text;

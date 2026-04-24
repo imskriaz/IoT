@@ -231,6 +231,33 @@
         }
     }
 
+    function shouldFocusMqttSettings() {
+        const params = new URLSearchParams(window.location.search || '');
+        return params.get('mqttDown') === '1' || window.location.hash === '#mqtt-broker';
+    }
+
+    function focusMqttSettingsPanel() {
+        if (!shouldFocusMqttSettings()) return;
+
+        const panel = $('mqtt-broker');
+        const notice = $('mqttRedirectNotice');
+        if (notice) {
+            notice.classList.remove('d-none');
+            notice.classList.add('d-flex');
+        }
+        if (panel) {
+            panel.classList.add('system-panel--attention');
+            panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        const firstEditable = ['mqttHost', 'mqttPort', 'mqttUsername', 'mqttClientId', 'mqttProtocol']
+            .map(id => $(id))
+            .find(el => el && !el.disabled && !el.readOnly);
+        if (firstEditable) {
+            setTimeout(() => firstEditable.focus({ preventScroll: true }), 350);
+        }
+    }
+
     function renderEnvironmentOverrides(overrides = []) {
         const container = $('activeOverrideList');
         if (!container) return;
@@ -522,6 +549,6 @@
     window.toggleSystemPassword = toggleSystemPassword;
 
     document.addEventListener('DOMContentLoaded', () => {
-        loadSystemSettings();
+        loadSystemSettings().then(() => focusMqttSettingsPanel());
     });
 })();

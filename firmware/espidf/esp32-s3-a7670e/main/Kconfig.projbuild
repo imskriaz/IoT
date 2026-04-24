@@ -122,7 +122,7 @@ config UNIFIED_AUTOMATION_TOPIC_LEN
 config UNIFIED_AUTOMATION_MESSAGE_LEN
     int "Automation bridge message buffer length"
     range 128 2048
-    default 512
+    default 2048
 
 config UNIFIED_TELEPHONY_POLL_INTERVAL_MS
     int "Telephony poll interval ms"

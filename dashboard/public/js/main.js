@@ -9,6 +9,7 @@ let reconnectAttempts = 0;
 const maxReconnectAttempts = 10;
 const DEFAULT_STATUS_REFRESH_INTERVAL_MS = 60000;
 const STATUS_REFRESH_COOLDOWN_MS = 3000;
+const MQTT_DOWN_SETTINGS_REDIRECT_DELAY_MS = 15000;
 let statusRefreshIntervalMs = DEFAULT_STATUS_REFRESH_INTERVAL_MS;
 let latestDeviceStatus = null;
 let latestQueueState = { dashboard: null, device: null };
@@ -20,6 +21,9 @@ let dashboardSmsRefreshTimer = null;
 let dashboardSmsPreviewToken = 0;
 let dashboardSmsUnreadToken = 0;
 let activeIncomingCallContext = null;
+let mqttDownSettingsRedirectTimer = null;
+let mqttDownSettingsRedirectStartedAt = 0;
+let mqttDownSettingsRedirectCountdownTimer = null;
 const TOAST_DEDUPE_WINDOW_MS = 2500;
 const recentToastKeys = new Map();
 
@@ -162,6 +166,66 @@ function isDashboardVisible() {
 function isDashboardHomePage() {
     const pathname = String(window.location?.pathname || '').trim().toLowerCase();
     return pathname === '/' || pathname === '/dashboard';
+}
+
+function isSystemSettingsPage() {
+    const pathname = String(window.location?.pathname || '').trim().toLowerCase();
+    return pathname === '/settings';
+}
+
+function shouldRedirectMQTTDownToSettings() {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+        return false;
+    }
+    if (isSystemSettingsPage()) {
+        return false;
+    }
+    if (window._serverConnected === false) {
+        return false;
+    }
+    return Boolean(document.getElementById('globalConnectionOverlay'));
+}
+
+function getMQTTSettingsRedirectUrl() {
+    return '/settings?mqttDown=1#mqtt-broker';
+}
+
+function getMQTTDownRedirectSecondsRemaining() {
+    if (!mqttDownSettingsRedirectStartedAt) {
+        return Math.ceil(MQTT_DOWN_SETTINGS_REDIRECT_DELAY_MS / 1000);
+    }
+    const elapsed = Date.now() - mqttDownSettingsRedirectStartedAt;
+    return Math.max(0, Math.ceil((MQTT_DOWN_SETTINGS_REDIRECT_DELAY_MS - elapsed) / 1000));
+}
+
+function cancelMQTTDownSettingsRedirect() {
+    if (mqttDownSettingsRedirectTimer) {
+        clearTimeout(mqttDownSettingsRedirectTimer);
+        mqttDownSettingsRedirectTimer = null;
+    }
+    if (mqttDownSettingsRedirectCountdownTimer) {
+        clearInterval(mqttDownSettingsRedirectCountdownTimer);
+        mqttDownSettingsRedirectCountdownTimer = null;
+    }
+    mqttDownSettingsRedirectStartedAt = 0;
+}
+
+function scheduleMQTTDownSettingsRedirect() {
+    if (mqttDownSettingsRedirectTimer || !shouldRedirectMQTTDownToSettings()) {
+        return;
+    }
+
+    mqttDownSettingsRedirectStartedAt = Date.now();
+    mqttDownSettingsRedirectTimer = setTimeout(() => {
+        mqttDownSettingsRedirectTimer = null;
+        if (mqttDownSettingsRedirectCountdownTimer) {
+            clearInterval(mqttDownSettingsRedirectCountdownTimer);
+            mqttDownSettingsRedirectCountdownTimer = null;
+        }
+        window.location.assign(getMQTTSettingsRedirectUrl());
+    }, MQTT_DOWN_SETTINGS_REDIRECT_DELAY_MS);
+
+    mqttDownSettingsRedirectCountdownTimer = setInterval(updateGlobalConnectionOverlay, 1000);
 }
 
 function isStatusPanelOpen() {
@@ -883,6 +947,9 @@ function updateGlobalConnectionOverlay() {
         const mqttDetail = window._mqttStatus?.lastError ? ` Reason: ${window._mqttStatus.lastError}.` : '';
         nextTitle = window._mqttStatus?.reconnecting ? 'Dashboard MQTT Reconnecting' : 'Dashboard MQTT Down';
         nextMessage = `Dashboard MQTT broker connection is down.${mqttDetail} Live device actions may queue until dashboard MQTT is restored.`;
+        if (mqttDownSettingsRedirectTimer) {
+            nextMessage += ` Opening System Settings in ${getMQTTDownRedirectSecondsRemaining()} seconds so you can change MQTT settings.`;
+        }
     }
 
     title.textContent = nextTitle;
@@ -1838,6 +1905,7 @@ function updateConnectionStatus(status) {
             if (loadingSkeleton) loadingSkeleton.style.display = 'none';
             if (metricsPanel) metricsPanel.style.display = 'none';
             window._serverConnected = false;
+            cancelMQTTDownSettingsRedirect();
             break;
 
         case 'reconnecting':
@@ -1866,6 +1934,7 @@ function updateMQTTStatus(status) {
     const mqttState = normalizeMQTTStatus(status);
 
     if (mqttState.connected) {
+        cancelMQTTDownSettingsRedirect();
         mqttConnecting.style.display = 'none';
         mqttConnected.style.display = 'inline-block';
         mqttDisconnected.style.display = 'none';
@@ -1876,6 +1945,7 @@ function updateMQTTStatus(status) {
         }
         if (loadingSkeleton) loadingSkeleton.style.display = 'none';
     } else if (mqttState.connecting || mqttState.reconnecting) {
+        cancelMQTTDownSettingsRedirect();
         mqttConnecting.style.display = 'inline-block';
         mqttConnected.style.display = 'none';
         mqttDisconnected.style.display = 'none';
@@ -1899,6 +1969,7 @@ function updateMQTTStatus(status) {
         if (metricsPanel) metricsPanel.style.display = 'none';
         // Keep device liveness separate from broker liveness. USB/direct paths
         // can still keep the board reachable while MQTT is down.
+        scheduleMQTTDownSettingsRedirect();
     }
     window._mqttStatus = mqttState;
     window._mqttConnected = mqttState.connected;

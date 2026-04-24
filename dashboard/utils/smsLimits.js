@@ -1,6 +1,6 @@
 'use strict';
 
-const { buildSmsSubmitPdu } = require('./smsPdu');
+const { buildSmsSubmitPdus } = require('./smsPdu');
 
 const SMS_MAX_UTF8_BYTES = 1023;
 const SMS_MAX_PARTS = 15;
@@ -8,6 +8,7 @@ const GSM_SINGLE_PART_LIMIT = 160;
 const GSM_MULTI_PART_LIMIT = 153;
 const UCS2_SINGLE_PART_LIMIT = 70;
 const UCS2_MULTI_PART_LIMIT = 67;
+const SMS_PDU_BUNDLE_MAX_CHARS = 1800;
 
 const GSM_EXTENSION_CHAR_SET = new Set(['^', '{', '}', '\\', '[', '~', ']', '|', '\u20AC']);
 const UCS2_BMP_MAX_CODEPOINT = 0xFFFF;
@@ -156,12 +157,20 @@ function buildSmsTransportMetadataForRecipient(number, valueOrAnalysis) {
         : analyzeSmsText(valueOrAnalysis);
     const metadata = buildSmsTransportMetadata(analysis);
 
-    if (metadata.sms_transport_encoding === 'ucs2' && metadata.sms_parts === 1) {
-        const pdu = buildSmsSubmitPdu(number, analysis.text, { requestStatusReport: true });
-        metadata.sms_pdu = pdu.pdu;
-        metadata.sms_pdu_length = pdu.length;
-        metadata.sms_pdu_encoding = pdu.encoding;
-        metadata.sms_status_report_requested = pdu.statusReportRequested;
+    if (metadata.sms_transport_encoding === 'ucs2') {
+        const pdus = buildSmsSubmitPdus(number, analysis.text, { requestStatusReport: true });
+        const pduBundle = pdus.map((pdu) => pdu.pdu).join(';');
+
+        if (pduBundle.length <= SMS_PDU_BUNDLE_MAX_CHARS) {
+            metadata.sms_pdu = pduBundle;
+            metadata.sms_pdu_encoding = 'ucs2';
+            metadata.sms_pdu_count = pdus.length;
+            metadata.sms_status_report_requested = pdus.every((pdu) => pdu.statusReportRequested);
+
+            if (pdus.length === 1) {
+                metadata.sms_pdu_length = pdus[0].length;
+            }
+        }
     }
 
     return metadata;
@@ -198,6 +207,7 @@ module.exports = {
     GSM_MULTI_PART_LIMIT,
     UCS2_SINGLE_PART_LIMIT,
     UCS2_MULTI_PART_LIMIT,
+    SMS_PDU_BUNDLE_MAX_CHARS,
     analyzeSmsText,
     formatSmsLimitError,
     validateSmsMessageSize,

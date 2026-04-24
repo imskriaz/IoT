@@ -447,16 +447,63 @@ static esp_err_t modem_a7670_sms_set_pdu_mode_locked(
     return err;
 }
 
+static int modem_a7670_sms_hex_nibble(char value) {
+    if (value >= '0' && value <= '9') {
+        return value - '0';
+    }
+    if (value >= 'A' && value <= 'F') {
+        return value - 'A' + 10;
+    }
+    if (value >= 'a' && value <= 'f') {
+        return value - 'a' + 10;
+    }
+    return -1;
+}
+
+static bool modem_a7670_sms_hex_byte(const char *hex, uint8_t *out_value) {
+    int high = 0;
+    int low = 0;
+
+    if (!hex || !out_value) {
+        return false;
+    }
+
+    high = modem_a7670_sms_hex_nibble(hex[0]);
+    low = modem_a7670_sms_hex_nibble(hex[1]);
+    if (high < 0 || low < 0) {
+        return false;
+    }
+
+    *out_value = (uint8_t)((high << 4) | low);
+    return true;
+}
+
+static uint16_t modem_a7670_sms_derive_pdu_length(const char *pdu_hex) {
+    const size_t hex_len = pdu_hex ? strlen(pdu_hex) : 0U;
+    const size_t total_bytes = hex_len / 2U;
+    uint8_t smsc_len = 0U;
+
+    if (!pdu_hex || hex_len < 4U || (hex_len % 2U) != 0U ||
+        !modem_a7670_sms_hex_byte(pdu_hex, &smsc_len) ||
+        total_bytes <= ((size_t)smsc_len + 1U)) {
+        return 0U;
+    }
+
+    return (uint16_t)(total_bytes - (size_t)smsc_len - 1U);
+}
+
 static bool modem_a7670_sms_is_valid_pdu_hex(const char *pdu_hex, uint16_t pdu_length) {
     size_t hex_len = 0U;
+    uint16_t effective_length = pdu_length;
 
-    if (!pdu_hex || pdu_length == 0U) {
+    if (!pdu_hex) {
         return false;
     }
 
     hex_len = strlen(pdu_hex);
     if (hex_len == 0U || hex_len >= MODEM_A7670_SMS_PDU_MAX_HEX_LEN || (hex_len % 2U) != 0U ||
-        pdu_length >= (hex_len / 2U)) {
+        (effective_length == 0U && (effective_length = modem_a7670_sms_derive_pdu_length(pdu_hex)) == 0U) ||
+        effective_length >= (hex_len / 2U)) {
         return false;
     }
 
@@ -489,7 +536,7 @@ static void modem_a7670_sms_restore_text_mode_after_pdu_locked(int64_t deadline_
     }
 }
 
-static esp_err_t modem_a7670_send_sms_pdu_locked(
+static esp_err_t modem_a7670_send_sms_pdu_payload_locked(
     const char *pdu_hex,
     uint16_t pdu_length,
     char *response,
@@ -501,18 +548,19 @@ static esp_err_t modem_a7670_send_sms_pdu_locked(
     esp_err_t err = ESP_OK;
     uint32_t remaining_timeout_ms = 0U;
 
-    if (!response || response_len == 0U || !modem_a7670_sms_is_valid_pdu_hex(pdu_hex, pdu_length)) {
+    if (!response || response_len == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (pdu_length == 0U) {
+        pdu_length = modem_a7670_sms_derive_pdu_length(pdu_hex);
+    }
+    if (!modem_a7670_sms_is_valid_pdu_hex(pdu_hex, pdu_length)) {
         return ESP_ERR_INVALID_ARG;
     }
 
     remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
     if (remaining_timeout_ms == 0U) {
         return ESP_ERR_TIMEOUT;
-    }
-
-    err = modem_a7670_sms_set_pdu_mode_locked(response, response_len, remaining_timeout_ms);
-    if (err != ESP_OK) {
-        return err;
     }
 
     if (snprintf(command, sizeof(command), "AT+CMGS=%u", (unsigned int)pdu_length) < 0) {
@@ -543,6 +591,68 @@ static esp_err_t modem_a7670_send_sms_pdu_locked(
                 ESP_LOGI(TAG, "sms PDU final response err=%s response=%s", esp_err_to_name(err), response);
             }
         }
+    }
+
+    return err;
+}
+
+static esp_err_t modem_a7670_send_sms_pdu_bundle_locked(
+    const char *pdu_bundle,
+    uint16_t pdu_length,
+    char *response,
+    size_t response_len,
+    int64_t deadline_us
+) {
+    char segment[MODEM_A7670_SMS_PDU_MAX_HEX_LEN] = {0};
+    const char *cursor = pdu_bundle;
+    esp_err_t err = ESP_OK;
+    uint32_t remaining_timeout_ms = 0U;
+    uint16_t sent_count = 0U;
+
+    if (!response || response_len == 0U || !pdu_bundle || pdu_bundle[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+    if (remaining_timeout_ms == 0U) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    err = modem_a7670_sms_set_pdu_mode_locked(response, response_len, remaining_timeout_ms);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    while (cursor && cursor[0] != '\0') {
+        const char *delimiter = strchr(cursor, ';');
+        const size_t segment_len = delimiter ? (size_t)(delimiter - cursor) : strlen(cursor);
+        uint16_t segment_pdu_length = 0U;
+
+        if (segment_len == 0U || segment_len >= sizeof(segment)) {
+            err = ESP_ERR_INVALID_ARG;
+            break;
+        }
+
+        memcpy(segment, cursor, segment_len);
+        segment[segment_len] = '\0';
+        segment_pdu_length = (delimiter || sent_count > 0U) ? 0U : pdu_length;
+        err = modem_a7670_send_sms_pdu_payload_locked(
+            segment,
+            segment_pdu_length,
+            response,
+            response_len,
+            deadline_us
+        );
+        if (err != ESP_OK) {
+            break;
+        }
+
+        sent_count++;
+        cursor = delimiter ? delimiter + 1 : NULL;
+    }
+
+    if (sent_count == 0U && err == ESP_OK) {
+        err = ESP_ERR_INVALID_ARG;
     }
 
     if (err != ESP_ERR_TIMEOUT) {
@@ -1239,7 +1349,7 @@ esp_err_t modem_a7670_send_sms_with_options(
     esp_err_t err = ESP_FAIL;
     const uint8_t ctrl_z = 0x1AU;
     const bool use_ucs2 = modem_a7670_sms_should_use_ucs2(text, options);
-    const bool use_dashboard_pdu = options && options->pdu_hex && options->pdu_hex[0] != '\0' && options->pdu_length > 0U;
+    const bool use_dashboard_pdu = options && options->pdu_hex && options->pdu_hex[0] != '\0';
     const size_t total_segments = modem_a7670_sms_resolve_segment_count(text, use_ucs2, options);
     const uint8_t destination_type = modem_a7670_sms_type_of_address(number);
     char *encoded_text = NULL;
@@ -1277,7 +1387,7 @@ esp_err_t modem_a7670_send_sms_with_options(
             (unsigned)options->pdu_length,
             (unsigned)(text ? strlen(text) : 0U)
         );
-        err = modem_a7670_send_sms_pdu_locked(
+        err = modem_a7670_send_sms_pdu_bundle_locked(
             options->pdu_hex,
             options->pdu_length,
             response,

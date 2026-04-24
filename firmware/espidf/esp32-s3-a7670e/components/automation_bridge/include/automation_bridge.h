@@ -13,7 +13,7 @@
 #endif
 
 #ifndef CONFIG_UNIFIED_AUTOMATION_MESSAGE_LEN
-#define CONFIG_UNIFIED_AUTOMATION_MESSAGE_LEN  512
+#define CONFIG_UNIFIED_AUTOMATION_MESSAGE_LEN  2048
 #endif
 
 esp_err_t automation_bridge_init(void);

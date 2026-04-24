@@ -1229,7 +1229,7 @@ static unified_action_response_t api_bridge_execute_send_sms(
     unified_action_response_t response = {0};
     sms_service_send_options_t send_options = {0};
     bool force_multipart = false;
-    const bool has_dashboard_pdu = request && request->sms_pdu[0] != '\0' && request->sms_pdu_length > 0U;
+    const bool has_dashboard_pdu = request && request->sms_pdu[0] != '\0';
 
     if (request) {
         if (request->sms_parts > 1U) {

@@ -212,6 +212,10 @@ public class HomeActivity extends Activity {
     private Map<String, Object> state = new HashMap<>();
     private List<Map<String, Object>> smsThreads = new ArrayList<>();
     private List<Map<String, Object>> smsMessages = new ArrayList<>();
+    private List<Map<String, Object>> dashboardDevices = new ArrayList<>();
+    private List<Map<String, Object>> dashboardSims = new ArrayList<>();
+    private List<Map<String, Object>> dashboardCallLog = new ArrayList<>();
+    private List<Map<String, String>> dashboardContacts = new ArrayList<>();
     private Map<String, Object> selectedSmsThread;
     private final Map<String, ContactInfo> smsContactCache = new HashMap<>();
     private final Set<String> selectedSmsThreadKeys = new HashSet<>();
@@ -222,6 +226,9 @@ public class HomeActivity extends Activity {
     private String consoleLevelFilter = "all";
     private String consoleCategoryFilter = "all";
     private String smsSearchQuery = "";
+    private String selectedCommunicationDeviceId = "";
+    private String selectedCommunicationDeviceName = "";
+    private String lastContactQuery = "";
     private String newSmsContactQuery = "";
     private String newSmsRecipientName = "";
     private String newSmsRecipientNumber = "";
@@ -229,6 +236,7 @@ public class HomeActivity extends Activity {
     private String smsTemplateImportTargetNumber = "";
     private int selectedTabIndex = 0;
     private int selectedSmsSimSlot = -1;
+    private int selectedCommunicationSimSlot = -1;
     private int setupPollAttempts = 0;
     private long lastBackPressMs;
     private float touchStartX;
@@ -239,6 +247,9 @@ public class HomeActivity extends Activity {
     private boolean connectingFromSetup;
     private boolean busy;
     private boolean smsLoading;
+    private boolean devicesLoading;
+    private boolean callLogLoading;
+    private boolean contactsLoading;
     private boolean smsSending;
     private boolean smsBulkMode;
     private boolean composingNewSms;
@@ -278,7 +289,6 @@ public class HomeActivity extends Activity {
     protected void onResume() {
         super.onResume();
         registerBridgeEventReceiverIfNeeded();
-        processDueLocalSmsQueue();
         loadState(true);
         maybeRunLauncherSelfSmsTest();
         scheduleRefresh();
@@ -474,12 +484,17 @@ public class HomeActivity extends Activity {
         if (!BridgeAppGate.routeFromStartup(this)) {
             ensureBridgeOnline();
         }
-        processDueLocalSmsQueue();
         state = buildNativeState();
+        ensureSelectedCommunicationDevice();
+        loadDeviceInventory(false);
         if (selectedTabIndex == TAB_SMS && selectedSmsThread == null) {
             loadSmsThreads();
         } else if (selectedTabIndex == TAB_SMS && selectedSmsThread != null) {
             loadSmsMessages(stringValue(selectedSmsThread.get("threadKey")));
+        } else if (selectedTabIndex == TAB_PHONE) {
+            loadDashboardCallLog(false);
+        } else if (selectedTabIndex == TAB_CONTACTS) {
+            loadDashboardContacts(lastContactQuery, false);
         }
         if (rebuildAfter) {
             rebuild();
@@ -920,8 +935,8 @@ public class HomeActivity extends Activity {
         boolean inThread = selectedSmsThread != null || composingNewSms;
         root.setPadding(inThread ? 0 : dp(12), inThread ? 0 : dp(8), inThread ? 0 : dp(12), inThread ? 0 : dp(10));
         root.setBackgroundColor(color(inThread ? "#ffffff" : "#f2f2f7"));
-        if (!boolValue(state.get("smsInboxReady"))) {
-            root.addView(smsHeader("SMS", "Threaded inbox and compose", "Grant inbox", R.drawable.ic_db_sms, this::requestSmsInboxAccess), fullWidth(14));
+        if (!BridgeConfig.load(this).hasDashboardAccess()) {
+            root.addView(smsHeader("SMS", "Dashboard messages", "Setup", R.drawable.ic_db_key, this::showPasteCodeDialog), fullWidth(14));
             root.addView(smsPermissionCard(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         } else if (composingNewSms) {
             root.addView(newConversationScreen(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
@@ -963,8 +978,12 @@ public class HomeActivity extends Activity {
 
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = text("Messages", 32, "#111111", true);
-        top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(text("Messages", 30, "#111111", true));
+        copy.addView(singleLineText(communicationHeaderTitle("SMS"), 12, "#64748b", false));
+        top.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        top.addView(iconAction(R.drawable.ic_db_devices, "#ffffff", "#0a84ff", this::showCommunicationDeviceSheet), fixed(38, 38, 8));
         top.addView(iconAction(R.drawable.ic_db_add, "#0a84ff", "#ffffff", this::openNewConversationScreen), fixed(38, 38, 0));
         shell.addView(top, fullWidth(4));
 
@@ -978,13 +997,13 @@ public class HomeActivity extends Activity {
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
         card.setBackground(roundRect("#ffffff", "#e2e8f0", 24));
         card.addView(iconTile(R.drawable.ic_db_sms, "#0b5ed7", 64, 20, 30), fixed(64, 64, 0));
-        TextView title = text("Enable SMS inbox access", 20, "#0f172a", true);
+        TextView title = text("Connect dashboard first", 20, "#0f172a", true);
         title.setGravity(Gravity.CENTER);
         card.addView(title, fullWidth(8));
-        TextView detail = text("This lets the app load device conversations as real threads and keeps the SMS screen close to the native messages workflow.", 13, "#64748b", false);
+        TextView detail = text("Messages, calls, and contacts are loaded from the dashboard API for the selected device.", 13, "#64748b", false);
         detail.setGravity(Gravity.CENTER);
         card.addView(detail, fullWidth(16));
-        card.addView(labelIconButton("Grant inbox access", R.drawable.ic_db_add, "#0b5ed7", "#ffffff", this::requestSmsInboxAccess));
+        card.addView(labelIconButton("Open setup", R.drawable.ic_db_key, "#0b5ed7", "#ffffff", this::showPasteCodeDialog));
         return card;
     }
 
@@ -1137,10 +1156,6 @@ public class HomeActivity extends Activity {
         if (unread > 0) {
             row.addView(pill(String.valueOf(unread), "#0a84ff", "#ffffff"));
         }
-        int queued = BridgeSmsLocalQueue.countForAddress(this, stringValue(thread.get("address")));
-        if (queued > 0) {
-            row.addView(pill("Q" + queued, "#fef3c7", "#92400e"), wrapLeft(6));
-        }
         group.addView(row);
         View divider = new View(this);
         divider.setBackgroundColor(color("#e5e5ea"));
@@ -1230,7 +1245,6 @@ public class HomeActivity extends Activity {
     }
 
     private View smsSendAction(StringFactory targetNumber, EditText composer, Runnable sendAction) {
-        ensureSelectedSmsSimSlot();
         FrameLayout button = new FrameLayout(this);
         button.setMinimumWidth(dp(42));
         button.setMinimumHeight(dp(42));
@@ -1256,8 +1270,8 @@ public class HomeActivity extends Activity {
     }
 
     private String smsSimBadgeLabel() {
-        ensureSelectedSmsSimSlot();
-        return selectedSmsSimSlot >= 0 ? "S" + (selectedSmsSimSlot + 1) : "SIM";
+        int slot = activeCommunicationSimSlot();
+        return slot >= 0 ? "S" + (slot + 1) : "SIM";
     }
 
     private void showSmsSendOptionsSheet(String number, EditText composer) {
@@ -1277,34 +1291,33 @@ public class HomeActivity extends Activity {
         header.addView(iconAction(R.drawable.ic_db_close, "#f8fafc", "#0f172a", dialog::dismiss));
         sheet.addView(header, fullWidth(12));
 
-        List<SubscriptionInfo> subscriptions = activeSmsSubscriptions();
-        if (subscriptions.isEmpty()) {
-            sheet.addView(attachmentRow(R.drawable.ic_db_tune, "SIM permission needed", "Grant SMS/phone permission to show SIM 1 / SIM 2.", "#d97706", () -> {
-                dialog.dismiss();
-                requestSmsInboxAccess();
-            }), fullWidth(6));
-        } else {
-            for (SubscriptionInfo info : subscriptions) {
-                if (info == null) continue;
-                int slot = info.getSimSlotIndex();
-                String carrier = info.getCarrierName() == null ? "" : info.getCarrierName().toString();
-                boolean active = slot == selectedSmsSimSlot;
-                sheet.addView(attachmentRow(R.drawable.ic_db_sms,
-                        (active ? "Use " : "Switch to ") + "SIM " + (slot + 1),
-                        carrier.isEmpty() ? "Send through SIM " + (slot + 1) : carrier,
-                        active ? "#0b5ed7" : "#475569",
-                        () -> {
-                            selectedSmsSimSlot = slot;
-                            handleSmsSimChanged(number);
-                            dialog.dismiss();
-                            showSnack("SIM " + (slot + 1) + " selected.");
-                        }), fullWidth(6));
-            }
-        }
-        sheet.addView(attachmentRow(R.drawable.ic_db_sync, "Schedule send", "Open local schedule planner for this draft.", "#d97706", () -> {
+        sheet.addView(attachmentRow(R.drawable.ic_db_devices, "Device and SIM", communicationHeaderTitle("SMS"), "#0b5ed7", () -> {
             dialog.dismiss();
-            showScheduleSmsSheet(number, composer == null ? "" : composer.getText().toString());
-        }));
+            showCommunicationDeviceSheet();
+        }), fullWidth(6));
+        sheet.addView(attachmentRow(R.drawable.ic_db_sms, "Default SIM", "Let dashboard/device choose the send route.", selectedCommunicationSimSlot < 0 ? "#0b5ed7" : "#475569", () -> {
+            selectedCommunicationSimSlot = -1;
+            selectedSmsSimSlot = -1;
+            dialog.dismiss();
+            rebuild();
+        }), fullWidth(6));
+        for (Map<String, Object> sim : dashboardSims) {
+            int slot = intValue(sim.get("slot"));
+            boolean active = slot == selectedCommunicationSimSlot;
+            String label = firstNonEmptyValue(stringValue(sim.get("label")), "SIM " + (slot + 1));
+            String detail = firstNonEmptyValue(stringValue(sim.get("number")), stringValue(sim.get("carrier")), "Send through SIM " + (slot + 1));
+            sheet.addView(attachmentRow(R.drawable.ic_db_sms,
+                    (active ? "Use " : "Switch to ") + label,
+                    detail,
+                    active ? "#0b5ed7" : "#475569",
+                    () -> {
+                        selectedCommunicationSimSlot = slot;
+                        selectedSmsSimSlot = slot;
+                        handleSmsSimChanged(number);
+                        dialog.dismiss();
+                        showSnack("SIM " + (slot + 1) + " selected.");
+                    }), fullWidth(6));
+        }
         showFixedBottomSheetDialog(dialog, sheet);
     }
 
@@ -1363,12 +1376,9 @@ public class HomeActivity extends Activity {
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.addView(singleLineText(systemThread ? systemThreadTrueTitle(selectedSmsThread, contact) : contact.name.isEmpty() ? "Conversation" : contact.name, 17, "#111111", true));
-        copy.addView(singleLineText(systemThread ? "No reply available" : contact.number.isEmpty() ? "Text Message" : contact.number, 12, "#8e8e93", false));
+        copy.addView(singleLineText(systemThread ? "No reply available" : joinNonEmpty(contact.number.isEmpty() ? "Text Message" : contact.number, activeCommunicationDeviceName()), 12, "#8e8e93", false));
         header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        int queued = BridgeSmsLocalQueue.countForAddress(this, contact.number);
-        if (queued > 0) {
-            header.addView(pill("Queued " + queued, "#fef3c7", "#92400e"), wrapRight(8));
-        }
+        header.addView(iconAction(R.drawable.ic_db_devices, "#ffffff", "#0a84ff", this::showCommunicationDeviceSheet), fixed(42, 42, 6));
         if (!systemThread && !safe(contact.number).trim().isEmpty()) {
             header.addView(iconAction(R.drawable.ic_db_call, "#ffffff", "#34c759", () -> showDialerSheet(contact.number, contact.name)), fixed(42, 42, 6));
         }
@@ -1393,12 +1403,10 @@ public class HomeActivity extends Activity {
         LinearLayout title = new LinearLayout(this);
         title.setOrientation(LinearLayout.VERTICAL);
         title.addView(text("New Message", 18, "#111111", true));
+        title.addView(singleLineText(communicationHeaderTitle("SMS"), 11, "#64748b", false));
         header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        header.addView(iconAction(R.drawable.ic_db_devices, "#ffffff", "#0a84ff", this::showCommunicationDeviceSheet), fixed(38, 38, 8));
         header.addView(iconAction(R.drawable.ic_db_person, "#ffffff", "#0a84ff", () -> {
-            if (!hasContactsPermission()) {
-                requestContactsPermission();
-                return;
-            }
             showContactPickerSheet("Select recipient", (name, phone) -> {
                 addNewSmsRecipient(name, phone);
                 newSmsContactQuery = "";
@@ -1413,10 +1421,6 @@ public class HomeActivity extends Activity {
         content.setPadding(dp(14), dp(8), dp(14), dp(12));
         content.addView(communicationActionRow(
                 communicationShortcut("Contacts", "", R.drawable.ic_db_person, "#34c759", () -> {
-                    if (!hasContactsPermission()) {
-                        requestContactsPermission();
-                        return;
-                    }
                     showContactPickerSheet("Select recipient", (name, phone) -> {
                         addNewSmsRecipient(name, phone);
                         newSmsContactQuery = "";
@@ -1447,29 +1451,22 @@ public class HomeActivity extends Activity {
             rebuild();
         };
         chooseRef[0] = choose;
-        if (hasContactsPermission()) {
-            renderNewSmsRecipientMatches(contactsBox, newSmsContactQuery, choose);
-            contactSearch.addTextChangedListener(new TextWatcher() {
-                @Override
-                public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-                }
+        renderNewSmsRecipientMatches(contactsBox, newSmsContactQuery, choose);
+        contactSearch.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
 
-                @Override
-                public void onTextChanged(CharSequence s, int start, int before, int count) {
-                    newSmsContactQuery = s.toString();
-                    renderNewSmsRecipientMatches(contactsBox, newSmsContactQuery, choose);
-                }
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                newSmsContactQuery = s.toString();
+                renderNewSmsRecipientMatches(contactsBox, newSmsContactQuery, choose);
+            }
 
-                @Override
-                public void afterTextChanged(Editable s) {
-                }
-            });
-        } else {
-            contactsBox.addView(contactPermissionRow(() -> {
-                reopenNewConversationAfterContactsPermission = true;
-                requestContactsPermission();
-            }));
-        }
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        });
         ScrollView contactsScroll = new ScrollView(this);
         contactsScroll.addView(contactsBox);
         contactsScroll.setVisibility(newSmsContactSearchFocused ? View.VISIBLE : View.GONE);
@@ -1616,10 +1613,7 @@ public class HomeActivity extends Activity {
 
     private void renderNewSmsRecipientMatches(LinearLayout target, String query, ContactCallback callback) {
         target.removeAllViews();
-        if (!hasContactsPermission()) {
-            target.addView(contactPermissionRow(this::requestContactsPermission));
-            return;
-        }
+        loadDashboardContacts(query, false);
         if (looksLikePhoneNumber(query)) {
             String typedNumber = safe(query).trim();
             if (!alreadySelectedNewSmsRecipient(typedNumber)) {
@@ -1636,7 +1630,7 @@ public class HomeActivity extends Activity {
             target.addView(contactRow(name, number, (contactName, contactNumber) -> callback.onContact(name, number)), fullWidth(4));
         }
         if (target.getChildCount() == 0) {
-            TextView empty = text("No contacts found", 12, "#64748b", false);
+            TextView empty = text(contactsLoading ? "Loading contacts..." : "No dashboard contacts found", 12, "#64748b", false);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(dp(8), dp(16), dp(8), dp(16));
             target.addView(empty);
@@ -1715,30 +1709,19 @@ public class HomeActivity extends Activity {
         }), fullWidth(6));
         sheet.addView(attachmentRow(R.drawable.ic_db_clean, "Mark all read", "Clear unread state for this conversation.", "#166534", () -> {
             dialog.dismiss();
-            BridgeSmsStore.markThreadsRead(this, Arrays.asList(selectedSmsThread));
-            loadSmsThreads();
-            selectedSmsThread = findSmsThreadByKey(threadKey(selectedSmsThread));
-            loadSmsMessages(threadKey(selectedSmsThread));
-            rebuild();
+            selectedSmsThreadKeys.clear();
+            selectedSmsThreadKeys.add(threadKey(selectedSmsThread));
+            markSelectedSmsThreadsRead();
         }), fullWidth(6));
         sheet.addView(attachmentRow(R.drawable.ic_db_search, "Search in conversation", "Use the conversation list search to filter messages.", "#475569", () -> {
             dialog.dismiss();
             showSnack("Conversation search is listed in the audit as next work.");
         }), fullWidth(6));
-        sheet.addView(attachmentRow(R.drawable.ic_db_sync, "Queue planner", "Review local scheduled SMS for this conversation.", "#d97706", () -> {
-            dialog.dismiss();
-            showLocalSmsQueueSheet(stringValue(selectedSmsThread.get("address")));
-        }), fullWidth(6));
-        sheet.addView(attachmentRow(R.drawable.ic_db_open, "Import template", "Upload Excel-compatible CSV rows to the local queue.", "#0f766e", () -> {
-            dialog.dismiss();
-            smsTemplateImportTargetNumber = stringValue(selectedSmsThread.get("address"));
-            openSmsTemplateFilePicker();
-        }), fullWidth(6));
         sheet.addView(attachmentRow(R.drawable.ic_db_open, "Google Messages audit", "Review remaining parity items.", "#7c3aed", () -> {
             dialog.dismiss();
             showSmsFeatureAuditSheet();
         }), fullWidth(6));
-        sheet.addView(attachmentRow(R.drawable.ic_db_restart, "Delete conversation", "Delete local mirror and provider messages when Android allows it.", "#dc2626", () -> {
+        sheet.addView(attachmentRow(R.drawable.ic_db_restart, "Delete conversation", "Dashboard conversation delete is not enabled in this app yet.", "#dc2626", () -> {
             dialog.dismiss();
             selectedSmsThreadKeys.clear();
             selectedSmsThreadKeys.add(threadKey(selectedSmsThread));
@@ -1814,16 +1797,7 @@ public class HomeActivity extends Activity {
     }
 
     private void deleteSmsMessage(Map<String, Object> message) {
-        BridgeSmsStore.SmsMutationResult result = BridgeSmsStore.deleteMessages(this, Arrays.asList(message));
-        if (selectedSmsThread != null) {
-            loadSmsThreads();
-            selectedSmsThread = findSmsThreadByKey(threadKey(selectedSmsThread));
-            if (selectedSmsThread != null) {
-                loadSmsMessages(threadKey(selectedSmsThread));
-            }
-        }
-        rebuild();
-        showSnack(result.providerBlocked ? "Android blocked phone SMS delete; local mirror updated." : "Message deleted.");
+        showSnack("Delete from dashboard messages is not enabled in the app yet.");
     }
 
     private void showSmsFeatureAuditSheet() {
@@ -1842,9 +1816,9 @@ public class HomeActivity extends Activity {
         header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         header.addView(iconAction(R.drawable.ic_db_close, "#f8fafc", "#0f172a", dialog::dismiss));
         sheet.addView(header, fullWidth(12));
-        sheet.addView(auditLine("Available", "Bottom-scroll thread, sender info, message long-press menu, dashboard/API badges, system-thread no-reply state, full-screen compose, SIM selector, local queue, CSV schedule import."));
+        sheet.addView(auditLine("Available", "Bottom-scroll thread, sender info, message long-press menu, dashboard/API badges, system-thread no-reply state, full-screen compose, device selector, and SIM selector."));
         sheet.addView(auditLine("Still Missing", "Conversation search, archive, block/report spam, notification mute, reactions, media/gallery attachments, RCS typing/read receipts."));
-        sheet.addView(auditLine("Android Limit", "Deleting and marking provider SMS can be blocked unless this app is the default SMS app."));
+        sheet.addView(auditLine("Android Limit", "The app screen reads dashboard SMS. Provider access is only used by the bridge sync service."));
         showFixedBottomSheetDialog(dialog, sheet);
     }
 
@@ -1951,11 +1925,7 @@ public class HomeActivity extends Activity {
 
         Runnable refreshContacts = () -> {
             results.removeAllViews();
-            if (!hasContactsPermission()) {
-                results.addView(contactPermissionRow(this::requestContactsPermission), fullWidth(0));
-                return;
-            }
-
+            loadDashboardContacts(search.getText().toString(), false);
             List<Map<String, String>> matches = findContacts(search.getText().toString(), 120);
 
             for (Map<String, String> contact : matches) {
@@ -1965,7 +1935,7 @@ public class HomeActivity extends Activity {
             }
 
             if (matches.isEmpty()) {
-                results.addView(emptyLine("No saved contacts found for this search."));
+                results.addView(emptyLine(contactsLoading ? "Loading contacts..." : "No dashboard contacts found for this search."));
             }
         };
 
@@ -1994,8 +1964,12 @@ public class HomeActivity extends Activity {
 
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = text("Contacts", 32, "#111111", true);
-        top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(text("Contacts", 30, "#111111", true));
+        copy.addView(singleLineText("Dashboard contacts", 12, "#64748b", false));
+        top.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        top.addView(iconAction(R.drawable.ic_db_devices, "#ffffff", "#0a84ff", this::showCommunicationDeviceSheet), fixed(38, 38, 0));
         shell.addView(top, fullWidth(4));
 
         return shell;
@@ -2014,8 +1988,8 @@ public class HomeActivity extends Activity {
         String callStatus = stringValue(state.get("callStatus"), "Idle");
         String callNumber = stringValue(state.get("callNumber"));
         String callDirection = stringValue(state.get("callDirection"));
-        boolean callLogReady = hasCallLogPermission();
-        List<RecentCallItem> recentCalls = callLogReady ? recentCallLogItems(8) : new ArrayList<>();
+        boolean callLogReady = BridgeConfig.load(this).hasDashboardAccess();
+        List<RecentCallItem> recentCalls = dashboardRecentCallItems(8);
         List<RecentCallItem> favorites = recentFavoriteItems(recentCalls, 6);
 
         root.addView(phoneListHeader(), fullWidth(8));
@@ -2044,14 +2018,16 @@ public class HomeActivity extends Activity {
         if (!callLogReady) {
             callLogCard.addView(settingsRow(
                     R.drawable.ic_db_call,
-                    "Call log access",
-                    "Allow phone and call-log permissions so Recents and caller names can appear here.",
-                    "Allow",
+                    "Dashboard access",
+                    "Connect the dashboard to load calls for the selected device.",
+                    "Setup",
                     "#0a84ff",
-                    this::requestCallFeature
+                    this::showPasteCodeDialog
             ));
+        } else if (callLogLoading) {
+            callLogCard.addView(emptyLine("Loading dashboard calls..."));
         } else if (recentCalls.isEmpty()) {
-            callLogCard.addView(emptyLine("No recent calls on this device yet."));
+            callLogCard.addView(emptyLine("No recent calls for this device yet."));
         } else {
             for (RecentCallItem item : recentCalls) {
                 callLogCard.addView(callLogRow(item), fullWidth(4));
@@ -2069,8 +2045,12 @@ public class HomeActivity extends Activity {
 
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = text("Phone", 32, "#111111", true);
-        top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(text("Phone", 30, "#111111", true));
+        copy.addView(singleLineText(communicationHeaderTitle("Call"), 12, "#64748b", false));
+        top.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        top.addView(iconAction(R.drawable.ic_db_devices, "#ffffff", "#0a84ff", this::showCommunicationDeviceSheet), fixed(38, 38, 8));
         top.addView(iconAction(R.drawable.ic_db_add, "#0a84ff", "#ffffff", () -> showDialerSheet("", "")), fixed(38, 38, 0));
         shell.addView(top, fullWidth(4));
 
@@ -2466,9 +2446,9 @@ public class HomeActivity extends Activity {
         }
 
         form.addView(text(
-                BridgePermissionHelper.hasCallFeature(this)
-                        ? "Call access is active. Phone is ready to place the call."
-                        : "Direct call control is not active yet. Phone can still open the dialer without extra permission.",
+                BridgeConfig.load(this).hasDashboardAccess()
+                        ? "Call will be requested through the selected dashboard device."
+                        : "Connect dashboard access before placing calls.",
                 11,
                 "#8e8e93",
                 false
@@ -2495,9 +2475,9 @@ public class HomeActivity extends Activity {
         LinearLayout actions = new LinearLayout(this);
         actions.setGravity(Gravity.CENTER_VERTICAL);
         actions.addView(labelIconButton("Cancel", R.drawable.ic_db_close, "#f8fafc", "#0f172a", dialog::dismiss), weighted(8));
-        actions.addView(labelIconButton("Dial", R.drawable.ic_db_call, "#0a84ff", "#ffffff", () -> {
+        actions.addView(labelIconButton("Call", R.drawable.ic_db_call, "#0a84ff", "#ffffff", () -> {
             dialog.dismiss();
-            placePhoneCall(numberState[0], false);
+            placePhoneCall(numberState[0], true);
         }), weighted(0));
         form.addView(actions);
 
@@ -2533,23 +2513,70 @@ public class HomeActivity extends Activity {
             showSnack("Phone number is required.");
             return;
         }
-        if (directCall && !BridgePermissionHelper.hasCallFeature(this)) {
-            requestCallFeature();
+        BridgeConfig config = BridgeConfig.load(this);
+        if (!config.hasDashboardAccess()) {
+            showSnack("Dashboard access is not configured.");
             return;
         }
-        Intent intent = new Intent(
-                directCall ? Intent.ACTION_CALL : Intent.ACTION_DIAL,
-                Uri.parse("tel:" + Uri.encode(cleanNumber))
-        );
-        try {
-            startActivity(intent);
-        } catch (RuntimeException error) {
-            showSnack("Unable to open Phone.");
-        }
+        String deviceId = activeCommunicationDeviceId();
+        int simSlot = activeCommunicationSimSlot();
+        new Thread(() -> {
+            try {
+                DashboardApiClient.dialCall(config, deviceId, simSlot, cleanNumber);
+                runOnUiThread(() -> {
+                    showSnack("Call requested.");
+                    loadDashboardCallLog(false);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> showSnack(error.getMessage() == null ? "Failed to request call." : error.getMessage()));
+            }
+        }, "dashboard-call-dial").start();
     }
 
     private boolean hasCallLogPermission() {
         return checkSelfPermission(Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private List<RecentCallItem> dashboardRecentCallItems(int limit) {
+        List<RecentCallItem> items = new ArrayList<>();
+        int max = Math.max(1, limit);
+        for (Map<String, Object> row : dashboardCallLog) {
+            if (items.size() >= max) break;
+            items.add(new RecentCallItem(
+                    stringValue(row.get("name")),
+                    stringValue(row.get("number")),
+                    intValue(row.get("type")),
+                    longValue(row.get("date")),
+                    longValue(row.get("durationSeconds"))
+            ));
+        }
+        return items;
+    }
+
+    private void loadDashboardCallLog(boolean rebuildAfter) {
+        BridgeConfig config = BridgeConfig.load(this);
+        if (!config.hasDashboardAccess() || callLogLoading) {
+            return;
+        }
+        callLogLoading = true;
+        String deviceId = activeCommunicationDeviceId();
+        int simSlot = activeCommunicationSimSlot();
+        new Thread(() -> {
+            try {
+                List<Map<String, Object>> calls = DashboardApiClient.fetchRecentCalls(config, deviceId, simSlot, 20);
+                runOnUiThread(() -> {
+                    dashboardCallLog = calls;
+                    callLogLoading = false;
+                    if (rebuildAfter || selectedTabIndex == TAB_PHONE) rebuild();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    callLogLoading = false;
+                    BridgeEventLog.append(this, "dashboard: call log failed " + error.getMessage());
+                    if (rebuildAfter || selectedTabIndex == TAB_PHONE) rebuild();
+                });
+            }
+        }, "dashboard-call-log").start();
     }
 
     private List<RecentCallItem> recentCallLogItems(int limit) {
@@ -2932,37 +2959,29 @@ public class HomeActivity extends Activity {
         contactsBox.setOrientation(LinearLayout.VERTICAL);
         contactsBox.setBackground(roundRect("#f8fafc", "#e2e8f0", 16));
         contactsBox.setPadding(dp(6), dp(6), dp(6), dp(6));
-        if (hasContactsPermission()) {
-            contactSearch.addTextChangedListener(new TextWatcher() {
-                @Override
-                public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-                }
+        contactSearch.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
 
-                @Override
-                public void onTextChanged(CharSequence s, int start, int before, int count) {
-                    renderContactMatches(contactsBox, s.toString(), (name, phone) -> {
-                        number.setText(phone);
-                        contactSearch.setText(name);
-                        contactsBox.removeAllViews();
-                    });
-                }
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                renderContactMatches(contactsBox, s.toString(), (name, phone) -> {
+                    number.setText(phone);
+                    contactSearch.setText(name);
+                    contactsBox.removeAllViews();
+                });
+            }
 
-                @Override
-                public void afterTextChanged(Editable s) {
-                }
-            });
-            renderContactMatches(contactsBox, "", (name, phone) -> {
-                number.setText(phone);
-                contactSearch.setText(name);
-                contactsBox.removeAllViews();
-            });
-        } else {
-            contactsBox.addView(contactPermissionRow(() -> {
-                dialog.dismiss();
-                reopenNewConversationAfterContactsPermission = true;
-                requestContactsPermission();
-            }));
-        }
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        });
+        renderContactMatches(contactsBox, "", (name, phone) -> {
+            number.setText(phone);
+            contactSearch.setText(name);
+            contactsBox.removeAllViews();
+        });
         EditText message = input("Message");
         message.setSingleLine(false);
         message.setMinLines(3);
@@ -3018,19 +3037,6 @@ public class HomeActivity extends Activity {
             }
             dialog.dismiss();
         }));
-        sheet.addView(attachmentRow(R.drawable.ic_db_sync, "Schedule draft", "Queue this SMS for local scheduled send.", "#d97706", () -> {
-            dialog.dismiss();
-            showScheduleSmsSheet(currentComposerNumber(), composer.getText().toString());
-        }));
-        sheet.addView(attachmentRow(R.drawable.ic_db_open, "Import template", "Upload Excel-compatible CSV rows into the local queue.", "#0b5ed7", () -> {
-            dialog.dismiss();
-            smsTemplateImportTargetNumber = currentComposerNumber();
-            openSmsTemplateFilePicker();
-        }));
-        sheet.addView(attachmentRow(R.drawable.ic_db_sms, "Queue planner", "View queued SMS for this conversation.", "#475569", () -> {
-            dialog.dismiss();
-            showLocalSmsQueueSheet(currentComposerNumber());
-        }));
         sheet.addView(attachmentRow(R.drawable.ic_db_clean, "Clear draft", "Remove current composer text.", "#dc2626", () -> {
             composer.setText("");
             dialog.dismiss();
@@ -3039,10 +3045,6 @@ public class HomeActivity extends Activity {
     }
 
     private void showContactPickerSheet(String title, ContactCallback callback) {
-        if (!hasContactsPermission()) {
-            requestContactsPermission();
-            return;
-        }
         Dialog dialog = createBottomSheetDialog();
         LinearLayout sheet = new LinearLayout(this);
         sheet.setOrientation(LinearLayout.VERTICAL);
@@ -3720,6 +3722,10 @@ public class HomeActivity extends Activity {
         selectedTabIndex = index;
         if (index == TAB_SMS) {
             loadSmsThreads();
+        } else if (index == TAB_PHONE) {
+            loadDashboardCallLog(false);
+        } else if (index == TAB_CONTACTS) {
+            loadDashboardContacts(lastContactQuery, false);
         } else {
             composingNewSms = false;
         }
@@ -3727,26 +3733,215 @@ public class HomeActivity extends Activity {
         rebuild();
     }
 
-    private void loadSmsThreads() {
-        smsLoading = true;
-        smsThreads = new ArrayList<>(BridgeSmsStore.buildThreadSummaries(this));
-        if (selectedSmsThread != null) {
-            String selectedKey = stringValue(selectedSmsThread.get("threadKey"));
-            for (Map<String, Object> thread : smsThreads) {
-                if (selectedKey.equals(stringValue(thread.get("threadKey")))) {
-                    selectedSmsThread = thread;
-                    break;
+    private void ensureSelectedCommunicationDevice() {
+        BridgeConfig config = BridgeConfig.load(this);
+        if (selectedCommunicationDeviceId.trim().isEmpty()) {
+            selectedCommunicationDeviceId = stringValue(state.get("deviceId"), config.deviceId);
+        }
+        if (selectedCommunicationDeviceName.trim().isEmpty()) {
+            selectedCommunicationDeviceName = selectedCommunicationDeviceId;
+        }
+    }
+
+    private String activeCommunicationDeviceId() {
+        ensureSelectedCommunicationDevice();
+        return selectedCommunicationDeviceId.trim();
+    }
+
+    private String activeCommunicationDeviceName() {
+        ensureSelectedCommunicationDevice();
+        return firstNonEmptyValue(selectedCommunicationDeviceName, selectedCommunicationDeviceId, "Device");
+    }
+
+    private int activeCommunicationSimSlot() {
+        return selectedCommunicationSimSlot >= 0 ? selectedCommunicationSimSlot : selectedSmsSimSlot;
+    }
+
+    private void loadDeviceInventory(boolean rebuildAfter) {
+        BridgeConfig config = BridgeConfig.load(this);
+        if (!config.hasDashboardAccess() || devicesLoading) {
+            return;
+        }
+        devicesLoading = true;
+        new Thread(() -> {
+            List<Map<String, Object>> devices;
+            List<Map<String, Object>> sims = new ArrayList<>();
+            String deviceId = activeCommunicationDeviceId();
+            try {
+                devices = DashboardApiClient.fetchDevices(config);
+                if (deviceId.isEmpty() && !devices.isEmpty()) {
+                    deviceId = stringValue(devices.get(0).get("id"));
                 }
+                if (!deviceId.isEmpty()) {
+                    sims = DashboardApiClient.fetchSims(config, deviceId);
+                }
+                String finalDeviceId = deviceId;
+                List<Map<String, Object>> finalDevices = devices;
+                List<Map<String, Object>> finalSims = sims;
+                runOnUiThread(() -> {
+                    dashboardDevices = finalDevices;
+                    dashboardSims = finalSims;
+                    if (!finalDeviceId.isEmpty()) {
+                        selectedCommunicationDeviceId = finalDeviceId;
+                        for (Map<String, Object> device : dashboardDevices) {
+                            if (finalDeviceId.equals(stringValue(device.get("id")))) {
+                                selectedCommunicationDeviceName = firstNonEmptyValue(stringValue(device.get("name")), finalDeviceId);
+                                break;
+                            }
+                        }
+                    }
+                    if (selectedCommunicationSimSlot >= 0 && !simSlotExists(selectedCommunicationSimSlot)) {
+                        selectedCommunicationSimSlot = -1;
+                    }
+                    devicesLoading = false;
+                    if (rebuildAfter) rebuild();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    devicesLoading = false;
+                    BridgeEventLog.append(this, "dashboard: device inventory failed " + error.getMessage());
+                    if (rebuildAfter) rebuild();
+                });
+            }
+        }, "dashboard-devices").start();
+    }
+
+    private boolean simSlotExists(int slot) {
+        for (Map<String, Object> sim : dashboardSims) {
+            if (intValue(sim.get("slot")) == slot) {
+                return true;
             }
         }
-        smsLoading = false;
+        return false;
+    }
+
+    private void showCommunicationDeviceSheet() {
+        BridgeConfig config = BridgeConfig.load(this);
+        if (!config.hasDashboardAccess()) {
+            showSnack("Dashboard access is not configured.");
+            return;
+        }
+        loadDeviceInventory(false);
+        Dialog dialog = createBottomSheetDialog();
+        LinearLayout sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        sheet.setPadding(dp(14), dp(14), dp(14), dp(14));
+        sheet.setBackground(roundRect("#ffffff", "#ffffff", 24));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.addView(iconTile(R.drawable.ic_db_devices, "#0b5ed7", 42, 14, 22), fixed(42, 42, 10));
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(text("Select device", 18, "#0f172a", true));
+        copy.addView(text("Messages, calls, and contacts use the dashboard API.", 12, "#64748b", false));
+        header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        header.addView(iconAction(R.drawable.ic_db_close, "#f8fafc", "#0f172a", dialog::dismiss));
+        sheet.addView(header, fullWidth(12));
+
+        if (dashboardDevices.isEmpty()) {
+            sheet.addView(emptyLine(devicesLoading ? "Loading devices..." : "No dashboard devices found."));
+        } else {
+            for (Map<String, Object> device : dashboardDevices) {
+                String id = stringValue(device.get("id"));
+                String name = firstNonEmptyValue(stringValue(device.get("name")), id);
+                boolean active = id.equals(activeCommunicationDeviceId());
+                sheet.addView(attachmentRow(
+                        R.drawable.ic_db_devices,
+                        (active ? "Using " : "Use ") + name,
+                        id + (boolValue(device.get("online")) ? " - online" : ""),
+                        active ? "#0b5ed7" : "#475569",
+                        () -> {
+                            selectedCommunicationDeviceId = id;
+                            selectedCommunicationDeviceName = name;
+                            selectedCommunicationSimSlot = -1;
+                            selectedSmsSimSlot = -1;
+                            selectedSmsThread = null;
+                            smsMessages = new ArrayList<>();
+                            dialog.dismiss();
+                            loadDeviceInventory(true);
+                            loadSmsThreads();
+                            loadDashboardCallLog(false);
+                            showSnack("Device selected: " + name);
+                        }
+                ), fullWidth(6));
+            }
+        }
+
+        sheet.addView(text("SIM", 12, "#64748b", true), fullWidth(6));
+        sheet.addView(attachmentRow(R.drawable.ic_db_sms, "Default SIM", "Let dashboard/device choose the send route.", selectedCommunicationSimSlot < 0 ? "#0b5ed7" : "#475569", () -> {
+            selectedCommunicationSimSlot = -1;
+            selectedSmsSimSlot = -1;
+            dialog.dismiss();
+            loadSmsThreads();
+            loadDashboardCallLog(false);
+            rebuild();
+        }), fullWidth(6));
+        for (Map<String, Object> sim : dashboardSims) {
+            int slot = intValue(sim.get("slot"));
+            String label = firstNonEmptyValue(stringValue(sim.get("label")), "SIM " + (slot + 1));
+            String number = stringValue(sim.get("number"));
+            String carrier = stringValue(sim.get("carrier"));
+            String detail = firstNonEmptyValue(number, carrier, "SIM " + (slot + 1));
+            boolean active = slot == selectedCommunicationSimSlot;
+            sheet.addView(attachmentRow(R.drawable.ic_db_sms, (active ? "Using " : "Use ") + label, detail, active ? "#0b5ed7" : "#475569", () -> {
+                selectedCommunicationSimSlot = slot;
+                selectedSmsSimSlot = slot;
+                dialog.dismiss();
+                loadSmsThreads();
+                loadDashboardCallLog(false);
+                rebuild();
+            }), fullWidth(6));
+        }
+        showFixedBottomSheetDialog(dialog, sheet);
+    }
+
+    private String communicationHeaderTitle(String label) {
+        int sim = activeCommunicationSimSlot();
+        return label + " - " + activeCommunicationDeviceName() + (sim >= 0 ? " SIM " + (sim + 1) : "");
+    }
+
+    private void loadSmsThreads() {
+        smsLoading = true;
+        BridgeConfig config = BridgeConfig.load(this);
+        if (!config.hasDashboardAccess()) {
+            smsThreads = new ArrayList<>();
+            smsLoading = false;
+            return;
+        }
+        String deviceId = activeCommunicationDeviceId();
+        int simSlot = activeCommunicationSimSlot();
+        new Thread(() -> {
+            try {
+                List<Map<String, Object>> threads = DashboardApiClient.fetchSmsConversations(config, deviceId, simSlot);
+                runOnUiThread(() -> {
+                    smsThreads = new ArrayList<>(threads);
+                    if (selectedSmsThread != null) {
+                        String selectedKey = stringValue(selectedSmsThread.get("threadKey"));
+                        for (Map<String, Object> thread : smsThreads) {
+                            if (selectedKey.equals(stringValue(thread.get("threadKey")))) {
+                                selectedSmsThread = thread;
+                                break;
+                            }
+                        }
+                    }
+                    smsLoading = false;
+                    if (selectedTabIndex == TAB_SMS && selectedSmsThread == null) rebuild();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    smsLoading = false;
+                    BridgeEventLog.append(this, "dashboard: SMS conversations failed " + error.getMessage());
+                    if (selectedTabIndex == TAB_SMS) rebuild();
+                });
+            }
+        }, "dashboard-sms-threads").start();
     }
 
     private void openSmsThread(Map<String, Object> thread) {
         smsBulkMode = false;
         selectedSmsThreadKeys.clear();
         String selectedKey = threadKey(thread);
-        BridgeSmsStore.markThreadsRead(this, Arrays.asList(thread));
         markThreadReadLocally(selectedKey);
         loadSmsThreads();
         selectedSmsThread = findSmsThreadByKey(selectedKey);
@@ -3764,7 +3959,29 @@ public class HomeActivity extends Activity {
             smsMessages = new ArrayList<>();
             return;
         }
-        smsMessages = new ArrayList<>(BridgeSmsStore.buildThreadMessages(this, threadKey));
+        BridgeConfig config = BridgeConfig.load(this);
+        Map<String, Object> thread = selectedSmsThread;
+        if (!config.hasDashboardAccess() || thread == null) {
+            smsMessages = new ArrayList<>();
+            return;
+        }
+        String deviceId = activeCommunicationDeviceId();
+        int simSlot = activeCommunicationSimSlot();
+        new Thread(() -> {
+            try {
+                List<Map<String, Object>> messages = DashboardApiClient.fetchSmsThread(config, deviceId, thread, simSlot);
+                runOnUiThread(() -> {
+                    smsMessages = new ArrayList<>(messages);
+                    if (selectedTabIndex == TAB_SMS && selectedSmsThread != null) rebuild();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    smsMessages = new ArrayList<>();
+                    BridgeEventLog.append(this, "dashboard: SMS thread failed " + error.getMessage());
+                    if (selectedTabIndex == TAB_SMS && selectedSmsThread != null) rebuild();
+                });
+            }
+        }, "dashboard-sms-thread").start();
     }
 
     private Map<String, Object> findSmsThreadByKey(String key) {
@@ -3828,59 +4045,45 @@ public class HomeActivity extends Activity {
             showSnack(cleanRecipients.isEmpty() ? "Add at least one recipient." : "Message is required.");
             return;
         }
-        if (!BridgePermissionHelper.hasCore(this)) {
-            BridgePermissionHelper.requestMissingCore(this, REQ_CORE_PERMISSIONS);
-            showSnack("Grant SMS bridge permissions first.");
+        BridgeConfig config = BridgeConfig.load(this);
+        if (!config.hasDashboardAccess()) {
+            showSnack("Dashboard access is not configured.");
             return;
         }
 
         smsSending = true;
         rebuild();
-        long sentAt = System.currentTimeMillis();
-        int acceptedCount = 0;
-        ContactInfo firstAccepted = null;
-        String firstFailureDetail = "";
-        for (int i = 0; i < cleanRecipients.size(); i += 1) {
-            ContactInfo recipient = cleanRecipients.get(i);
-            String actionId = "local_compose_" + sentAt + "_" + i;
-            SmsSender.SendResult result = SmsSender.send(this, actionId, recipient.number, cleanBody, 90_000, selectedSmsSimForSend(), null);
-            if (!result.accepted) {
-                if (firstFailureDetail.isEmpty()) {
-                    firstFailureDetail = result.detail;
-                }
-                continue;
+        String deviceId = activeCommunicationDeviceId();
+        int simSlot = activeCommunicationSimSlot();
+        List<String> numbers = new ArrayList<>();
+        for (ContactInfo recipient : cleanRecipients) {
+            numbers.add(recipient.number);
+        }
+        new Thread(() -> {
+            try {
+                DashboardApiClient.sendSms(config, deviceId, simSlot, numbers, cleanBody);
+                runOnUiThread(() -> {
+                    if (composingNewSms) {
+                        selectedSmsThread = cleanRecipients.size() == 1 ? findSmsThreadByAddress(cleanRecipients.get(0).number) : null;
+                        composingNewSms = false;
+                        clearNewSmsDraft();
+                    }
+                    smsSending = false;
+                    loadSmsThreads();
+                    if (selectedSmsThread != null) {
+                        loadSmsMessages(stringValue(selectedSmsThread.get("threadKey")));
+                    }
+                    showSnack(cleanRecipients.size() > 1 ? "SMS queued for " + cleanRecipients.size() + " recipients." : "SMS queued.");
+                    rebuild();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    smsSending = false;
+                    rebuild();
+                    showSnack(error.getMessage() == null ? "Failed to queue SMS." : error.getMessage());
+                });
             }
-            BridgeSmsStore.recordOutgoing(this, actionId, recipient.number, cleanBody, sentAt + i);
-            BridgeEventLog.append(this, "sms: Local compose accepted for " + recipient.number);
-            acceptedCount += 1;
-            if (firstAccepted == null) {
-                firstAccepted = recipient;
-            }
-        }
-        if (acceptedCount == 0) {
-            smsSending = false;
-            rebuild();
-            showSnack(SmsSender.describeDetail(firstFailureDetail));
-            return;
-        }
-        loadSmsThreads();
-        if (composingNewSms) {
-            if (acceptedCount == 1 && firstAccepted != null) {
-                selectedSmsThread = findSmsThreadByAddress(firstAccepted.number);
-            } else {
-                selectedSmsThread = null;
-            }
-            composingNewSms = false;
-            clearNewSmsDraft();
-        }
-        if (selectedSmsThread != null) {
-            loadSmsMessages(stringValue(selectedSmsThread.get("threadKey")));
-        }
-        smsSending = false;
-        if (acceptedCount > 1) {
-            showSnack("Message sent to " + acceptedCount + " recipients.");
-        }
-        rebuild();
+        }, "dashboard-sms-send").start();
     }
 
     private Integer selectedSmsSimForSend() {
@@ -4514,12 +4717,23 @@ public class HomeActivity extends Activity {
             showSnack("Select conversations first.");
             return;
         }
-        BridgeSmsStore.SmsMutationResult result = BridgeSmsStore.markThreadsRead(this, selected);
-        selectedSmsThreadKeys.clear();
-        smsBulkMode = false;
-        loadSmsThreads();
-        rebuild();
-        showSnack(result.providerBlocked ? "Marked read in app. Android blocked provider update." : "Marked read.");
+        BridgeConfig config = BridgeConfig.load(this);
+        String deviceId = activeCommunicationDeviceId();
+        int simSlot = activeCommunicationSimSlot();
+        new Thread(() -> {
+            try {
+                DashboardApiClient.markAllSmsRead(config, deviceId, simSlot);
+                runOnUiThread(() -> {
+                    selectedSmsThreadKeys.clear();
+                    smsBulkMode = false;
+                    loadSmsThreads();
+                    showSnack("Marked read.");
+                    rebuild();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> showSnack(error.getMessage() == null ? "Unable to mark read." : error.getMessage()));
+            }
+        }, "dashboard-sms-read").start();
     }
 
     private void confirmDeleteSelectedSmsThreads() {
@@ -4528,21 +4742,7 @@ public class HomeActivity extends Activity {
             showSnack("Select conversations first.");
             return;
         }
-        new AlertDialog.Builder(this)
-                .setTitle("Delete conversations?")
-                .setMessage("This removes selected local SMS mirror entries. Android may only delete phone SMS when this app is the default SMS app.")
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Delete", (dialog, which) -> {
-                    BridgeSmsStore.SmsMutationResult result = BridgeSmsStore.deleteThreads(this, selected);
-                    selectedSmsThreadKeys.clear();
-                    smsBulkMode = false;
-                    selectedSmsThread = null;
-                    smsMessages = new ArrayList<>();
-                    loadSmsThreads();
-                    rebuild();
-                    showSnack(result.providerBlocked ? "Deleted in app. Android blocked phone SMS delete." : "Deleted selected conversations.");
-                })
-                .show();
+        showSnack("Delete from dashboard conversations is not enabled in the app yet.");
     }
 
     private String threadKey(Map<String, Object> thread) {
@@ -4563,44 +4763,21 @@ public class HomeActivity extends Activity {
         }
 
         ContactInfo fallback = new ContactInfo(fallbackName.isEmpty() ? "Unknown sender" : fallbackName, address, avatarLabel(fallbackName), false);
-        if (!hasContactsPermission() || lookup.trim().isEmpty()) {
+        if (lookup.trim().isEmpty()) {
             smsContactCache.put(cacheKey, fallback);
             return fallback;
         }
 
-        Cursor cursor = null;
-        try {
-            Uri uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(lookup));
-            cursor = getContentResolver().query(
-                    uri,
-                    new String[]{
-                            ContactsContract.PhoneLookup.DISPLAY_NAME,
-                            ContactsContract.PhoneLookup.NUMBER
-                    },
-                    null,
-                    null,
-                    null
-            );
-            if (cursor != null && cursor.moveToFirst()) {
-                int nameIndex = cursor.getColumnIndex(ContactsContract.PhoneLookup.DISPLAY_NAME);
-                int numberIndex = cursor.getColumnIndex(ContactsContract.PhoneLookup.NUMBER);
-                String name = nameIndex >= 0 ? safe(cursor.getString(nameIndex)).trim() : "";
-                String number = numberIndex >= 0 ? safe(cursor.getString(numberIndex)).trim() : "";
-                ContactInfo contact = new ContactInfo(
-                        name.isEmpty() ? fallback.name : name,
-                        number.isEmpty() ? address : number,
-                        avatarLabel(name.isEmpty() ? fallback.name : name),
-                        true
-                );
-                smsContactCache.put(cacheKey, contact);
-                return contact;
+        String normalizedLookup = contactCacheKey(lookup);
+        for (Map<String, String> row : dashboardContacts) {
+            String number = safe(row.get("number")).trim();
+            if (number.isEmpty() || !normalizedLookup.equals(contactCacheKey(number))) {
+                continue;
             }
-        } catch (Exception error) {
-            BridgeEventLog.append(this, "contacts: sms lookup failed " + error.getMessage());
-        } finally {
-            if (cursor != null) {
-                cursor.close();
-            }
+            String name = firstNonEmptyValue(safe(row.get("name")), fallback.name, number);
+            ContactInfo contact = new ContactInfo(name, number, avatarLabel(name), true);
+            smsContactCache.put(cacheKey, contact);
+            return contact;
         }
         smsContactCache.put(cacheKey, fallback);
         return fallback;
@@ -5020,13 +5197,10 @@ public class HomeActivity extends Activity {
 
     private void renderContactMatches(LinearLayout target, String query, ContactCallback callback) {
         target.removeAllViews();
-        if (!hasContactsPermission()) {
-            target.addView(contactPermissionRow(this::requestContactsPermission));
-            return;
-        }
+        loadDashboardContacts(query, false);
         List<Map<String, String>> contacts = findContacts(query, 120);
         if (contacts.isEmpty()) {
-            TextView empty = text("No contacts found", 12, "#64748b", false);
+            TextView empty = text(contactsLoading ? "Loading contacts..." : "No dashboard contacts found", 12, "#64748b", false);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(dp(8), dp(16), dp(8), dp(16));
             target.addView(empty);
@@ -5063,51 +5237,54 @@ public class HomeActivity extends Activity {
 
     private List<Map<String, String>> findContacts(String query, int limit) {
         List<Map<String, String>> contacts = new ArrayList<>();
-        if (!hasContactsPermission()) {
-            return contacts;
-        }
         String normalized = safe(query).trim().toLowerCase(Locale.US);
-        String[] projection = new String[]{
-                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                ContactsContract.CommonDataKinds.Phone.NUMBER
-        };
-        Cursor cursor = null;
-        try {
-            cursor = getContentResolver().query(
-                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                    projection,
-                    null,
-                    null,
-                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
-            );
-            if (cursor == null) {
-                return contacts;
+        int max = Math.max(1, limit);
+        for (Map<String, String> contact : dashboardContacts) {
+            if (contacts.size() >= max) break;
+            String name = safe(contact.get("name")).trim();
+            String number = safe(contact.get("number")).trim();
+            String haystack = (name + " " + number).toLowerCase(Locale.US);
+            if (!normalized.isEmpty() && !haystack.contains(normalized)) {
+                continue;
             }
-            int nameIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME);
-            int numberIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER);
-            while (cursor.moveToNext() && contacts.size() < limit) {
-                String name = nameIndex >= 0 ? safe(cursor.getString(nameIndex)).trim() : "";
-                String number = numberIndex >= 0 ? safe(cursor.getString(numberIndex)).trim() : "";
-                String haystack = (name + " " + number).toLowerCase(Locale.US);
-                if (!normalized.isEmpty() && !haystack.contains(normalized)) {
-                    continue;
-                }
-                if (number.isEmpty()) {
-                    continue;
-                }
-                Map<String, String> contact = new HashMap<>();
-                contact.put("name", name.isEmpty() ? number : name);
-                contact.put("number", number);
-                contacts.add(contact);
-            }
-        } catch (Exception error) {
-            BridgeEventLog.append(this, "contacts: lookup failed " + error.getMessage());
-        } finally {
-            if (cursor != null) {
-                cursor.close();
+            if (!number.isEmpty()) {
+                Map<String, String> row = new HashMap<>();
+                row.put("name", name.isEmpty() ? number : name);
+                row.put("number", number);
+                contacts.add(row);
             }
         }
         return contacts;
+    }
+
+    private void loadDashboardContacts(String query, boolean rebuildAfter) {
+        BridgeConfig config = BridgeConfig.load(this);
+        String cleanQuery = safe(query).trim();
+        if (!config.hasDashboardAccess() || contactsLoading) {
+            return;
+        }
+        if (cleanQuery.equals(lastContactQuery) && !dashboardContacts.isEmpty() && !rebuildAfter) {
+            return;
+        }
+        contactsLoading = true;
+        lastContactQuery = cleanQuery;
+        new Thread(() -> {
+            try {
+                List<Map<String, String>> contacts = DashboardApiClient.fetchContacts(config, cleanQuery, 200);
+                runOnUiThread(() -> {
+                    dashboardContacts = contacts;
+                    contactsLoading = false;
+                    smsContactCache.clear();
+                    if (rebuildAfter || selectedTabIndex == TAB_CONTACTS) rebuild();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    contactsLoading = false;
+                    BridgeEventLog.append(this, "dashboard: contacts failed " + error.getMessage());
+                    if (rebuildAfter || selectedTabIndex == TAB_CONTACTS) rebuild();
+                });
+            }
+        }, "dashboard-contacts").start();
     }
 
     private View contactPermissionRow(Runnable action) {

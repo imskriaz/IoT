@@ -158,6 +158,28 @@ describe('mqttService firmware compatibility', () => {
         expect(payload.messageId).toBeUndefined();
     });
 
+    test('publishCommand trims dashboard-built Unicode multipart PDU SMS payloads', async () => {
+        await svc.publishCommand(
+            'device-1',
+            'send-sms-multipart',
+            { to: '+8801887300993', message: '\u0985'.repeat(80) },
+            false,
+            60000,
+            { skipPersistentQueue: true, messageId: 'send-sms_unicode_multi_pdu' }
+        );
+
+        const payload = JSON.parse(svc.client.publish.mock.calls[0][1]);
+        expect(payload.command).toBe('send_sms_multipart');
+        expect(payload.action_id).toBe('send-sms_unicode_multi_pdu');
+        expect(payload.sms_pdu).toContain(';');
+        expect(payload.sms_parts).toBe(2);
+        expect(payload.number).toBeUndefined();
+        expect(payload.text).toBeUndefined();
+        expect(payload.sms_transport_encoding).toBeUndefined();
+        expect(payload.sms_encoding).toBeUndefined();
+        expect(payload.sms_multipart).toBeUndefined();
+    });
+
     test('publishCommand normalizes SIM slot to sim_slot only in MQTT payloads', async () => {
         await svc.publishCommand(
             'device-1',

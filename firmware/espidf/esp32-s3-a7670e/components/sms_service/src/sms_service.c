@@ -222,7 +222,7 @@ static unified_action_response_t sms_service_send_with_transport(
         modem_options.pdu_hex = options->pdu_hex;
         modem_options.pdu_length = options->pdu_length;
         modem_options_ptr = &modem_options;
-        has_dashboard_pdu = options->pdu_hex && options->pdu_hex[0] != '\0' && options->pdu_length > 0U;
+        has_dashboard_pdu = options->pdu_hex && options->pdu_hex[0] != '\0';
     }
     command = force_multipart ? UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART : UNIFIED_ACTION_CMD_SEND_SMS;
     success_detail = force_multipart ? "sms_multipart_sent" : "sms_sent";

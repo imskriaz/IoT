@@ -35,4 +35,15 @@ describe('main.js device HTTP helper export', () => {
         expect(source).toContain('window.dismissIncomingCallPanel = function () {');
         expect(source).not.toContain("document.getElementById('incomingCallModal')");
     });
+
+    test('redirects to MQTT settings after a sustained dashboard MQTT outage', () => {
+        const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'main.js'), 'utf8');
+
+        expect(source).toContain('const MQTT_DOWN_SETTINGS_REDIRECT_DELAY_MS = 15000;');
+        expect(source).toContain('function scheduleMQTTDownSettingsRedirect()');
+        expect(source).toContain("return '/settings?mqttDown=1#mqtt-broker';");
+        expect(source).toContain('scheduleMQTTDownSettingsRedirect();');
+        expect(source).toContain('cancelMQTTDownSettingsRedirect();');
+        expect(source).toContain('Opening System Settings in ${getMQTTDownRedirectSecondsRemaining()} seconds');
+    });
 });

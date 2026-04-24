@@ -103,15 +103,20 @@ describe('smsLimits', () => {
     });
 
     test('builds Unicode metadata for firmware SMS commands', () => {
-        const resolved = resolveSmsCommand('\u0985'.repeat(80));
+        const resolved = resolveSmsCommandForRecipient('+8801887300993', '\u0985'.repeat(80));
 
         expect(resolved.command).toBe('send-sms-multipart');
         expect(resolved.metadata).toEqual(expect.objectContaining({
             sms_encoding: 'unicode',
             sms_transport_encoding: 'ucs2',
             sms_parts: 2,
-            sms_multipart: true
+            sms_multipart: true,
+            sms_pdu_encoding: 'ucs2',
+            sms_pdu_count: 2,
+            sms_status_report_requested: true
         }));
+        expect(resolved.metadata.sms_pdu).toContain(';');
+        expect(resolved.metadata.sms_pdu_length).toBeUndefined();
         expect(resolved.timeoutMs).toBeGreaterThanOrEqual(60000);
     });
 

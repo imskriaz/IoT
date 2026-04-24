@@ -55,26 +55,62 @@ function encodeUcs2UserData(text) {
     };
 }
 
-function buildSmsSubmitPdu(number, text, options = {}) {
+function segmentUcs2Text(text, segmentSize) {
+    const chars = Array.from(String(text || ''));
+    const segments = [];
+
+    for (let index = 0; index < chars.length; index += segmentSize) {
+        segments.push(chars.slice(index, index + segmentSize).join(''));
+    }
+
+    return segments;
+}
+
+function buildSmsSubmitPduSegment(number, text, options = {}) {
     const destination = normalizeDestinationNumber(number);
     const userData = encodeUcs2UserData(text);
     const requestStatusReport = options.requestStatusReport !== false;
-    const firstOctet = requestStatusReport ? '21' : '01';
+    const multipart = options.multipart === true;
+    const firstOctet = (requestStatusReport ? 0x21 : 0x01) | (multipart ? 0x40 : 0x00);
+    let userDataHex = userData.hex;
+    let userDataOctets = userData.octets;
 
-    if (userData.units < 1 || userData.units > 70) {
+    if (userData.units < 1 || (!multipart && userData.units > 70) || (multipart && userData.units > 67)) {
         throw new Error('SMS PDU builder currently supports single-part UCS-2 messages up to 70 characters');
     }
 
+    if (multipart) {
+        const reference = Number(options.concatReference);
+        const total = Number(options.totalParts);
+        const sequence = Number(options.partNumber);
+        if (!Number.isInteger(reference) || reference < 0 || reference > 0xFF ||
+            !Number.isInteger(total) || total < 2 || total > 0xFF ||
+            !Number.isInteger(sequence) || sequence < 1 || sequence > total) {
+            throw new Error('SMS multipart PDU options are invalid');
+        }
+
+        const udh = [
+            '05',
+            '00',
+            '03',
+            toHexByte(reference),
+            toHexByte(total),
+            toHexByte(sequence)
+        ].join('');
+        userDataHex = `${udh}${userData.hex}`;
+        userDataOctets += 6;
+    }
+
     const tpdu = [
-        firstOctet,
+        toHexByte(firstOctet),
         '00',
         toHexByte(destination.digits.length),
         destination.toa,
         encodeSemiOctets(destination.digits),
         '00',
         '08',
-        toHexByte(userData.octets),
-        userData.hex
+        toHexByte(userDataOctets),
+        userDataHex
     ].join('');
     const pdu = `00${tpdu}`;
 
@@ -86,8 +122,34 @@ function buildSmsSubmitPdu(number, text, options = {}) {
     };
 }
 
+function buildSmsSubmitPdu(number, text, options = {}) {
+    return buildSmsSubmitPduSegment(number, text, options);
+}
+
+function buildSmsSubmitPdus(number, text, options = {}) {
+    const userData = encodeUcs2UserData(text);
+    if (userData.units <= 70) {
+        return [buildSmsSubmitPdu(number, text, options)];
+    }
+
+    const segments = segmentUcs2Text(text, 67);
+    const reference = Number.isInteger(options.concatReference)
+        ? options.concatReference
+        : Math.floor(Math.random() * 256);
+
+    return segments.map((segment, index) => buildSmsSubmitPduSegment(number, segment, {
+        ...options,
+        multipart: true,
+        concatReference: reference,
+        totalParts: segments.length,
+        partNumber: index + 1
+    }));
+}
+
 module.exports = {
     buildSmsSubmitPdu,
+    buildSmsSubmitPdus,
     encodeSemiOctets,
-    encodeUcs2UserData
+    encodeUcs2UserData,
+    segmentUcs2Text
 };
