@@ -95,7 +95,7 @@ class AutomationEngine {
             nodes: this._parse(row.nodes, []),
             edges: this._parse(row.edges, [])
         };
-        const trigger = flow.nodes.find((node) => node.type?.startsWith('trigger.'));
+        const trigger = this._nodes(flow).find((node) => node.type?.startsWith('trigger.'));
         if (!trigger) throw new Error('Flow has no trigger node');
 
         const deviceId = String(triggerData.deviceId || row.device_id || '');
@@ -123,7 +123,24 @@ class AutomationEngine {
     }
 
     _parse(value, fallback) {
-        try { return JSON.parse(value); } catch { return fallback; }
+        let parsed = value;
+        if (typeof value === 'string') {
+            try { parsed = JSON.parse(value); } catch { return fallback; }
+        }
+
+        if (Array.isArray(fallback)) {
+            return Array.isArray(parsed) ? parsed : fallback;
+        }
+
+        return parsed ?? fallback;
+    }
+
+    _nodes(flow) {
+        return Array.isArray(flow?.nodes) ? flow.nodes : [];
+    }
+
+    _edges(flow) {
+        return Array.isArray(flow?.edges) ? flow.edges : [];
     }
 
     _mergeState(previousState, eventType, data, deviceId) {
@@ -182,7 +199,7 @@ class AutomationEngine {
     }
 
     async _evaluateFlow(flow, eventType, data, deviceId, previousState, currentState) {
-        const triggerNodes = flow.nodes.filter((node) => node.type?.startsWith('trigger.'));
+        const triggerNodes = this._nodes(flow).filter((node) => node.type?.startsWith('trigger.'));
         if (!triggerNodes.length) return;
 
         for (const trigger of triggerNodes) {
@@ -271,7 +288,7 @@ class AutomationEngine {
     }
 
     async _walkFrom(nodeId, flow, context) {
-        const node = flow.nodes.find((entry) => entry.id === nodeId);
+        const node = this._nodes(flow).find((entry) => entry.id === nodeId);
         if (!node) return;
 
         if (node.type?.startsWith('trigger.')) {
@@ -326,9 +343,10 @@ class AutomationEngine {
     }
 
     _nextNodes(fromId, flow, handle = null) {
-        return flow.edges
+        const nodes = this._nodes(flow);
+        return this._edges(flow)
             .filter((edge) => edge.sourceId === fromId && (!handle || !edge.sourceHandle || edge.sourceHandle === handle))
-            .map((edge) => flow.nodes.find((node) => node.id === edge.targetId))
+            .map((edge) => nodes.find((node) => node.id === edge.targetId))
             .filter(Boolean);
     }
 
@@ -752,7 +770,7 @@ class AutomationEngine {
     async _runSchedules() {
         const now = new Date();
         for (const flow of this._flows) {
-            const triggers = flow.nodes.filter((node) => node.type === 'trigger.schedule');
+            const triggers = this._nodes(flow).filter((node) => node.type === 'trigger.schedule');
             for (const trigger of triggers) {
                 if (!this._cronMatches(trigger.config?.cron || '* * * * *', now, trigger.config?.tz)) continue;
                 const dedupeKey = `${trigger.id}:${this._minuteKey(now, trigger.config?.tz)}`;

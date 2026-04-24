@@ -1176,6 +1176,38 @@ class MQTTService extends EventEmitter {
         return Boolean(db) && methods.every((method) => typeof db?.[method] === 'function');
     }
 
+    _dbParams(params) {
+        if (params === undefined || params === null) return [];
+        return Array.isArray(params) ? params : [params];
+    }
+
+    _rawDb(db) {
+        if (typeof db?.prepare === 'function') return db;
+        if (typeof db?._raw?.prepare === 'function') return db._raw;
+        return null;
+    }
+
+    _canDbRun(db) {
+        return typeof db?.run === 'function' || Boolean(this._rawDb(db));
+    }
+
+    async _dbRun(db, sql, params = []) {
+        if (typeof db?.run === 'function') {
+            return db.run(sql, params);
+        }
+
+        const rawDb = this._rawDb(db);
+        if (!rawDb) {
+            throw new Error('DB run method not available');
+        }
+
+        const result = rawDb.prepare(sql).run(...this._dbParams(params));
+        return {
+            lastID: result?.lastInsertRowid ?? 0,
+            changes: result?.changes ?? 0
+        };
+    }
+
     _generateCommandMessageId(command) {
         const rawCommand = String(command || '').trim().toLowerCase();
         const prefix = rawCommand === 'send-sms' || rawCommand === 'send-sms-multipart'
@@ -1636,7 +1668,7 @@ class MQTTService extends EventEmitter {
     async _recoverPersistentQueue() {
         if (this._persistentQueueRecovered) return;
         const db = this._db();
-        if (!this._hasDbMethods(db, ['run'])) return;
+        if (!this._canDbRun(db)) return;
 
         const canReadRows = this._hasDbMethods(db, ['all']);
         const replaySafeRows = canReadRows ? await db.all(
@@ -1652,7 +1684,7 @@ class MQTTService extends EventEmitter {
                AND replay_safe = 0`
         ) : [];
 
-        await db.run(
+        await this._dbRun(db,
             `UPDATE device_command_queue
              SET status = 'pending',
                  last_error = COALESCE(last_error, 'dashboard restarted before command completion'),
@@ -1660,7 +1692,7 @@ class MQTTService extends EventEmitter {
              WHERE status IN ('dispatching', 'waiting_response')
                AND replay_safe = 1`
         );
-        await db.run(
+        await this._dbRun(db,
             `UPDATE device_command_queue
              SET status = 'ambiguous',
                  last_error = COALESCE(last_error, 'dashboard restarted during non-replay-safe command'),
@@ -1818,7 +1850,7 @@ class MQTTService extends EventEmitter {
     async _syncSmsStatusFromQueueRow(row, explicitStatus = null, explicitError = null) {
         const db = this._db();
         const tracking = this._extractSmsTracking(row);
-        if (!db || !tracking) return;
+        if (!db || !tracking || !this._canDbRun(db)) return;
 
         const nextStatus = explicitStatus || this._mapSmsStatusFromQueueState(row.status);
         const nextError = nextStatus === 'failed' || nextStatus === 'ambiguous'
@@ -1826,7 +1858,7 @@ class MQTTService extends EventEmitter {
             : null;
 
         if (tracking.smsId) {
-            await db.run(
+            await this._dbRun(db,
                 `UPDATE sms
                  SET status = ?,
                      error = ?,
@@ -1838,7 +1870,7 @@ class MQTTService extends EventEmitter {
         }
 
         if (tracking.messageId) {
-            await db.run(
+            await this._dbRun(db,
                 `UPDATE sms
                  SET status = ?,
                      error = ?
@@ -1869,7 +1901,7 @@ class MQTTService extends EventEmitter {
 
     async _markStaleSmsWithoutQueue(maxAgeMs = 120000) {
         const db = this._db();
-        if (!this._hasDbMethods(db, ['all', 'run'])) return;
+        if (!this._hasDbMethods(db, ['all']) || !this._canDbRun(db)) return;
 
         const cutoff = this._sqlTimestamp(Date.now() - maxAgeMs);
         const rows = await db.all(
@@ -1892,7 +1924,7 @@ class MQTTService extends EventEmitter {
 
         const touchedDevices = new Set();
         for (const row of rows) {
-            await db.run(
+            await this._dbRun(db,
                 `UPDATE sms
                  SET status = 'ambiguous',
                      error = COALESCE(error, 'SMS command status was not confirmed before queue tracking ended')
@@ -1912,7 +1944,7 @@ class MQTTService extends EventEmitter {
 
     async _updatePersistentQueueRow(id, fields) {
         const db = this._db();
-        if (!db || !id || !fields || typeof fields !== 'object') return;
+        if (!db || !this._canDbRun(db) || !id || !fields || typeof fields !== 'object') return;
 
         const entries = Object.entries(fields);
         if (!entries.length) return;
@@ -1920,7 +1952,7 @@ class MQTTService extends EventEmitter {
         const assignments = entries.map(([key]) => `${key} = ?`);
         const values = entries.map(([, value]) => value);
         values.push(id);
-        await db.run(
+        await this._dbRun(db,
             `UPDATE device_command_queue
              SET ${assignments.join(', ')}, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?`,
@@ -1970,7 +2002,7 @@ class MQTTService extends EventEmitter {
         const db = this._db();
         const correlationId = String(data?.messageId || data?.action_id || '').trim();
         const normalizedDeviceId = this._normalizeDeviceId(deviceId);
-        if (!db || !normalizedDeviceId || !correlationId) return false;
+        if (!this._hasDbMethods(db, ['get']) || !normalizedDeviceId || !correlationId) return false;
 
         const row = await db.get(
             `SELECT *
@@ -2010,7 +2042,9 @@ class MQTTService extends EventEmitter {
             status: 'failed',
             last_error: data?.error || data?.message || data?.detail || `Command ${row.command} failed`
         }, 'failed', data?.error || data?.message || data?.detail || `Command ${row.command} failed`);
-        const failed = await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id]);
+        const failed = this._hasDbMethods(db, ['get'])
+            ? await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id])
+            : null;
         if (failed) {
             await this._resolvePersistentQueueWaiter(failed);
         }
@@ -2021,7 +2055,7 @@ class MQTTService extends EventEmitter {
     async _findPersistentSmsQueueRow(deviceId, data) {
         const db = this._db();
         const normalizedDeviceId = this._normalizeDeviceId(deviceId);
-        if (!db || !normalizedDeviceId) return null;
+        if (!normalizedDeviceId || !this._hasDbMethods(db, ['get', 'all'])) return null;
 
         const correlationId = String(data?.messageId || data?.action_id || '').trim();
         if (correlationId) {
@@ -2101,7 +2135,9 @@ class MQTTService extends EventEmitter {
                 last_error: detail
             }, 'failed', detail);
             const db = this._db();
-            const failed = db ? await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id]) : null;
+            const failed = this._hasDbMethods(db, ['get'])
+                ? await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id])
+                : null;
             if (failed) {
                 await this._resolvePersistentQueueWaiter(failed);
             }
@@ -2136,7 +2172,9 @@ class MQTTService extends EventEmitter {
             last_error: null
         }, 'sent', null);
         const db = this._db();
-        const completed = db ? await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id]) : null;
+        const completed = this._hasDbMethods(db, ['get'])
+            ? await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id])
+            : null;
         if (completed) {
             await this._resolvePersistentQueueWaiter(completed);
         }
@@ -2164,7 +2202,9 @@ class MQTTService extends EventEmitter {
                 status: 'failed',
                 last_error: detail
             }, 'failed', detail);
-            const failed = db ? await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id]) : null;
+            const failed = this._hasDbMethods(db, ['get'])
+                ? await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id])
+                : null;
             if (failed) {
                 await this._resolvePersistentQueueWaiter(failed);
             }
@@ -2197,7 +2237,9 @@ class MQTTService extends EventEmitter {
             status: 'ambiguous',
             last_error: detail
         }, 'ambiguous', detail);
-        const ambiguous = db ? await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id]) : null;
+        const ambiguous = this._hasDbMethods(db, ['get'])
+            ? await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id])
+            : null;
         if (ambiguous) {
             await this._resolvePersistentQueueWaiter(ambiguous);
         }
@@ -2335,7 +2377,7 @@ class MQTTService extends EventEmitter {
 
     async enqueuePersistentDeviceCommand(deviceId, command, payload = {}, waitForResponse = false, timeout = 30000, options = {}) {
         const db = this._db();
-        if (!this._hasDbMethods(db, ['run'])) {
+        if (!this._canDbRun(db)) {
             return this._publishCommandNow(deviceId, command, payload, waitForResponse, timeout, options);
         }
 
@@ -2345,7 +2387,7 @@ class MQTTService extends EventEmitter {
         const requiresResponse = this._requiresDurableAck(command, waitForResponse, options);
         const nowSql = this._sqlTimestamp();
 
-        await db.run(
+        await this._dbRun(db,
             `INSERT INTO device_command_queue (
                 id, device_id, command, payload, message_id, status,
                 requires_response, replay_safe, attempt_count, max_attempts,

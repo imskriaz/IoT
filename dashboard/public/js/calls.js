@@ -62,8 +62,8 @@
         contactFormName: document.getElementById('contactFormName'),
         clearNumber: document.getElementById('clearNumber'),
         makeCall: document.getElementById('makeCall'),
-        dialerModal: document.getElementById('dialerModal'),
-        dialerModalBody: document.getElementById('dialerModalBody'),
+        syncCallsBtn: document.getElementById('syncCallsBtn'),
+        callWorkspaceModal: document.getElementById('callWorkspaceModal'),
         activeCallBanner: document.getElementById('activeCallBanner'),
         activeCallStatus: document.getElementById('activeCallStatus'),
         activeCallNumber: document.getElementById('activeCallNumber'),
@@ -72,6 +72,7 @@
         dialerOfflineWarning: document.getElementById('dialerOfflineWarning'),
         callWorkspaceCard: document.getElementById('callWorkspaceCard'),
         callWorkspaceDialerColumn: document.getElementById('callWorkspaceDialerColumn'),
+        callWorkspaceContactsColumn: document.getElementById('callWorkspaceContactsColumn'),
         callWorkspaceDialerSection: document.getElementById('callWorkspaceDialerSection'),
         callWorkspaceContactsSection: document.getElementById('callWorkspaceContactsSection'),
         callWorkspaceDialerTab: document.getElementById('callWorkspaceDialerTab'),
@@ -205,39 +206,38 @@
         elements.callWorkspaceCard?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
-    function mountDialerModal() {
-        if (!elements.callWorkspaceDialerSection || !elements.dialerModalBody) return;
-
-        if (elements.callWorkspaceDialerSection.parentElement !== elements.dialerModalBody) {
-            elements.dialerModalBody.appendChild(elements.callWorkspaceDialerSection);
-        }
-        elements.callWorkspaceDialerSection.classList.remove('d-none');
-        elements.callWorkspaceDialerColumn?.remove();
+    function getCallWorkspaceModalInstance() {
+        if (!elements.callWorkspaceModal || !window.bootstrap?.Modal) return null;
+        return bootstrap.Modal.getOrCreateInstance(elements.callWorkspaceModal);
     }
 
-    function getDialerModalInstance() {
-        if (!elements.dialerModal || !window.bootstrap?.Modal) return null;
-        return bootstrap.Modal.getOrCreateInstance(elements.dialerModal);
-    }
+    function showCallWorkspaceModal(mode = 'dialer', options = {}) {
+        setCallWorkspaceMode(mode, { scroll: false });
 
-    function showDialerModal(options = {}) {
-        mountDialerModal();
-
-        const modal = getDialerModalInstance();
+        const modal = getCallWorkspaceModalInstance();
         if (!modal) {
-            setCallWorkspaceMode('dialer', { ...options, focusDialer: true });
+            if (mode === 'dialer' && options.focusDialer !== false) focusDialerInput();
             return;
         }
 
-        if (options.focusDialer !== false) {
-            elements.dialerModal.addEventListener('shown.bs.modal', focusDialerInput, { once: true });
+        if (mode === 'dialer' && options.focusDialer !== false) {
+            elements.callWorkspaceModal.addEventListener('shown.bs.modal', focusDialerInput, { once: true });
+        } else if (mode === 'contacts') {
+            elements.callWorkspaceModal.addEventListener('shown.bs.modal', function () {
+                elements.modalContactSearch?.focus();
+            }, { once: true });
         }
 
         modal.show();
+
+        if (elements.callWorkspaceModal.classList.contains('show')) {
+            if (mode === 'dialer' && options.focusDialer !== false) focusDialerInput();
+            if (mode === 'contacts') elements.modalContactSearch?.focus();
+        }
     }
 
-    function hideDialerModal() {
-        const modal = getDialerModalInstance();
+    function hideCallWorkspaceModal() {
+        const modal = getCallWorkspaceModalInstance();
         if (modal) modal.hide();
     }
 
@@ -259,8 +259,17 @@
     function setCallWorkspaceMode(mode = 'dialer', options = {}) {
         activeWorkspaceMode = mode === 'contacts' ? 'contacts' : 'dialer';
 
-        const dialerIsModal = Boolean(elements.dialerModalBody?.contains(elements.callWorkspaceDialerSection));
-        if (elements.callWorkspaceDialerSection && !dialerIsModal) {
+        if (elements.callWorkspaceModal) {
+            elements.callWorkspaceModal.classList.toggle('call-workspace-modal--dialer', activeWorkspaceMode === 'dialer');
+            elements.callWorkspaceModal.classList.toggle('call-workspace-modal--contacts', activeWorkspaceMode === 'contacts');
+        }
+        if (elements.callWorkspaceDialerColumn) {
+            elements.callWorkspaceDialerColumn.classList.toggle('d-none', activeWorkspaceMode !== 'dialer');
+        }
+        if (elements.callWorkspaceContactsColumn) {
+            elements.callWorkspaceContactsColumn.classList.toggle('d-none', activeWorkspaceMode !== 'contacts');
+        }
+        if (elements.callWorkspaceDialerSection) {
             elements.callWorkspaceDialerSection.classList.toggle('d-none', activeWorkspaceMode !== 'dialer');
         }
         if (elements.callWorkspaceContactsSection) {
@@ -296,7 +305,6 @@
     }
 
     function init() {
-        mountDialerModal();
         mountActiveCallCard();
 
         // Check device connection
@@ -916,7 +924,7 @@
 
         updateNumberHint(target);
 
-        showDialerModal({ focusDialer: true });
+        showCallWorkspaceModal('dialer', { focusDialer: true });
 
         const cleanUrl = new URL(window.location.href);
         cleanUrl.searchParams.delete('to');
@@ -1062,7 +1070,7 @@
                         elements.dialerContactName.classList.remove('text-success');
                     }
                     updateNumberHint('');
-                    hideDialerModal();
+                    hideCallWorkspaceModal();
                 } else {
                     showToast(data.message || 'Failed to make call', 'danger');
                 }
@@ -1394,6 +1402,42 @@
         showToast('Call logs refreshed', 'success');
     }
 
+    async function syncCallHistory() {
+        const syncBtn = elements.syncCallsBtn;
+        const originalHtml = syncBtn ? syncBtn.innerHTML : '';
+        if (syncBtn) {
+            syncBtn.disabled = true;
+            syncBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span><span class="d-none d-md-inline">Syncing</span>';
+        }
+
+        try {
+            const response = await fetch(buildCallsApiUrl('/api/calls/sync'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(activeDevicePayload())
+            });
+            const data = await response.json();
+            if (!data.success) {
+                showToast(data.message || 'Failed to request call history sync', 'danger');
+                return;
+            }
+
+            showToast(data.message || 'Call history sync requested', data.queued ? 'info' : 'success');
+            setTimeout(function () {
+                loadCallLogs(1);
+                loadCallStats();
+            }, 2500);
+        } catch (error) {
+            console.error('Error syncing call history:', error);
+            showToast('Failed to request call history sync', 'danger');
+        } finally {
+            if (syncBtn) {
+                syncBtn.disabled = false;
+                syncBtn.innerHTML = originalHtml;
+            }
+        }
+    }
+
     // ==================== SEARCH AND FILTER ====================
     function attachSearchAndFilter() {
         if (elements.searchCalls) {
@@ -1548,12 +1592,11 @@
     }
 
     window.openContactsModal = function() {
-        hideDialerModal();
-        setCallWorkspaceMode('contacts');
+        showCallWorkspaceModal('contacts');
     };
 
     window.openDialerModal = function() {
-        showDialerModal({ focusDialer: true });
+        showCallWorkspaceModal('dialer', { focusDialer: true });
     };
 
     window.selectContact = function(phone, name) {
@@ -1563,7 +1606,7 @@
             elements.dialerContactName.classList.add('text-success');
         }
         updateNumberHint(phone);
-        showDialerModal({ focusDialer: true });
+        showCallWorkspaceModal('dialer', { focusDialer: true });
 
         showToast(`Selected: ${name}`, 'success');
     };
@@ -2039,6 +2082,7 @@
     // ==================== EXPOSE GLOBALLY ====================
     window.loadCallLogs = loadCallLogs;
     window.refreshCalls = refreshCalls;
+    window.syncCallHistory = syncCallHistory;
     window.endCall = endCall;
     window.deleteCallLog = deleteCallLog;
     window.clearAllCalls = clearAllCalls;

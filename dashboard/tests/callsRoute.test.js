@@ -122,6 +122,33 @@ describe('calls API device scoping', () => {
         );
     });
 
+    test('dispatches call history sync through the device command lane', async () => {
+        global.mqttService = {
+            publishCommand: jest.fn().mockResolvedValue({ queued: false, messageId: 'sync-1' }),
+            runDeviceOperation: jest.fn((_deviceId, task) => task())
+        };
+        const app = buildApp(makeDbMock());
+
+        const res = await request(app)
+            .post('/api/calls/sync')
+            .send({ deviceId: 'device-sync', simSlot: 1 });
+
+        expect(res.status).toBe(200);
+        expect(res.body.messageId).toBe('sync-1');
+        expect(global.mqttService.runDeviceOperation).toHaveBeenCalledWith('device-sync', expect.any(Function));
+        expect(global.mqttService.publishCommand).toHaveBeenCalledWith(
+            'device-sync',
+            'sync-calls',
+            { mode: 'new', sim_slot: 1 },
+            false,
+            90000,
+            {
+                source: 'dashboard:calls',
+                domain: 'telephony'
+            }
+        );
+    });
+
     test('keeps call end runtime-only and avoids queue wording when voice transport is busy', async () => {
         global.modemService = {
             getStatus: jest.fn().mockReturnValue({

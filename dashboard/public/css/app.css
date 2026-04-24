@@ -929,6 +929,10 @@ body {
     padding: 1rem 1rem 0.5rem;
 }
 
+.call-dialer-field .iti {
+    min-width: 100%;
+}
+
 .incoming-call-card__actions {
     display: flex;
     gap: 0.75rem;

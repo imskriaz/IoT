@@ -851,21 +851,28 @@ describe('sidebar navigation coverage', () => {
         expect(callsJs).toContain("'online': 'Connected'");
     });
 
-    test('calls page keeps dialer and contact selection inline instead of modal-only', () => {
+    test('calls page opens the call workspace as a modal', () => {
         const callsJsPath = path.join(__dirname, '..', 'public', 'js', 'calls.js');
         const callsHtmlPath = path.join(__dirname, '..', 'views', 'pages', 'calls.html');
         const callsJs = fs.readFileSync(callsJsPath, 'utf8');
         const callsHtml = fs.readFileSync(callsHtmlPath, 'utf8');
 
+        expect(callsHtml).toContain('id="callWorkspaceModal"');
         expect(callsHtml).toContain('id="callWorkspaceCard"');
         expect(callsHtml).toContain('id="callWorkspaceDialerSection"');
         expect(callsHtml).toContain('id="callWorkspaceContactsSection"');
+        expect(callsHtml).toContain('id="syncCallsBtn"');
+        expect(callsHtml).not.toContain('id="quickContacts"');
         expect(callsHtml).not.toContain('id="dialerModal"');
         expect(callsHtml).not.toContain('id="contactsModal"');
         expect(callsJs).toContain("function setCallWorkspaceMode(mode = 'dialer', options = {})");
+        expect(callsJs).toContain("function showCallWorkspaceModal(mode = 'dialer', options = {})");
+        expect(callsJs).toContain("async function syncCallHistory()");
         expect(callsJs).toContain("window.openContactsModal = function() {");
         expect(callsJs).toContain("window.openDialerModal = function() {");
-        expect(callsJs).toContain("setCallWorkspaceMode('dialer', { focusDialer: true });");
+        expect(callsJs).toContain("showCallWorkspaceModal('contacts');");
+        expect(callsJs).toContain("showCallWorkspaceModal('dialer', { focusDialer: true });");
+        expect(callsJs).toContain("window.syncCallHistory = syncCallHistory;");
         expect(callsJs).toContain("typeof window.deviceHttpOnline === 'function'");
         expect(callsJs).toContain("} else if (getCallsTransportMode() === 'http') {");
         expect(callsJs).toContain('checkDeviceConnection();');

@@ -65,6 +65,24 @@ describe('automationEngine', () => {
         expect(queries.some((sql) => sql.includes('UPDATE automation_flows'))).toBe(true);
     });
 
+    test('normalizes malformed flow node and edge payloads to empty arrays', async () => {
+        const flows = [{
+            id: 4,
+            name: 'Malformed flow',
+            device_id: 'dev-4',
+            nodes: '{}',
+            edges: '{"sourceId":"t1","targetId":"a1"}'
+        }];
+        const db = makeDb(flows);
+
+        automationEngine.init(db, { connected: false }, { emit: jest.fn() });
+
+        expect(automationEngine._flows[0].nodes).toEqual([]);
+        expect(automationEngine._flows[0].edges).toEqual([]);
+        await expect(automationEngine.onEvent('telemetry', { signal: 20 }, 'dev-4')).resolves.toBeUndefined();
+        await expect(automationEngine._runSchedules()).resolves.toBeUndefined();
+    });
+
     test('tracks previous telemetry state for value_changed conditions without persisting a device twin row', async () => {
         const flows = [{
             id: 2,

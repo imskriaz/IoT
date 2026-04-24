@@ -504,6 +504,12 @@ public class MqttBridgeService extends Service {
                     logConsoleEvent("call", "Command received: " + normalized);
                     handleMakeCall(actionId, data);
                     break;
+                case "sync_calls":
+                case "sync_call_history":
+                case "call_history_sync":
+                    logConsoleEvent("call", "Command received: " + normalized);
+                    handleSyncCalls(actionId);
+                    break;
                 case "send_ussd":
                     logConsoleEvent("ussd", "Command received: send_ussd");
                     handleSendUssd(actionId, data);
@@ -644,6 +650,18 @@ public class MqttBridgeService extends Service {
             logConsoleEvent("call", "Call request failed: " + detailForError(error, "call start failed"));
             publishActionResult(actionId, "make_call", "failed", 1, "call_start_failed", null, 45000);
         }
+    }
+
+    private void handleSyncCalls(String actionId) {
+        if (!hasCallLogPermission()) {
+            logConsoleEvent("call", "Call history sync rejected: READ_CALL_LOG permission missing");
+            publishActionResult(actionId, "sync_calls", "failed", 1, "call_log_permission_denied", null, 90000);
+            return;
+        }
+
+        logConsoleEvent("call", "Manual call history sync started");
+        syncExistingCallsToDashboardOnce(true, true);
+        publishActionResult(actionId, "sync_calls", "completed", 0, "call_history_sync_requested", null, 90000);
     }
 
     private void handleSendUssd(String actionId, JSONObject data) {
@@ -1211,6 +1229,10 @@ public class MqttBridgeService extends Service {
     }
 
     private void syncExistingCallsToDashboardOnce(boolean allowInitialBackfill) {
+        syncExistingCallsToDashboardOnce(allowInitialBackfill, false);
+    }
+
+    private void syncExistingCallsToDashboardOnce(boolean allowInitialBackfill, boolean emitProgress) {
         BridgeConfig cfg = currentConfig();
         if (cfg == null || cfg.deviceId == null || cfg.deviceId.trim().isEmpty()) {
             return;
@@ -1226,6 +1248,9 @@ public class MqttBridgeService extends Service {
         List<CallLogSyncRecord> localCalls = buildRecentCallLogRecords(this, BULK_SYNC_LIMIT);
         long newestTimestamp = maxCallSyncTimestamp(localCalls, watermark);
         if (watermark <= 0L && (alreadyDone || !allowInitialBackfill)) {
+            if (emitProgress) {
+                publishCallSyncState("call_sync_complete", 0, 0);
+            }
             prefs.edit()
                     .putBoolean(doneKey, true)
                     .putLong(watermarkKey, newestTimestamp)
@@ -1235,6 +1260,9 @@ public class MqttBridgeService extends Service {
 
         List<CallLogSyncRecord> calls = filterCallSyncRecords(localCalls, watermark);
         if (calls.isEmpty()) {
+            if (emitProgress) {
+                publishCallSyncState("call_sync_complete", 0, 0);
+            }
             prefs.edit()
                     .putBoolean(doneKey, true)
                     .putLong(watermarkKey, newestTimestamp)
@@ -1242,11 +1270,17 @@ public class MqttBridgeService extends Service {
             return;
         }
         prefs.edit().putLong(watermarkKey, newestTimestamp).apply();
+        if (emitProgress) {
+            publishCallSyncState("call_sync_start", calls.size(), 0);
+        }
         int synced = 0;
         for (CallLogSyncRecord call : calls) {
             if (publishCallSyncRecord(call)) {
                 synced += 1;
             }
+        }
+        if (emitProgress) {
+            publishCallSyncState("call_sync_complete", calls.size(), synced);
         }
         prefs.edit()
                 .putBoolean(doneKey, true)

@@ -716,6 +716,29 @@ describe('mqttService firmware compatibility', () => {
         expect(svc._emitDeviceQueueState).toHaveBeenCalledWith('device-1');
     });
 
+    test('persistent queue row updates use raw sqlite handle when async run wrapper is missing', async () => {
+        const rawRun = jest.fn().mockReturnValue({ changes: 1, lastInsertRowid: 0 });
+        const prepare = jest.fn().mockReturnValue({ run: rawRun });
+        global.app.locals.db = {
+            all: jest.fn().mockResolvedValue([]),
+            _raw: { prepare }
+        };
+
+        await svc._updatePersistentQueueRow('queue-raw-1', {
+            status: 'ambiguous',
+            last_error: 'Command timeout after 30000ms',
+            completed_at: '2026-04-24 09:00:00'
+        });
+
+        expect(prepare).toHaveBeenCalledWith(expect.stringContaining('UPDATE device_command_queue'));
+        expect(rawRun).toHaveBeenCalledWith(
+            'ambiguous',
+            'Command timeout after 30000ms',
+            '2026-04-24 09:00:00',
+            'queue-raw-1'
+        );
+    });
+
     test('classifies high-value commands into stable domains and priorities', () => {
         expect(svc._commandDomain('send-sms')).toBe('telephony');
         expect(svc._commandDomain('make-call')).toBe('telephony');

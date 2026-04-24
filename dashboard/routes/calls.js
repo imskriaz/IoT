@@ -75,6 +75,24 @@ function publishInteractiveTelephonyCommand(deviceId, command, payload, timeout)
     ));
 }
 
+function publishCallHistorySyncCommand(deviceId, payload, timeout) {
+    if (!global.mqttService) {
+        return Promise.resolve(null);
+    }
+
+    return runRuntimeDeviceOperation(deviceId, () => global.mqttService.publishCommand(
+        deviceId,
+        'sync-calls',
+        payload,
+        false,
+        timeout,
+        {
+            source: 'dashboard:calls',
+            domain: 'telephony'
+        }
+    ));
+}
+
 function buildCallSimMeta(scope = {}) {
     const payload = {};
     if (scope.simSlot !== null && scope.simSlot !== undefined) {
@@ -300,6 +318,41 @@ router.get('/recent', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to fetch recent calls'
+        });
+    }
+});
+
+router.post('/sync', async (req, res) => {
+    try {
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const simScope = resolveRequestSimScope(req);
+
+        if (!global.mqttService) {
+            return res.status(503).json({
+                success: false,
+                message: 'Call history sync requires the live device command service'
+            });
+        }
+
+        const commandResult = await publishCallHistorySyncCommand(deviceId, {
+            mode: 'new',
+            ...buildCallSimMeta(simScope)
+        }, 90000);
+
+        res.json({
+            success: true,
+            message: commandResult?.queued
+                ? 'Call history sync queued'
+                : 'Call history sync requested',
+            queued: Boolean(commandResult?.queued),
+            queueId: commandResult?.queueId || null,
+            messageId: commandResult?.messageId || null
+        });
+    } catch (error) {
+        logger.error('API call sync error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to request call history sync'
         });
     }
 });

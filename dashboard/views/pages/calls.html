@@ -7,9 +7,9 @@
         <p class="text-muted mb-0">Make calls, view history, manage contacts</p>
     </div>
     <div class="d-flex gap-2">
-        <button class="btn btn-outline-primary" onclick="openContactsModal()">
-            <i class="bi bi-person-lines-fill me-2"></i>
-            <span class="d-none d-md-inline">Contacts</span>
+        <button class="btn btn-outline-secondary" id="syncCallsBtn" onclick="syncCallHistory()">
+            <i class="bi bi-cloud-arrow-down me-1"></i>
+            <span class="d-none d-md-inline">Sync</span>
         </button>
         <a href="/api/calls/export/csv" class="btn btn-outline-secondary" id="callsExportCsv" download>
             <i class="bi bi-download me-1"></i><span class="d-none d-md-inline">Export CSV</span>
@@ -255,31 +255,37 @@
     
 </div>
 
-<div class="card mb-4" id="callWorkspaceCard">
-    <div class="card-header bg-white py-3 d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3">
-        <div>
-            <h5 class="mb-1"><i class="bi bi-headset me-2"></i>Call Workspace</h5>
-        </div>
-        <div class="btn-group btn-group-sm" role="group" aria-label="Call workspace view">
-            <button class="btn btn-outline-primary" type="button" id="callWorkspaceDialerTab" onclick="openDialerModal()">
-                <i class="bi bi-dialpad me-1"></i>Dial Pad
-            </button>
-            <button class="btn btn-outline-primary active" type="button" id="callWorkspaceContactsTab" onclick="openContactsModal()">
-                <i class="bi bi-person-lines-fill me-1"></i>Contacts
-            </button>
-        </div>
-    </div>
-    <div class="card-body">
-        <div class="row g-4">
-            <div class="col-12 col-xl-5 d-none" id="callWorkspaceDialerColumn">
-                <section id="callWorkspaceDialerSection">
+<div class="modal fade call-workspace-modal--contacts" id="callWorkspaceModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog call-workspace-dialog modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0">
+            <div class="card border-0 mb-0" id="callWorkspaceCard">
+                <div class="card-header bg-white py-3 d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3">
+                    <div>
+                        <h5 class="mb-1"><i class="bi bi-headset me-2"></i>Call Workspace</h5>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="btn-group btn-group-sm" role="group" aria-label="Call workspace view">
+                            <button class="btn btn-outline-primary" type="button" id="callWorkspaceDialerTab" onclick="openDialerModal()">
+                                <i class="bi bi-dialpad me-1"></i>Dial Pad
+                            </button>
+                            <button class="btn btn-outline-primary active" type="button" id="callWorkspaceContactsTab" onclick="openContactsModal()">
+                                <i class="bi bi-person-lines-fill me-1"></i>Contacts
+                            </button>
+                        </div>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="row g-4">
+                        <div class="col-12 d-none" id="callWorkspaceDialerColumn">
+                            <section id="callWorkspaceDialerSection">
                     <div id="dialerOfflineWarning" class="alert alert-warning py-2 d-none">
                         <i class="bi bi-exclamation-triangle me-2"></i>
                         <small>Device is offline. Calls cannot be made.</small>
                     </div>
 
-                    <div class="mb-4">
-                        <input type="tel" class="form-control form-control-lg text-center"
+                    <div class="mb-4 call-dialer-field">
+                        <input type="tel" class="form-control form-control-lg"
                                id="dialerNumber" placeholder="Enter number" data-intl-tel-input>
                         <div class="d-flex justify-content-between mt-2 gap-2">
                             <small class="text-muted" id="numberHint">Choose a country or paste a full number</small>
@@ -370,18 +376,11 @@
                         </button>
                     </div>
 
-                    <div class="mt-4">
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <small class="text-muted">Quick Contacts</small>
-                            <button class="btn btn-sm btn-link px-0" type="button" onclick="openContactsModal()">Browse all</button>
+                            </section>
                         </div>
-                        <div class="d-flex gap-2 flex-wrap" id="quickContacts"></div>
-                    </div>
-                </section>
-            </div>
 
-            <div class="col-12">
-                <section id="callWorkspaceContactsSection" class="call-workspace-section">
+                        <div class="col-12" id="callWorkspaceContactsColumn">
+                            <section id="callWorkspaceContactsSection" class="call-workspace-section">
                     <div class="row g-2 mb-3">
                         <div class="col-12 col-md-8">
                             <div class="input-group">
@@ -415,20 +414,11 @@
                             </div>
                         </div>
                     </div>
-                </section>
+                            </section>
+                        </div>
+                    </div>
+                </div>
             </div>
-        </div>
-    </div>
-</div>
-
-<div class="modal fade" id="dialerModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-dialpad me-2"></i>Dial Pad</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body" id="dialerModalBody"></div>
         </div>
     </div>
 </div>
@@ -598,6 +588,60 @@
 
 #callWorkspaceCard {
     scroll-margin-top: 78px;
+}
+
+#callWorkspaceModal .modal-content,
+#callWorkspaceModal #callWorkspaceCard {
+    border-radius: 0.5rem;
+}
+
+#callWorkspaceModal .card-body {
+    padding: 0.9rem;
+}
+
+#callWorkspaceModal.call-workspace-modal--dialer .call-workspace-dialog {
+    max-width: min(500px, calc(100vw - 1.25rem));
+}
+
+#callWorkspaceModal.call-workspace-modal--contacts .call-workspace-dialog {
+    max-width: min(900px, calc(100vw - 1.25rem));
+}
+
+.call-dialer-field {
+    margin-bottom: 0.75rem !important;
+}
+
+.call-dialer-field .iti {
+    width: 100%;
+    display: block;
+    --iti-spacer-horizontal: 6px;
+    --iti-arrow-padding: 4px;
+}
+
+.call-dialer-field .iti__tel-input {
+    width: 100%;
+    min-width: 0;
+    height: 52px;
+    font-size: 1.15rem;
+    text-align: left !important;
+}
+
+.call-dialer-field .iti__selected-country-primary {
+    padding-left: 0.55rem;
+    padding-right: 0.25rem;
+}
+
+.call-dialer-field .iti .iti__selected-dial-code {
+    margin-left: 0.25rem;
+}
+
+#callWorkspaceModal.call-workspace-modal--dialer .dialer-grid {
+    margin-bottom: 0.9rem !important;
+}
+
+#numberHint,
+#dialerContactName {
+    white-space: nowrap;
 }
 
 .call-contact-list {
