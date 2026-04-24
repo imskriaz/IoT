@@ -20,6 +20,8 @@ let dashboardSmsRefreshTimer = null;
 let dashboardSmsPreviewToken = 0;
 let dashboardSmsUnreadToken = 0;
 let activeIncomingCallContext = null;
+const TOAST_DEDUPE_WINDOW_MS = 2500;
+const recentToastKeys = new Map();
 
 function deviceWifiConnected() {
     if (latestDeviceStatus?.wifi?.connected === true) {
@@ -3478,10 +3480,42 @@ function updateUnreadBadge(unreadCountOverride) {
         .catch(error => console.error('Error updating unread badge:', error));
 }
 
+function normalizeToastDedupeText(value) {
+    return String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .replace(/[.!?]+$/g, '');
+}
+
+function shouldSuppressDuplicateToast(message, type, title) {
+    const now = Date.now();
+    const key = [
+        normalizeToastDedupeText(title),
+        normalizeToastDedupeText(type),
+        normalizeToastDedupeText(message)
+    ].join('|');
+
+    recentToastKeys.forEach((timestamp, existingKey) => {
+        if ((now - timestamp) > TOAST_DEDUPE_WINDOW_MS) {
+            recentToastKeys.delete(existingKey);
+        }
+    });
+
+    const lastSeenAt = recentToastKeys.get(key);
+    if (lastSeenAt && (now - lastSeenAt) <= TOAST_DEDUPE_WINDOW_MS) {
+        return true;
+    }
+
+    recentToastKeys.set(key, now);
+    return false;
+}
+
 // Show toast notification
 function showToast(message, type = 'info', title = 'Notification') {
     const toastTemplate = document.getElementById('liveToast');
     if (!toastTemplate || !window.bootstrap) return;
+    if (shouldSuppressDuplicateToast(message, type, title)) return;
 
     const notificationArea = document.getElementById('dashboardNotificationArea') || toastTemplate.parentElement;
     const toastEl = toastTemplate.cloneNode(true);

@@ -488,7 +488,6 @@ class MQTTService extends EventEmitter {
                 Number(smsMetadata.sms_pdu_length) > 0;
             const message = {
                 action_id: messageId,
-                number,
                 command: normalizedCommand === 'send-sms-multipart' ? 'send_sms_multipart' : 'send_sms'
             };
             if (hasDashboardPdu) {
@@ -497,6 +496,7 @@ class MQTTService extends EventEmitter {
                     sms_pdu_length: Number(smsMetadata.sms_pdu_length)
                 });
             } else {
+                message.number = number;
                 message.text = text;
                 Object.assign(message, smsMetadata);
             }
