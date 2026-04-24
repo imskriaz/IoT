@@ -482,13 +482,29 @@ class MQTTService extends EventEmitter {
                     Object.entries(payload || {}).filter(([key]) => key.startsWith('sms_'))
                 )
             };
+            const hasDashboardPdu = typeof smsMetadata.sms_pdu === 'string' &&
+                smsMetadata.sms_pdu.trim() &&
+                Number.isFinite(Number(smsMetadata.sms_pdu_length)) &&
+                Number(smsMetadata.sms_pdu_length) > 0;
             const message = {
                 action_id: messageId,
                 number,
-                text,
-                command: normalizedCommand === 'send-sms-multipart' ? 'send_sms_multipart' : 'send_sms',
-                ...smsMetadata
+                command: normalizedCommand === 'send-sms-multipart' ? 'send_sms_multipart' : 'send_sms'
             };
+            if (hasDashboardPdu) {
+                Object.assign(message, {
+                    sms_encoding: smsMetadata.sms_encoding,
+                    sms_transport_encoding: smsMetadata.sms_transport_encoding,
+                    sms_parts: smsMetadata.sms_parts,
+                    sms_multipart: smsMetadata.sms_multipart,
+                    sms_pdu: smsMetadata.sms_pdu,
+                    sms_pdu_length: Number(smsMetadata.sms_pdu_length),
+                    sms_pdu_encoding: smsMetadata.sms_pdu_encoding
+                });
+            } else {
+                message.text = text;
+                Object.assign(message, smsMetadata);
+            }
             if (Number.isFinite(Number(payload.timeout)) && Number(payload.timeout) > 0) {
                 message.timeout = Number(payload.timeout);
             }

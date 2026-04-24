@@ -161,3 +161,46 @@ describe('queue route bulk clear', () => {
         ]);
     });
 });
+
+describe('queue route list ordering', () => {
+    afterEach(() => {
+        delete global.mqttService;
+        jest.resetModules();
+    });
+
+    test('lists queue rows newest updated first without status grouping', async () => {
+        const db = makeDbMock({
+            all: jest.fn().mockResolvedValue([
+                {
+                    id: 'queue-new',
+                    command: 'restart-device',
+                    status: 'completed',
+                    updatedAt: '2026-04-24 14:30:00',
+                    createdAt: '2026-04-24 14:29:00'
+                }
+            ])
+        });
+        global.mqttService = {
+            getDeviceQueueState: jest.fn().mockResolvedValue({
+                summary: { pending: 0, active: 0, failed: 0 },
+                recent: []
+            })
+        };
+
+        const router = require('../routes/queue');
+        const app = buildApp(router, { id: 1, role: 'admin', username: 'admin', deviceId: 'device-7' }, db);
+
+        const res = await request(app)
+            .get('/api/queue')
+            .query({ deviceId: 'device-7', scope: 'all', status: 'all', limit: 30 });
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.data.items).toHaveLength(1);
+
+        const sql = db.all.mock.calls[0][0];
+        expect(sql).toContain('ORDER BY datetime(updated_at) DESC');
+        expect(sql).toContain('datetime(created_at) DESC');
+        expect(sql).not.toContain('WHEN status');
+    });
+});

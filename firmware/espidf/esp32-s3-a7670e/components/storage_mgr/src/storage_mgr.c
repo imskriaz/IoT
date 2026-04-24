@@ -858,6 +858,8 @@ static void storage_mgr_task(void *arg) {
                         (void)storage_mgr_flush_persist_locked(now_ms);
                     } else {
                         s_status.sd_flush_count++;
+                        s_persist_dirty = false;
+                        s_last_persist_ms = now_ms;
                     }
                     xSemaphoreGive(s_lock);
                 }
@@ -1065,6 +1067,8 @@ static esp_err_t storage_mgr_append_record(const storage_mgr_record_t *record) {
                 fallback_err = storage_mgr_flush_persist_locked(unified_tick_now_ms());
             } else {
                 s_status.sd_flush_count++;
+                s_persist_dirty = false;
+                s_last_persist_ms = unified_tick_now_ms();
             }
             xSemaphoreGive(s_lock);
         }

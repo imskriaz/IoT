@@ -135,17 +135,8 @@ router.get('/', async (req, res) => {
                     updated_at AS updatedAt
              FROM device_command_queue
              ${whereSql}
-             ORDER BY
-                CASE
-                    WHEN status = 'dispatching' THEN 0
-                    WHEN status = 'waiting_response' THEN 1
-                    WHEN status = 'pending' THEN 2
-                    WHEN status = 'failed' THEN 3
-                    WHEN status = 'ambiguous' THEN 4
-                    ELSE 5
-                END,
-                datetime(updated_at) DESC,
-                datetime(created_at) DESC
+             ORDER BY datetime(updated_at) DESC,
+                      datetime(created_at) DESC
              LIMIT ?`,
             params
         );

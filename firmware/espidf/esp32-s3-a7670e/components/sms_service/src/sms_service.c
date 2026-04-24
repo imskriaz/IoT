@@ -211,6 +211,7 @@ static unified_action_response_t sms_service_send_with_transport(
     size_t text_len = 0U;
     bool requires_unicode_timeout = false;
     uint16_t expected_parts = 0U;
+    bool has_dashboard_pdu = false;
 
     if (options) {
         expected_parts = options->expected_parts;
@@ -221,13 +222,14 @@ static unified_action_response_t sms_service_send_with_transport(
         modem_options.pdu_hex = options->pdu_hex;
         modem_options.pdu_length = options->pdu_length;
         modem_options_ptr = &modem_options;
+        has_dashboard_pdu = options->pdu_hex && options->pdu_hex[0] != '\0' && options->pdu_length > 0U;
     }
     command = force_multipart ? UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART : UNIFIED_ACTION_CMD_SEND_SMS;
     success_detail = force_multipart ? "sms_multipart_sent" : "sms_sent";
     timeout_detail = force_multipart ? "sms_multipart_timeout" : "sms_send_timeout";
     failed_detail = force_multipart ? "sms_multipart_failed" : "sms_send_failed";
 
-    if (!number || !text || number[0] == '\0' || text[0] == '\0') {
+    if (!has_dashboard_pdu && (!number || !text || number[0] == '\0' || text[0] == '\0')) {
         return sms_service_build_response(
             command,
             UNIFIED_ACTION_RESULT_REJECTED,
@@ -237,7 +239,7 @@ static unified_action_response_t sms_service_send_with_transport(
         );
     }
 
-    text_len = strlen(text);
+    text_len = text ? strlen(text) : 0U;
     requires_unicode_timeout = options && options->use_ucs2_present
         ? options->use_ucs2
         : sms_service_requires_unicode_timeout(text);
@@ -313,8 +315,8 @@ static unified_action_response_t sms_service_send_with_transport(
             modem_response[0] ? modem_response : "<empty>"
         );
     }
-    snprintf(outgoing.from, sizeof(outgoing.from), "%s", number);
-    snprintf(outgoing.text, sizeof(outgoing.text), "%s", text);
+    snprintf(outgoing.from, sizeof(outgoing.from), "%s", number ? number : "");
+    snprintf(outgoing.text, sizeof(outgoing.text), "%s", text ? text : "");
     snprintf(
         outgoing.detail,
         sizeof(outgoing.detail),
@@ -327,7 +329,7 @@ static unified_action_response_t sms_service_send_with_transport(
     (void)storage_mgr_append_sms(&outgoing);
 
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
-        snprintf(s_status.last_destination, sizeof(s_status.last_destination), "%s", number);
+        snprintf(s_status.last_destination, sizeof(s_status.last_destination), "%s", number ? number : "");
         s_status.last_outgoing = outgoing;
         snprintf(s_status.last_detail, sizeof(s_status.last_detail), "%s", outgoing.detail);
         if (err == ESP_OK) {

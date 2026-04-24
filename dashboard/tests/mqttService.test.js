@@ -105,6 +105,34 @@ describe('mqttService firmware compatibility', () => {
         expect(payload.messageId).toBeUndefined();
     });
 
+    test('publishCommand trims dashboard-built Unicode PDU SMS payloads for firmware', async () => {
+        await svc.publishCommand(
+            'device-1',
+            'send-sms',
+            { to: '+8801887300993', message: '\u09AC\u09BE\u0982\u09B2\u09BE 123' },
+            false,
+            45000,
+            { skipPersistentQueue: true, messageId: 'send-sms_pdu_test' }
+        );
+
+        const payload = JSON.parse(svc.client.publish.mock.calls[0][1]);
+        expect(payload).toEqual(expect.objectContaining({
+            action_id: 'send-sms_pdu_test',
+            number: '+8801887300993',
+            command: 'send_sms',
+            sms_encoding: 'unicode',
+            sms_transport_encoding: 'ucs2',
+            sms_parts: 1,
+            sms_multipart: false,
+            sms_pdu_length: 32,
+            sms_pdu_encoding: 'ucs2'
+        }));
+        expect(payload.sms_pdu).toBe('0021000D91881088370099F300081209AC09BE098209B209BE0020003100320033');
+        expect(payload.text).toBeUndefined();
+        expect(payload.sms_utf8_bytes).toBeUndefined();
+        expect(payload.sms_characters).toBeUndefined();
+    });
+
     test('publishCommand includes firmware-compatible multipart SMS fields', async () => {
         await svc.publishCommand(
             'device-1',

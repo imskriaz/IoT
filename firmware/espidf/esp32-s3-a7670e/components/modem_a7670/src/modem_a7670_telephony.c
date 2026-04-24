@@ -1248,7 +1248,8 @@ esp_err_t modem_a7670_send_sms_with_options(
     int64_t deadline_us = 0;
     uint32_t remaining_timeout_ms = 0U;
 
-    if (!number || !text || !response || response_len == 0 || number[0] == '\0' || text[0] == '\0') {
+    if (!response || response_len == 0 ||
+        (!use_dashboard_pdu && (!number || !text || number[0] == '\0' || text[0] == '\0'))) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!s_ready || !s_uart_control_ready || !s_lock) {
@@ -1274,7 +1275,7 @@ esp_err_t modem_a7670_send_sms_with_options(
             TAG,
             "sms send using dashboard PDU pdu_len=%u text_len=%u",
             (unsigned)options->pdu_length,
-            (unsigned)strlen(text)
+            (unsigned)(text ? strlen(text) : 0U)
         );
         err = modem_a7670_send_sms_pdu_locked(
             options->pdu_hex,
