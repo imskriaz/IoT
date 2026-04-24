@@ -38,6 +38,7 @@ final class BridgeDiagnostics {
                 .append("\nInstall ID: ").append(config.installId.isEmpty() ? "not set" : config.installId)
                 .append("\nSEND_SMS: ").append(granted(context, Manifest.permission.SEND_SMS))
                 .append("\nRECEIVE_SMS: ").append(granted(context, Manifest.permission.RECEIVE_SMS))
+                .append("\nREAD_PHONE_STATE: ").append(granted(context, Manifest.permission.READ_PHONE_STATE))
                 .append("\nCAMERA: ").append(granted(context, Manifest.permission.CAMERA))
                 .append("\nPOST_NOTIFICATIONS: ").append(notificationPermissionState(context))
                 .append("\nAPI key: ").append(config.apiKey.isEmpty() ? "not set" : "configured")
@@ -200,6 +201,9 @@ final class BridgeDiagnostics {
         }
         if (context.checkSelfPermission(Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) {
             findings.add("RECEIVE_SMS is missing. Incoming SMS will not sync back to the dashboard.");
+        }
+        if (context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+            findings.add("READ_PHONE_STATE is missing. SIM routing and subscription-aware SMS fallback are degraded.");
         }
         if (Build.VERSION.SDK_INT >= 33
                 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {

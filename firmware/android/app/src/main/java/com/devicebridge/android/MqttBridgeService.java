@@ -117,6 +117,7 @@ public class MqttBridgeService extends Service {
     private volatile List<SimSlotSnapshot> cachedSimSlots = new ArrayList<>();
     private volatile long lastDetailedStatusAtMs;
     private volatile boolean detailedStatusPending = true;
+    private volatile long lastHttpRecoveryAttemptAtMs;
     private BridgeHttpHandler httpHandler;
 
     @Override
@@ -2085,14 +2086,28 @@ public class MqttBridgeService extends Service {
     }
 
     void recordHttpFailure(String message) {
-        BridgeEventLog.append(this, message);
+        recordHttpFailure(message, "");
+    }
+
+    void recordHttpFailure(String message, String detail) {
+        String detailText = detail == null ? "" : detail.trim();
+        String fullMessage = detailText.isEmpty() ? message : (message + ": " + detailText);
+        BridgeEventLog.append(this, fullMessage);
         publishFailureCount += 1;
+        if (currentConfig().usesHttpTransport() && currentConfig().bridgeEnabled && !stopRequested) {
+            updateRuntimeState("http_degraded", false, fullMessage);
+            maybeScheduleHttpRecovery(fullMessage);
+        }
         persistRuntimeTelemetry();
     }
 
     void recordHttpStatusSuccess() {
         publishSuccessCount += 1;
         lastStatusPushAtMs = System.currentTimeMillis();
+        lastHttpRecoveryAttemptAtMs = 0L;
+        if (currentConfig().usesHttpTransport() && currentConfig().bridgeEnabled && !stopRequested) {
+            updateRuntimeState("online", false, "HTTP bridge active via " + currentConfig().serverUrl);
+        }
         persistRuntimeTelemetry();
     }
 
@@ -2846,7 +2861,7 @@ public class MqttBridgeService extends Service {
     private void scheduleStatusHeartbeat() {
         cancelStatusHeartbeat();
         statusHeartbeatFuture = executor.scheduleWithFixedDelay(
-                () -> publishStatus("online"),
+                this::runStatusHeartbeatSafely,
                 STATUS_HEARTBEAT_INTERVAL_SECONDS,
                 STATUS_HEARTBEAT_INTERVAL_SECONDS,
                 TimeUnit.SECONDS
@@ -2871,7 +2886,7 @@ public class MqttBridgeService extends Service {
             return;
         }
         outstandingPollFuture = executor.scheduleWithFixedDelay(
-                this::pollOutstandingHttpMessages,
+                this::runOutstandingPollSafely,
                 5,
                 HTTP_OUTSTANDING_POLL_INTERVAL_SECONDS,
                 TimeUnit.SECONDS
@@ -2887,7 +2902,7 @@ public class MqttBridgeService extends Service {
     }
 
     private void postHttpStatus(JSONObject payload) {
-        logTelemetry("Device sent HTTP status :: payload=" + fullJson(payload));
+        logTelemetry("Sending HTTP status :: payload=" + fullJson(payload));
         httpHandler.postStatusAsync(payload);
     }
 
@@ -2906,6 +2921,32 @@ public class MqttBridgeService extends Service {
 
     private void pollOutstandingHttpMessages() {
         httpHandler.pollOutstandingMessages();
+    }
+
+    private void runStatusHeartbeatSafely() {
+        try {
+            publishStatus("online");
+        } catch (RuntimeException error) {
+            recordHttpFailure("HTTP heartbeat crashed", detailForError(error, "status heartbeat crashed"));
+        }
+    }
+
+    private void runOutstandingPollSafely() {
+        try {
+            pollOutstandingHttpMessages();
+        } catch (RuntimeException error) {
+            recordHttpFailure("HTTP outstanding poll crashed", detailForError(error, "outstanding poll crashed"));
+        }
+    }
+
+    private void maybeScheduleHttpRecovery(String detail) {
+        long now = System.currentTimeMillis();
+        if ((now - lastHttpRecoveryAttemptAtMs) < TimeUnit.SECONDS.toMillis(20)) {
+            return;
+        }
+        lastHttpRecoveryAttemptAtMs = now;
+        logTelemetry("HTTP recovery scheduled: " + fullText(detail));
+        scheduleReconnect();
     }
 
     private StatusSnapshot captureStatusSnapshot(String state, boolean refreshDetailed) {

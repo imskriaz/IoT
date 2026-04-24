@@ -305,14 +305,17 @@
             const method = (init.method || 'GET').toUpperCase();
             const url = typeof resource === 'string' ? resource : String(resource?.url || '');
             const isDeviceAction = !SAFE_METHODS.has(method) && DEVICE_ACTION_PREFIXES.some(prefix => url.startsWith(prefix));
+            const httpDeviceHealthy = isDeviceAction
+                && typeof window.deviceHttpOnline === 'function'
+                && window.deviceHttpOnline() === true;
 
-            if (isDeviceAction && window._serverConnected === false) {
+            if (isDeviceAction && !httpDeviceHealthy && window._serverConnected === false) {
                 if (typeof window.showToast === 'function') {
                     window.showToast('Live connection looks stale. Trying the request directly via HTTP.', 'warning');
                 }
             }
 
-            if (isDeviceAction && window._serverConnected !== false && window._mqttConnected === false) {
+            if (isDeviceAction && !httpDeviceHealthy && window._serverConnected !== false && window._mqttConnected === false) {
                 if (typeof window.showToast === 'function') {
                     window.showToast('Dashboard MQTT is reconnecting. Device actions may queue until the broker link is back.', 'info');
                 }

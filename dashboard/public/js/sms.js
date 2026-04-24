@@ -683,6 +683,8 @@
 
             if (eventName === 'sms:sent' || eventName === 'sms:delivered' || eventName === 'sms:send-failed') {
                 const updated = updateThreadMessageStatus(data, eventName);
+                updateRenderedThreadMessageStatus(data, eventName);
+                updateConversationItemStatus(data, eventName);
                 scheduleSmsRefresh(updated ? 60 : 80);
                 if (!updated) {
                     scheduleThreadRefresh(80);
@@ -1055,6 +1057,29 @@
         return true;
     }
 
+    function resolveLiveSmsStatus(data, eventName = '', fallbackStatus = '') {
+        const explicitStatus = String(data?.status || '').trim().toLowerCase();
+        if (explicitStatus) {
+            return explicitStatus;
+        }
+
+        const normalizedEvent = String(eventName || '').trim().toLowerCase();
+        if (normalizedEvent === 'sms:send-failed') {
+            return 'failed';
+        }
+        if (normalizedEvent === 'sms:delivered') {
+            return 'delivered';
+        }
+        if (normalizedEvent === 'sms:sent') {
+            return 'sent';
+        }
+        if (normalizedEvent === 'sms:queued') {
+            return 'queued';
+        }
+
+        return String(fallbackStatus || '').trim().toLowerCase();
+    }
+
     function updateThreadMessageStatus(data, eventName = '') {
         if (!isLiveSmsCurrentThread(data, eventName)) {
             return false;
@@ -1066,6 +1091,7 @@
             return false;
         }
 
+        const resolvedStatus = resolveLiveSmsStatus(data, eventName);
         let changed = false;
         threadState.messages = (Array.isArray(threadState.messages) ? threadState.messages : []).map(function (entry) {
             const entryId = Number(entry?.id || 0) || null;
@@ -1079,7 +1105,7 @@
             changed = true;
             return {
                 ...entry,
-                status: String(data?.status || '').trim().toLowerCase() || entry.status,
+                status: resolvedStatus || entry.status,
                 error: data?.error || null,
                 timestamp: entry.timestamp
             };
@@ -1090,6 +1116,84 @@
         }
 
         return changed;
+    }
+
+    function updateConversationItemStatus(data, eventName = '') {
+        const resolvedStatus = resolveLiveSmsStatus(data, eventName);
+        if (!resolvedStatus) {
+            return false;
+        }
+
+        const targetConversationId = getLiveSmsConversationId(data);
+        const targetNumber = getLiveSmsThreadNumber(data, eventName);
+        if (!targetConversationId && !targetNumber) {
+            return false;
+        }
+
+        let changed = false;
+        document.querySelectorAll('.conversation-item').forEach(function (item) {
+            const itemConversationId = Math.max(0, Number(item.dataset.threadConversationId) || 0) || null;
+            const itemNumber = String(item.dataset.threadNumber || '').trim();
+            const sameConversation = targetConversationId && itemConversationId && targetConversationId === itemConversationId;
+            const sameNumber = !targetConversationId && targetNumber && itemNumber === targetNumber;
+            if (!sameConversation && !sameNumber) {
+                return;
+            }
+
+            item.dataset.threadLastDirection = 'outgoing';
+            item.dataset.threadLastStatus = resolvedStatus;
+
+            const meta = smsStatusMeta(resolvedStatus);
+            const badges = item.querySelector('.conversation-item-badges');
+            if (!badges) {
+                return;
+            }
+
+            let pill = badges.querySelector('[data-thread-status-pill="1"]');
+            if (!pill) {
+                pill = document.createElement('span');
+                pill.dataset.threadStatusPill = '1';
+                badges.prepend(pill);
+            }
+            pill.className = `badge mt-1 ${meta.className}`;
+            pill.textContent = meta.label;
+            changed = true;
+        });
+
+        return changed;
+    }
+
+    function updateRenderedThreadMessageStatus(data, eventName = '') {
+        const resolvedStatus = resolveLiveSmsStatus(data, eventName);
+        const targetId = Number(data?.id || 0) || null;
+        if (!resolvedStatus || !targetId) {
+            return false;
+        }
+
+        const bubble = document.querySelector(`.sms-bubble[data-thread-sms-id="${targetId}"]`);
+        if (!bubble) {
+            return false;
+        }
+
+        const meta = bubble.querySelector('.sms-bubble-meta');
+        if (!meta) {
+            return false;
+        }
+
+        const existingIcon = meta.querySelector('i');
+        const wrapper = document.createElement('span');
+        wrapper.innerHTML = renderSmsStatusIcon(resolvedStatus);
+        const nextIcon = wrapper.firstElementChild;
+        if (!nextIcon) {
+            return false;
+        }
+
+        if (existingIcon) {
+            existingIcon.replaceWith(nextIcon);
+        } else {
+            meta.appendChild(nextIcon);
+        }
+        return true;
     }
 
     function buildLiveThreadMessage(data, eventName = '') {
@@ -1106,16 +1210,7 @@
             || normalizedEvent === 'sms:send-failed'
             || type === 'outgoing'
             || data?.outgoing === true;
-        const status = String(data?.status || '').trim().toLowerCase()
-            || (normalizedEvent === 'sms:send-failed'
-                ? 'failed'
-                : normalizedEvent === 'sms:delivered'
-                    ? 'delivered'
-                    : normalizedEvent === 'sms:sent'
-                        ? 'sent'
-                        : normalizedEvent === 'sms:queued'
-                            ? 'queued'
-                            : (outgoing ? 'sent' : 'received'));
+        const status = resolveLiveSmsStatus(data, eventName, outgoing ? 'sent' : 'received');
 
         return {
             id: Number(data?.id || 0) || null,
@@ -2180,7 +2275,7 @@
                 ? `Scheduled: ${thread.lastMessage || 'Pending SMS'}`
                 : (direction + (thread.lastMessage || 'No message text'));
             const statusPill = thread.lastDirection === 'outgoing' && thread.lastStatus
-                ? `<span class="badge ${smsStatusMeta(thread.lastStatus).className} mt-1">${esc(smsStatusMeta(thread.lastStatus).label)}</span>`
+                ? `<span class="badge ${smsStatusMeta(thread.lastStatus).className} mt-1" data-thread-status-pill="1">${esc(smsStatusMeta(thread.lastStatus).label)}</span>`
                 : '';
             const scheduledPill = thread.hasScheduled
                 ? `<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle mt-1">Scheduled ${thread.scheduledCount || 1}</span>`
@@ -2189,6 +2284,8 @@
                 <div role="button" tabindex="0" class="list-group-item list-group-item-action conversation-item ${active ? 'active' : ''}"
                         data-thread-number="${esc(thread.number)}"
                         data-thread-conversation-id="${thread.conversationId || ''}"
+                        data-thread-last-direction="${esc(thread.lastDirection || '')}"
+                        data-thread-last-status="${esc(thread.lastStatus || '')}"
                         data-thread-title="${esc(thread.title || thread.number)}">
                     <div class="d-flex justify-content-between align-items-start gap-2 conversation-item-top">
                         <div class="min-w-0">

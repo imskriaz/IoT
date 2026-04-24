@@ -146,6 +146,7 @@ public class BridgeDashboardSectionActivity extends Activity {
         dynamicText.setText("No test run yet.");
         card.addView(dynamicText, BridgeUi.fullWidth(this));
         addButton(card, "Test Status Push", "#0d6efd", () -> BridgeTestLab.runStatusPushTest(this, this::showTestResult));
+        addButton(card, "Self SMS Test", "#ea580c", () -> BridgeTestLab.runSelfSendTest(this, this::showTestResult));
         addButton(card, "Test Queue", "#198754", () -> BridgeTestLab.runQueuePickupTest(this, this::showTestResult));
         addButton(card, "Probe Permissions", "#111827", () -> BridgeTestLab.runPermissionProbe(this, this::showTestResult));
         addButton(card, "Probe Recovery", "#64748b", () -> BridgeTestLab.runRecoveryProbe(this, this::showTestResult));

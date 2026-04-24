@@ -261,6 +261,21 @@ function toSqliteTimestamp(value) {
     return normalizeEventTimestamp(value).slice(0, 19).replace('T', ' ');
 }
 
+function normalizeCallStatus(value) {
+    const status = cleanText(value).toLowerCase();
+    if (!status) return 'ended';
+
+    if (['online', 'active', 'offhook', 'in_call', 'incall'].includes(status)) {
+        return 'connected';
+    }
+
+    if (['idle', 'hangup', 'hungup', 'disconnected', 'disconnect', 'completed'].includes(status)) {
+        return 'ended';
+    }
+
+    return status;
+}
+
 async function upsertSyncedCallRecord(db, deviceId, data = {}, simScope = {}) {
     if (!db || !deviceId) return 0;
 
@@ -268,7 +283,7 @@ async function upsertSyncedCallRecord(db, deviceId, data = {}, simScope = {}) {
     const storedNumber = lookup.formatted || cleanText(data.number) || 'Unknown';
     if (!storedNumber || storedNumber === 'Unknown') return 0;
 
-    const status = cleanText(data.status || 'ended').toLowerCase() || 'ended';
+    const status = normalizeCallStatus(data.status || 'ended');
     const direction = cleanText(data.direction).toLowerCase();
     const type = direction === 'outgoing' ? 'outgoing' : 'incoming';
     const duration = Number(data.duration ?? data.duration_seconds ?? 0);
@@ -402,12 +417,12 @@ async function updateLatestActiveCall(db, deviceId, data = {}) {
         return upsertSyncedCallRecord(db, deviceId, data, simScope);
     }
 
-    const status = String(data.status || 'ended').trim() || 'ended';
+    const status = normalizeCallStatus(data.status || 'ended');
     const duration = Number(data.duration);
     const nextDuration = Number.isFinite(duration) && duration >= 0 ? Math.round(duration) : 0;
     const lookup = getPhoneLookupKeys(data.number);
     const hasPhoneMatch = Boolean(lookup.digits);
-    const activeStatuses = `('dialing', 'ringing', 'connected', 'answered', 'ending')`;
+    const activeStatuses = `('dialing', 'ringing', 'connected', 'answered', 'ending', 'online')`;
     const setParts = ['status = ?', 'duration = ?'];
     const baseParams = [status, nextDuration];
     if (simScope.simSlot !== null) {
@@ -2316,3 +2331,4 @@ class MQTTHandlers {
 
 module.exports = MQTTHandlers;
 module.exports.updateLatestActiveCall = updateLatestActiveCall;
+module.exports.normalizeCallStatus = normalizeCallStatus;

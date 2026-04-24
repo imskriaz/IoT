@@ -830,6 +830,28 @@ describe('sidebar navigation coverage', () => {
         expect(callsJs).toContain("window.socket.on('call:hold'");
         expect(callsJs).toContain("elements.activeCallStatus.textContent = onHold ? 'On Hold' : 'Connected';");
         expect(callsJs).toContain('resetActiveCallControls();');
+        expect(callsJs).toContain("if (status === 'online') status = 'connected';");
+        expect(callsJs).toContain("'online': 'Connected'");
+    });
+
+    test('calls page keeps dialer and contact selection inline instead of modal-only', () => {
+        const callsJsPath = path.join(__dirname, '..', 'public', 'js', 'calls.js');
+        const callsHtmlPath = path.join(__dirname, '..', 'views', 'pages', 'calls.html');
+        const callsJs = fs.readFileSync(callsJsPath, 'utf8');
+        const callsHtml = fs.readFileSync(callsHtmlPath, 'utf8');
+
+        expect(callsHtml).toContain('id="callWorkspaceCard"');
+        expect(callsHtml).toContain('id="callWorkspaceDialerSection"');
+        expect(callsHtml).toContain('id="callWorkspaceContactsSection"');
+        expect(callsHtml).not.toContain('id="dialerModal"');
+        expect(callsHtml).not.toContain('id="contactsModal"');
+        expect(callsJs).toContain("function setCallWorkspaceMode(mode = 'dialer', options = {})");
+        expect(callsJs).toContain("window.openContactsModal = function() {");
+        expect(callsJs).toContain("window.openDialerModal = function() {");
+        expect(callsJs).toContain("setCallWorkspaceMode('dialer', { focusDialer: true });");
+        expect(callsJs).toContain("typeof window.deviceHttpOnline === 'function'");
+        expect(callsJs).toContain("} else if (getCallsTransportMode() === 'http') {");
+        expect(callsJs).toContain('checkDeviceConnection();');
     });
 
     test('device about page resolves the active device from the shared helper first', () => {
@@ -848,6 +870,23 @@ describe('sidebar navigation coverage', () => {
         expect(js).toContain("const container = document.getElementById('smsChatMessages') || document.getElementById('smsThreadMessages');");
         expect(js).toContain("const metaEl = document.getElementById('smsChatMeta') || document.getElementById('smsThreadMeta');");
         expect(js).toContain("threadState.messages = [];");
+    });
+
+    test('sms live delivery events infer status even when the payload omits it', () => {
+        const js = fs.readFileSync(smsJsPath, 'utf8');
+
+        expect(js).toContain('function resolveLiveSmsStatus(data, eventName = \'\', fallbackStatus = \'\')');
+        expect(js).toContain("if (normalizedEvent === 'sms:delivered') {");
+        expect(js).toContain("return 'delivered';");
+        expect(js).toContain('const resolvedStatus = resolveLiveSmsStatus(data, eventName);');
+        expect(js).toContain("status: resolvedStatus || entry.status,");
+        expect(js).toContain("const status = resolveLiveSmsStatus(data, eventName, outgoing ? 'sent' : 'received');");
+        expect(js).toContain('function updateConversationItemStatus(data, eventName = \'\')');
+        expect(js).toContain('function updateRenderedThreadMessageStatus(data, eventName = \'\')');
+        expect(js).toContain('updateRenderedThreadMessageStatus(data, eventName);');
+        expect(js).toContain('updateConversationItemStatus(data, eventName);');
+        expect(js).toContain('data-thread-status-pill="1"');
+        expect(js).toContain('document.querySelector(`.sms-bubble[data-thread-sms-id="${targetId}"]`)');
     });
 
     test('sms thread selection syncs for URL-driven and programmatic loads', () => {

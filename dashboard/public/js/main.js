@@ -44,7 +44,7 @@ function deviceOnline() {
     return inferStatusOnline(latestDeviceStatus);
 }
 
-function deviceHttpOnline(status = latestDeviceStatus) {
+function inferDeviceHttpOnline(status = latestDeviceStatus) {
     if (!status || !matchesActiveDeviceStatus(status)) {
         return false;
     }
@@ -557,6 +557,7 @@ function updateSidebarSimSelector(status = latestDeviceStatus) {
     if (slots.length < 2) {
         hideElement(wrap);
         selector.innerHTML = '<option value="">Primary SIM</option>';
+        syncSidebarDeviceAwareLinks();
         return;
     }
 
@@ -569,6 +570,7 @@ function updateSidebarSimSelector(status = latestDeviceStatus) {
     selector.value = String(currentSlot?.slotIndex ?? slots[0].slotIndex);
     setStoredActiveSimSlot(selector.value, status?.deviceId || status?.device_id || '');
     showElement(wrap, 'block');
+    syncSidebarDeviceAwareLinks();
 }
 
 function isActiveDevicePayload(payload) {
@@ -1126,6 +1128,42 @@ function formatIncomingCallNumber(number) {
     return raw || 'Unknown';
 }
 
+function getIncomingCallPanelStateElements() {
+    return {
+        panel: document.getElementById('incomingCallPanel'),
+        number: document.getElementById('incomingCallNumber'),
+        time: document.getElementById('incomingCallTime'),
+        answerBtn: document.getElementById('incomingCallAnswerBtn'),
+        rejectBtn: document.getElementById('incomingCallRejectBtn')
+    };
+}
+
+function setIncomingCallActionState(isBusy) {
+    const { answerBtn, rejectBtn } = getIncomingCallPanelStateElements();
+    if (answerBtn) answerBtn.disabled = Boolean(isBusy);
+    if (rejectBtn) rejectBtn.disabled = Boolean(isBusy);
+}
+
+function showIncomingCallPanel(displayNumber, timeLabel) {
+    const { panel, number, time } = getIncomingCallPanelStateElements();
+    if (!panel) {
+        showToast(`Incoming call from ${displayNumber}`, 'warning');
+        return;
+    }
+
+    if (number) number.textContent = displayNumber || 'Unknown';
+    if (time) time.textContent = timeLabel || new Date().toLocaleTimeString();
+    setIncomingCallActionState(false);
+    panel.classList.remove('d-none');
+}
+
+function hideIncomingCallPanel() {
+    const { panel } = getIncomingCallPanelStateElements();
+    if (!panel) return;
+    panel.classList.add('d-none');
+    setIncomingCallActionState(false);
+}
+
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
     initializeProgressWidths();
@@ -1505,30 +1543,16 @@ function isActiveSimScopedEvent(data) {
         const displayNumber = formatIncomingCallNumber(data.number);
         playNotificationSound('call');
         pushNotify('Incoming Call', `From: ${displayNumber}`, '/favicon.ico');
-        // Show incoming call modal
-        const numEl = document.getElementById('incomingCallNumber');
-        const timeEl = document.getElementById('incomingCallTime');
-        if (numEl) numEl.textContent = displayNumber;
-        if (timeEl) timeEl.textContent = new Date().toLocaleTimeString();
-        const modalEl = document.getElementById('incomingCallModal');
-        if (modalEl && window.bootstrap) {
-            const m = bootstrap.Modal.getOrCreateInstance(modalEl);
-            m.show();
-        } else {
-            showToast(`Incoming call from ${displayNumber}`, 'warning');
-        }
+        showIncomingCallPanel(displayNumber, new Date().toLocaleTimeString());
     });
 
     socket.on('call:status', function(data) {
         if (!isActiveSimScopedEvent(data)) return;
         if (data?.sync === true || String(data?.sync || '').toLowerCase() === 'true') return;
-        // Auto-dismiss incoming call modal when call ends/connected
-        if (data.status === 'ended' || data.status === 'missed' || data.status === 'rejected') {
+        const status = String(data.status || '').toLowerCase();
+        if (['ended', 'missed', 'rejected', 'answered', 'connected', 'dialing'].includes(status)) {
             activeIncomingCallContext = null;
-            const modalEl = document.getElementById('incomingCallModal');
-            if (modalEl && window.bootstrap) {
-                bootstrap.Modal.getOrCreateInstance(modalEl).hide();
-            }
+            hideIncomingCallPanel();
         }
     });
     
@@ -2204,18 +2228,65 @@ function buildDeviceAwareHref(rawHref) {
     if (!href) return '';
 
     const url = new URL(href, window.location.origin);
+    if (url.origin !== window.location.origin || url.pathname.startsWith('/api/')) {
+        return `${url.pathname}${url.search}${url.hash}`;
+    }
+
     const deviceId = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
     const simContext = window.getActiveDeviceSimContext ? window.getActiveDeviceSimContext() : {
         simSlot: window.getActiveDeviceSimSlot ? window.getActiveDeviceSimSlot() : null
     };
     if (deviceId && url.pathname.startsWith('/devices/')) {
         url.searchParams.set('device', deviceId);
+    } else if (deviceId) {
+        url.searchParams.set('deviceId', deviceId);
     }
-    if (simContext.simSlot !== null && simContext.simSlot !== undefined && !url.pathname.startsWith('/api/')) {
+    if (simContext.simSlot !== null && simContext.simSlot !== undefined) {
         url.searchParams.set('simSlot', String(simContext.simSlot));
     }
+    url.searchParams.delete('simSubscriptionId');
+    url.searchParams.delete('subscription_id');
 
     return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function syncSidebarDeviceAwareLinks(root = document) {
+    const scope = root && typeof root.querySelectorAll === 'function' ? root : document;
+    scope.querySelectorAll('[data-device-nav="true"] a[href^="/"]:not([target="_blank"])').forEach((link) => {
+        const baseHref = String(
+            link.getAttribute('data-device-base-href')
+            || link.getAttribute('data-device-aware-href')
+            || link.getAttribute('href')
+            || ''
+        ).trim();
+        if (!baseHref || baseHref.startsWith('/api/')) {
+            return;
+        }
+
+        if (!link.hasAttribute('data-device-base-href')) {
+            link.setAttribute('data-device-base-href', baseHref);
+        }
+        link.setAttribute('data-device-aware-href', baseHref);
+
+        const scopedHref = buildDeviceAwareHref(baseHref);
+        if (scopedHref) {
+            link.setAttribute('href', scopedHref);
+        }
+    });
+}
+
+function syncCurrentLocationDeviceScope() {
+    if (!window.history?.replaceState) {
+        return;
+    }
+
+    const currentHref = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const scopedHref = buildDeviceAwareHref(currentHref);
+    if (!scopedHref || scopedHref === currentHref) {
+        return;
+    }
+
+    window.history.replaceState({}, '', scopedHref);
 }
 
 function navigateStatusPanelLink(linkTarget) {
@@ -2694,6 +2765,7 @@ function refreshSidebarDeviceNavigation() {
 
     updateSidebarSectionVisibility();
     saveSidebarVisibilitySnapshot(activeDeviceId);
+    syncSidebarDeviceAwareLinks();
 
     const simWrap = document.getElementById('sidebarSimSelectorWrap');
     if (simWrap && !shouldShowDeviceNav) {
@@ -2854,6 +2926,7 @@ function loadCachedDeviceCapabilities(deviceId, options = {}) {
 window.addEventListener('device:changed', function () {
     const deviceId = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
     activeIncomingCallContext = null;
+    hideIncomingCallPanel();
     latestDeviceStatus = {
         deviceId,
         online: false
@@ -2867,9 +2940,12 @@ window.addEventListener('device:changed', function () {
     scheduleDashboardSmsRefresh(150);
     scheduleDeviceEnvelopeRefresh(100);
     syncDashboardStatusDemand({ allowReconnect: false });
+    syncCurrentLocationDeviceScope();
+    syncSidebarDeviceAwareLinks();
 });
 window.addEventListener('device:sim-changed', function (event) {
     activeIncomingCallContext = null;
+    hideIncomingCallPanel();
     updateUnreadBadge();
     scheduleDashboardSmsRefresh(100);
     const nextUrl = new URL(window.location.href);
@@ -2894,6 +2970,7 @@ window.addEventListener('device:sim-changed', function (event) {
     if (window.history?.replaceState) {
         window.history.replaceState({}, '', nextHref);
     }
+    syncSidebarDeviceAwareLinks();
 });
 
 // Push notification helper
@@ -2911,6 +2988,7 @@ function pushNotify(title, body, icon) {
 }
 
 window.refreshSidebarDeviceNavigation = refreshSidebarDeviceNavigation;
+window.syncSidebarDeviceAwareLinks = syncSidebarDeviceAwareLinks;
 
 // Audio notification: synthesise short tones via Web Audio API (no file needed)
 const _audioCtx = typeof AudioContext !== 'undefined' ? new AudioContext() : null;
@@ -3400,9 +3478,13 @@ window.addEventListener('beforeunload', function() {
 
 // Incoming call controls
 
+window.dismissIncomingCallPanel = function () {
+    hideIncomingCallPanel();
+};
+
 window.answerIncomingCall = async function () {
-    const modalEl = document.getElementById('incomingCallModal');
-    if (modalEl && window.bootstrap) bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+    hideIncomingCallPanel();
+    setIncomingCallActionState(true);
     try {
         const callContext = activeIncomingCallContext || resolveActiveDeviceSimContext();
         const res = await fetch('/api/calls/answer', {
@@ -3413,12 +3495,16 @@ window.answerIncomingCall = async function () {
         const data = await res.json();
         if (data.success) showToast('Call answered', 'success');
         else showToast(data.message || 'Failed to answer call', 'danger');
-    } catch (e) { showToast('Failed to answer call', 'danger'); }
+    } catch (e) {
+        showToast('Failed to answer call', 'danger');
+    } finally {
+        setIncomingCallActionState(false);
+    }
 };
 
 window.rejectIncomingCall = async function () {
-    const modalEl = document.getElementById('incomingCallModal');
-    if (modalEl && window.bootstrap) bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+    hideIncomingCallPanel();
+    setIncomingCallActionState(true);
     try {
         const callContext = activeIncomingCallContext || resolveActiveDeviceSimContext();
         const res = await fetch('/api/calls/reject', {
@@ -3429,7 +3515,11 @@ window.rejectIncomingCall = async function () {
         const data = await res.json();
         if (data.success) showToast('Call rejected', 'info');
         else showToast(data.message || 'Failed to reject call', 'danger');
-    } catch (e) { showToast('Failed to reject call', 'danger'); }
+    } catch (e) {
+        showToast('Failed to reject call', 'danger');
+    } finally {
+        setIncomingCallActionState(false);
+    }
 };
 
 // Dark mode
@@ -3486,7 +3576,7 @@ window.getActiveDeviceSimContext = function () {
     return resolveActiveDeviceSimContext();
 };
 window.deviceHttpOnline = function () {
-    return deviceHttpOnline(latestDeviceStatus);
+    return inferDeviceHttpOnline(latestDeviceStatus);
 };
 window.switchActiveSim = function (slotIndex) {
     const activeDeviceId = getStatusActiveDeviceId();

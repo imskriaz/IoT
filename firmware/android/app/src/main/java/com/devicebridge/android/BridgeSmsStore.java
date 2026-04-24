@@ -197,6 +197,41 @@ final class BridgeSmsStore {
         );
     }
 
+    static void updateOutgoingStatus(Context context, String actionId, String status) {
+        if (context == null) {
+            return;
+        }
+        String cleanActionId = safe(actionId, "").trim();
+        String cleanStatus = safe(status, "").trim();
+        if (cleanActionId.isEmpty() || cleanStatus.isEmpty()) {
+            return;
+        }
+
+        JSONArray existing = parseArray(readMirrorValue(context));
+        JSONArray retained = new JSONArray();
+        int changed = 0;
+        for (int i = 0; i < existing.length(); i += 1) {
+            JSONObject item = existing.optJSONObject(i);
+            if (item == null) {
+                continue;
+            }
+            if (cleanActionId.equals(item.optString("id", ""))) {
+                try {
+                    item.put("status", cleanStatus);
+                    if (item.optBoolean("outgoing", false)) {
+                        item.put("read", true);
+                    }
+                    changed += 1;
+                } catch (JSONException ignored) {
+                }
+            }
+            retained.put(item);
+        }
+        if (changed > 0) {
+            prefs(context).edit().putString(KEY_LOCAL_SMS_MIRROR, retained.toString()).apply();
+        }
+    }
+
     static SmsMutationResult markThreadsRead(Activity activity, List<Map<String, Object>> threads) {
         List<ThreadReference> refs = threadReferences(threads);
         if (refs.isEmpty()) {
@@ -1094,6 +1129,22 @@ final class BridgeSmsStore {
                     outgoing,
                     nextRead,
                     status,
+                    localOnly,
+                    source
+            );
+        }
+
+        SmsRecord withStatus(String nextStatus) {
+            return new SmsRecord(
+                    id,
+                    threadId,
+                    threadKey,
+                    address,
+                    body,
+                    timestamp,
+                    outgoing,
+                    read,
+                    nextStatus,
                     localOnly,
                     source
             );

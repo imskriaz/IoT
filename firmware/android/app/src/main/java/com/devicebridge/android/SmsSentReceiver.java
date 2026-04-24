@@ -3,6 +3,7 @@ package com.devicebridge.android;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Bundle;
 
 public class SmsSentReceiver extends BroadcastReceiver {
     @Override
@@ -12,7 +13,8 @@ public class SmsSentReceiver extends BroadcastReceiver {
         }
         String actionId = intent.getStringExtra(SmsSender.EXTRA_ACTION_ID);
         String number = intent.getStringExtra(SmsSender.EXTRA_NUMBER);
-        SmsSendTracker.markSent(actionId, number, getResultCode());
+        Bundle extras = getResultExtras(false);
+        SmsSendTracker.markSent(context, actionId, number, getResultCode(), extras);
     }
 }
 

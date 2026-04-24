@@ -85,6 +85,7 @@ public class HomeActivity extends Activity {
     private static final int TAB_PHONE = 3;
     private static final int[] TAB_NAV_ORDER = new int[]{TAB_HOME, TAB_SMS, TAB_PHONE, TAB_CONTACTS};
     private static final int REQ_QR_SCAN = 4811;
+    private static final int REQ_CORE_PERMISSIONS = 4821;
     private static final int REQ_CALL_PERMISSIONS = 4812;
     private static final int REQ_QR_PERMISSIONS = 4813;
     private static final int REQ_WEBCAM_PERMISSIONS = 4814;
@@ -247,6 +248,7 @@ public class HomeActivity extends Activity {
     private boolean batteryPromptShown;
     private boolean eventReceiverRegistered;
     private boolean localQueueProcessing;
+    private boolean pendingLauncherSelfSmsTest;
     private boolean smsConversationScrollToBottomOnNextBuild;
     private int smsConversationScrollY;
     private final Map<String, Long> guardedActionTimes = new HashMap<>();
@@ -256,6 +258,7 @@ public class HomeActivity extends Activity {
         super.onCreate(savedInstanceState);
         capturePendingSetupToken(getIntent());
         applyRequestedTab(getIntent());
+        captureLauncherSelfSmsTest(getIntent());
         loadState(false);
         consumePendingSetupCodeIfNeeded(false);
         rebuild();
@@ -267,6 +270,7 @@ public class HomeActivity extends Activity {
         setIntent(intent);
         capturePendingSetupToken(intent);
         applyRequestedTab(intent);
+        captureLauncherSelfSmsTest(intent);
         consumePendingSetupCodeIfNeeded(true);
     }
 
@@ -276,6 +280,7 @@ public class HomeActivity extends Activity {
         registerBridgeEventReceiverIfNeeded();
         processDueLocalSmsQueue();
         loadState(true);
+        maybeRunLauncherSelfSmsTest();
         scheduleRefresh();
     }
 
@@ -357,6 +362,28 @@ public class HomeActivity extends Activity {
         showSnack("Press back again to exit");
     }
 
+    private void captureLauncherSelfSmsTest(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+        if (intent.getBooleanExtra(MainActivity.EXTRA_RUN_SELF_SMS_TEST, false)) {
+            pendingLauncherSelfSmsTest = true;
+            intent.removeExtra(MainActivity.EXTRA_RUN_SELF_SMS_TEST);
+        }
+    }
+
+    private void maybeRunLauncherSelfSmsTest() {
+        if (!pendingLauncherSelfSmsTest) {
+            return;
+        }
+        pendingLauncherSelfSmsTest = false;
+        BridgeTestLab.runSelfSendTest(this, (title, detail) -> {
+            BridgeEventLog.append(this, title + ": " + detail);
+            showSnack(title + ": " + detail);
+            loadState(true);
+        });
+    }
+
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
         if (event != null) {
@@ -405,6 +432,9 @@ public class HomeActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         loadState(true);
         boolean shouldSyncDeviceHistory = false;
+        if (requestCode == REQ_CORE_PERMISSIONS && BridgePermissionHelper.hasCore(this)) {
+            shouldSyncDeviceHistory = true;
+        }
         if (requestCode == REQ_QR_PERMISSIONS && BridgePermissionHelper.hasQrFeature(this)) {
             startQrScan();
             return;
@@ -3798,17 +3828,26 @@ public class HomeActivity extends Activity {
             showSnack(cleanRecipients.isEmpty() ? "Add at least one recipient." : "Message is required.");
             return;
         }
+        if (!BridgePermissionHelper.hasCore(this)) {
+            BridgePermissionHelper.requestMissingCore(this, REQ_CORE_PERMISSIONS);
+            showSnack("Grant SMS bridge permissions first.");
+            return;
+        }
 
         smsSending = true;
         rebuild();
         long sentAt = System.currentTimeMillis();
         int acceptedCount = 0;
         ContactInfo firstAccepted = null;
+        String firstFailureDetail = "";
         for (int i = 0; i < cleanRecipients.size(); i += 1) {
             ContactInfo recipient = cleanRecipients.get(i);
             String actionId = "local_compose_" + sentAt + "_" + i;
             SmsSender.SendResult result = SmsSender.send(this, actionId, recipient.number, cleanBody, 90_000, selectedSmsSimForSend(), null);
             if (!result.accepted) {
+                if (firstFailureDetail.isEmpty()) {
+                    firstFailureDetail = result.detail;
+                }
                 continue;
             }
             BridgeSmsStore.recordOutgoing(this, actionId, recipient.number, cleanBody, sentAt + i);
@@ -3821,7 +3860,7 @@ public class HomeActivity extends Activity {
         if (acceptedCount == 0) {
             smsSending = false;
             rebuild();
-            showSnack("Unable to send SMS right now.");
+            showSnack(SmsSender.describeDetail(firstFailureDetail));
             return;
         }
         loadSmsThreads();
@@ -4006,9 +4045,7 @@ public class HomeActivity extends Activity {
     }
 
     private boolean hasSubscriptionReadPermission() {
-        boolean phoneState = checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED;
-        boolean phoneNumbers = Build.VERSION.SDK_INT < 26 || checkSelfPermission(Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED;
-        return phoneState && phoneNumbers;
+        return checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED;
     }
 
     private void showScheduleSmsSheet(String number, String presetBody) {

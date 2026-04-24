@@ -3,10 +3,13 @@
 const express = require('express');
 const router = express.Router();
 const logger = require('../utils/logger');
-const { attachSmsToConversation } = require('../services/smsConversations');
+const {
+    attachSmsToConversation,
+    refreshSmsConversationBySmsId
+} = require('../services/smsConversations');
 const { formatPhoneNumber } = require('../utils/phoneNumber');
 const { syncDeviceSimInventory } = require('../services/simInventoryService');
-const { updateLatestActiveCall } = require('../services/mqttHandlers');
+const { updateLatestActiveCall, normalizeCallStatus } = require('../services/mqttHandlers');
 const { extractSimScope } = require('../utils/simScope');
 const {
     isRegisteredDevice,
@@ -66,7 +69,7 @@ function emitDevice(deviceId, eventName, payload) {
 
 function extractCallStatusPayload(payload = {}) {
     const nested = payload.call && typeof payload.call === 'object' ? payload.call : {};
-    const status = clean(nested.status || payload.call_status || payload.status).toLowerCase();
+    const status = normalizeCallStatus(nested.status || payload.call_status || payload.status);
     if (!status) {
         return null;
     }
@@ -96,6 +99,17 @@ function extractCallStatusPayload(payload = {}) {
         sim_slot: simScope.simSlot,
         simSlot: simScope.simSlot
     };
+}
+
+function hasExplicitInactiveCallState(payload = {}) {
+    const nested = payload.call && typeof payload.call === 'object' ? payload.call : {};
+    if (nested.active === false) return true;
+
+    const activeValue = nested.active ?? payload.call_active;
+    if (activeValue === false) return true;
+    if (clean(activeValue).toLowerCase() === 'false') return true;
+
+    return false;
 }
 
 function callSnapshotKey(call = {}) {
@@ -187,6 +201,38 @@ router.post('/status', requireBoundDevice, async (req, res) => {
                         ...callStatus
                     });
                 }
+            }
+        } else if (hasExplicitInactiveCallState(payload)) {
+            const nested = payload.call && typeof payload.call === 'object' ? payload.call : {};
+            const fallbackStatus = {
+                status: 'ended',
+                direction: clean(nested.direction || payload.call_direction || payload.direction).toLowerCase(),
+                number: formatPhoneNumber(nested.number || payload.call_number || '')
+                    || clean(nested.number || payload.call_number)
+                    || null,
+                timestamp: normalizeTimestamp(nested.updatedAt ?? nested.timestamp ?? payload.call_updated_at ?? payload.timestamp),
+                sync: syncPayload,
+                duration: Number(nested.duration ?? payload.duration ?? payload.duration_seconds ?? 0) || 0,
+                sim_slot: extractSimScope({
+                    ...payload,
+                    sim_slot: nested.sim_slot ?? payload.sim_slot,
+                    simSlot: nested.simSlot ?? payload.simSlot
+                }).simSlot
+            };
+            fallbackStatus.simSlot = fallbackStatus.sim_slot;
+            const changes = await updateLatestActiveCall(db, deviceId, fallbackStatus).catch((error) => {
+                logger.error('android bridge HTTP inactive call reconciliation error:', error);
+                return 0;
+            });
+            if (!fallbackStatus.sync && changes > 0) {
+                emitDevice(deviceId, 'call:status', {
+                    deviceId,
+                    ...fallbackStatus
+                });
+                emitDevice(deviceId, 'call:ended', {
+                    deviceId,
+                    ...fallbackStatus
+                });
             }
         }
         res.json({ success: true, device_id: deviceId });
@@ -387,6 +433,7 @@ router.post('/messages/:messageId/events', requireBoundDevice, async (req, res) 
             [messageId, boundDeviceId]
         );
         if (row?.device_id) {
+            await refreshSmsConversationBySmsId(db, row.id).catch(() => {});
             emitDevice(row.device_id, status === 'failed' ? 'sms:send-failed' : `sms:${status}`, {
                 deviceId: row.device_id,
                 id: Number(row.id || 0) || null,
