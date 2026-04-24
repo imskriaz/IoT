@@ -28,6 +28,7 @@ typedef void (*mqtt_mgr_status_listener_t)(void);
 esp_err_t mqtt_mgr_init(void);
 esp_err_t mqtt_mgr_publish_json(const char *suffix, const char *json);
 esp_err_t mqtt_mgr_publish_sms_incoming(const unified_sms_payload_t *payload);
+esp_err_t mqtt_mgr_publish_sms_delivery(const unified_sms_delivery_payload_t *payload);
 esp_err_t mqtt_mgr_publish_call_event(const unified_call_payload_t *payload);
 esp_err_t mqtt_mgr_publish_ussd_result(const unified_ussd_payload_t *payload);
 esp_err_t mqtt_mgr_publish_action_result(const unified_action_response_t *response, const char *payload_json);

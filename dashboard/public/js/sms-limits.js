@@ -8,15 +8,8 @@
     const UCS2_SINGLE_PART_LIMIT = 70;
     const UCS2_MULTI_PART_LIMIT = 67;
 
-    const gsmBasicCharSet = new Set(
-        (
-            "@\u00A3$\u00A5\u00E8\u00E9\u00F9\u00EC\u00F2\u00C7\n\u00D8\u00F8\r\u00C5\u00E5\u0394_"
-            + "\u03A6\u0393\u039B\u03A9\u03A0\u03A8\u03A3\u0398\u039E\u00C6\u00E6\u00DF\u00C9"
-            + " !\"#\u00A4%&'()*+,-./0123456789:;<=>?\u00A1ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            + "\u00C4\u00D6\u00D1\u00DC\u00A7\u00BFabcdefghijklmnopqrstuvwxyz\u00E4\u00F6\u00F1\u00FC\u00E0"
-        ).split('')
-    );
     const gsmExtensionCharSet = new Set(['^', '{', '}', '\\', '[', '~', ']', '|', '\u20AC']);
+    const UCS2_BMP_MAX_CODEPOINT = 0xFFFF;
     const utf8Encoder = typeof TextEncoder === 'function' ? new TextEncoder() : null;
 
     function getUtf8ByteLength(text) {
@@ -39,18 +32,22 @@
         const normalized = String(text || '');
         let encoding = 'gsm7';
         let gsmUnits = 0;
+        let unsupportedUnicode = false;
+        const unsupportedCharacters = [];
 
         for (const char of normalized) {
-            if (gsmBasicCharSet.has(char)) {
-                gsmUnits += 1;
+            const codepoint = char.codePointAt(0);
+            if (codepoint > UCS2_BMP_MAX_CODEPOINT) {
+                unsupportedUnicode = true;
+                if (unsupportedCharacters.length < 5) unsupportedCharacters.push(char);
+                encoding = 'unicode';
                 continue;
             }
-            if (gsmExtensionCharSet.has(char)) {
-                gsmUnits += 2;
+            if (codepoint > 0x7F) {
+                encoding = 'unicode';
                 continue;
             }
-            encoding = 'unicode';
-            break;
+            gsmUnits += gsmExtensionCharSet.has(char) ? 2 : 1;
         }
 
         const utf8Bytes = getUtf8ByteLength(normalized);
@@ -77,13 +74,17 @@
             maxParts: SMS_MAX_PARTS,
             overByteLimit: utf8Bytes > SMS_MAX_UTF8_BYTES,
             overPartLimit: parts > SMS_MAX_PARTS,
-            valid: utf8Bytes <= SMS_MAX_UTF8_BYTES && parts <= SMS_MAX_PARTS
+            unsupportedUnicode,
+            unsupportedCharacters,
+            transportEncoding: encoding === 'unicode' ? 'ucs2' : 'ira',
+            valid: !unsupportedUnicode && utf8Bytes <= SMS_MAX_UTF8_BYTES && parts <= SMS_MAX_PARTS
         };
     }
 
     function formatError(analysis) {
         const sms = analysis || analyze('');
         const reasons = [];
+        if (sms.unsupportedUnicode) return 'Message contains characters this device cannot send over SMS (outside UCS-2 BMP)';
         if (sms.overByteLimit) reasons.push(`max ${SMS_MAX_UTF8_BYTES} UTF-8 bytes`);
         if (sms.overPartLimit) reasons.push(`max ${SMS_MAX_PARTS} parts`);
         if (!reasons.length) reasons.push(`max ${SMS_MAX_UTF8_BYTES} UTF-8 bytes / ${SMS_MAX_PARTS} parts`);

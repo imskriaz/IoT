@@ -681,6 +681,63 @@ describe('MQTTHandlers SMS storage', () => {
             })
         );
     });
+
+    test('failed firmware delivery report marks latest outgoing SMS failed', async () => {
+        const { mqttService, db, room } = buildSmsSubject();
+
+        mqttService.emit('sms:delivery', 'test-device-1', {
+            to: '+8801555123456',
+            delivered: false,
+            status: 'failed',
+            detail: 'sms_delivery_failed',
+            message_reference: 46
+        });
+
+        await flushAsync();
+
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('UPDATE sms'),
+            ['failed', 'failed', 'sms_delivery_failed', 'test-device-1', '+8801555123456']
+        );
+        expect(room.emit).toHaveBeenCalledWith(
+            'sms:send-failed',
+            expect.objectContaining({
+                deviceId: 'test-device-1',
+                to: '+8801555123456',
+                status: 'failed',
+                error: 'sms_delivery_failed',
+                message_reference: 46
+            })
+        );
+    });
+
+    test('dashboard classifies raw firmware delivery report as delivered', async () => {
+        const { mqttService, db, room } = buildSmsSubject();
+
+        mqttService.emit('sms:delivery', 'test-device-1', {
+            to: '+8801555123456',
+            status_report_status: 0,
+            message_reference: 47,
+            raw_report: '+CDS: 49,47,"+8801555123456",145,"26/04/24,12:00:00+24","26/04/24,12:00:03+24",0'
+        });
+
+        await flushAsync();
+
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('UPDATE sms'),
+            ['delivered', 'delivered', null, 'test-device-1', '+8801555123456']
+        );
+        expect(room.emit).toHaveBeenCalledWith(
+            'sms:delivered',
+            expect.objectContaining({
+                deviceId: 'test-device-1',
+                to: '+8801555123456',
+                status: 'delivered',
+                error: null,
+                message_reference: 47
+            })
+        );
+    });
 });
 
 describe('MQTTHandlers Wi-Fi history persistence', () => {

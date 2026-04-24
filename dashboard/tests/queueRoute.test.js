@@ -61,25 +61,103 @@ describe('queue route bulk clear', () => {
         expect(res.body.data).toEqual(expect.objectContaining({
             deleted: 4,
             deviceId: '7hd7g-xkdvx7-kv753n',
-            scope: 'device'
+            scope: 'device',
+            status: 'all'
         }));
 
         const countSql = db.get.mock.calls[0][0];
         const countParams = db.get.mock.calls[0][1];
         expect(countSql).toContain("status IN (?,?,?,?,?)");
+        expect(countSql).toContain("command NOT IN (?,?,?,?,?,?,?)");
         expect(countParams).toEqual([
             '7hd7g-xkdvx7-kv753n',
             'pending',
             'waiting_response',
             'failed',
             'ambiguous',
-            'completed'
+            'completed',
+            'make-call',
+            'call-dial',
+            'answer-call',
+            'reject-call',
+            'end-call',
+            'hold-call',
+            'mute-call'
         ]);
 
         const deleteSql = db.run.mock.calls[0][0];
         const deleteParams = db.run.mock.calls[0][1];
         expect(deleteSql).toContain("DELETE FROM device_command_queue WHERE device_id = ? AND status IN (?,?,?,?,?)");
+        expect(deleteSql).toContain("command NOT IN (?,?,?,?,?,?,?)");
         expect(deleteParams).toEqual(countParams);
         expect(global.mqttService._emitDeviceQueueState).toHaveBeenCalledWith('7hd7g-xkdvx7-kv753n');
+    });
+
+    test('clears only the selected status filter', async () => {
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue({ count: 2 }),
+            run: jest.fn().mockResolvedValue({ changes: 2 })
+        });
+
+        const router = require('../routes/queue');
+        const app = buildApp(router, { id: 1, role: 'admin', username: 'admin', deviceId: 'device-7' }, db);
+
+        const res = await request(app)
+            .post('/api/queue/clear')
+            .send({ deviceId: 'device-7', scope: 'all', status: 'failed' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.data).toEqual(expect.objectContaining({
+            deleted: 2,
+            deviceId: 'device-7',
+            scope: 'all',
+            status: 'failed'
+        }));
+
+        const countSql = db.get.mock.calls[0][0];
+        const countParams = db.get.mock.calls[0][1];
+        expect(countSql).toContain("status IN (?)");
+        expect(countSql).not.toContain("command NOT IN");
+        expect(countParams).toEqual(['device-7', 'failed']);
+
+        const deleteParams = db.run.mock.calls[0][1];
+        expect(deleteParams).toEqual(countParams);
+    });
+
+    test('open filter clears open statuses except active dispatching rows', async () => {
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue({ count: 3 }),
+            run: jest.fn().mockResolvedValue({ changes: 3 })
+        });
+
+        const router = require('../routes/queue');
+        const app = buildApp(router, { id: 1, role: 'admin', username: 'admin', deviceId: 'device-7' }, db);
+
+        const res = await request(app)
+            .post('/api/queue/clear')
+            .send({ deviceId: 'device-7', scope: 'call', status: 'open' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+
+        const countSql = db.get.mock.calls[0][0];
+        const countParams = db.get.mock.calls[0][1];
+        expect(countSql).toContain("status IN (?,?,?,?)");
+        expect(countSql).toContain("command IN (?,?,?,?,?,?,?)");
+        expect(countParams).toEqual([
+            'device-7',
+            'pending',
+            'waiting_response',
+            'failed',
+            'ambiguous',
+            'make-call',
+            'call-dial',
+            'answer-call',
+            'reject-call',
+            'end-call',
+            'hold-call',
+            'mute-call'
+        ]);
     });
 });

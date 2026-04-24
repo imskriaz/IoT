@@ -3,7 +3,8 @@
 const {
     analyzeSmsText,
     formatSmsLimitError,
-    validateSmsMessageSize
+    validateSmsMessageSize,
+    resolveSmsCommand
 } = require('../utils/smsLimits');
 
 describe('smsLimits', () => {
@@ -49,14 +50,46 @@ describe('smsLimits', () => {
     });
 
     test('rejects messages that exceed the 15-part Unicode ceiling even if bytes still fit', () => {
-        const text = '`'.repeat(1006);
+        const text = '\u0985'.repeat(1006);
         const analysis = analyzeSmsText(text);
 
         expect(analysis.encoding).toBe('unicode');
-        expect(analysis.utf8Bytes).toBe(1006);
+        expect(analysis.utf8Bytes).toBe(3018);
         expect(analysis.parts).toBe(16);
-        expect(analysis.overByteLimit).toBe(false);
+        expect(analysis.overByteLimit).toBe(true);
         expect(analysis.overPartLimit).toBe(true);
-        expect(formatSmsLimitError(analysis)).toBe('Message exceeds device SMS limit (max 15 parts)');
+        expect(formatSmsLimitError(analysis)).toBe('Message exceeds device SMS limit (max 1023 UTF-8 bytes / max 15 parts)');
+    });
+
+    test('classifies non-GSM ASCII as IRA instead of Unicode to match firmware transport', () => {
+        const text = '`'.repeat(1006);
+        const analysis = analyzeSmsText(text);
+
+        expect(analysis.encoding).toBe('gsm7');
+        expect(analysis.transportEncoding).toBe('ira');
+        expect(analysis.parts).toBe(Math.ceil(1006 / 153));
+        expect(analysis.overPartLimit).toBe(false);
+    });
+
+    test('builds Unicode metadata for firmware SMS commands', () => {
+        const resolved = resolveSmsCommand('\u0985'.repeat(80));
+
+        expect(resolved.command).toBe('send-sms-multipart');
+        expect(resolved.metadata).toEqual(expect.objectContaining({
+            sms_encoding: 'unicode',
+            sms_transport_encoding: 'ucs2',
+            sms_parts: 2,
+            sms_multipart: true
+        }));
+        expect(resolved.timeoutMs).toBeGreaterThanOrEqual(60000);
+    });
+
+    test('rejects characters outside UCS-2 BMP before they reach firmware', () => {
+        const analysis = analyzeSmsText('hello \u{1F600}');
+
+        expect(analysis.unsupportedUnicode).toBe(true);
+        expect(formatSmsLimitError(analysis)).toBe('Message contains characters this device cannot send over SMS (outside UCS-2 BMP)');
+        expect(() => validateSmsMessageSize('hello \u{1F600}')).toThrow('outside UCS-2 BMP');
+        expect(() => resolveSmsCommand('hello \u{1F600}')).toThrow('outside UCS-2 BMP');
     });
 });

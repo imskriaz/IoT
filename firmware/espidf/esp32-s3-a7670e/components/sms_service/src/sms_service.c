@@ -381,6 +381,7 @@ static void sms_service_handle_modem_sms_event(void) {
 static void sms_service_task(void *arg) {
     modem_a7670_status_t modem_status = {0};
     unified_sms_payload_t payload = {0};
+    unified_sms_delivery_payload_t delivery = {0};
     int sms_index = -1;
     bool event_consumed = false;
     bool saw_event = false;
@@ -440,6 +441,15 @@ static void sms_service_task(void *arg) {
                     sms_service_emit_incoming(&payload, "incoming_sms_urc");
                     cycle_detail = "incoming_sms";
                 }
+            }
+
+            while (modem_a7670_pop_sms_delivery(&delivery)) {
+                saw_event = true;
+                event_consumed = true;
+                last_urc_success_ms = now_ms;
+                (void)mqtt_mgr_publish_sms_delivery(&delivery);
+                (void)modem_a7670_acknowledge_new_message(event_timeout_ms);
+                cycle_detail = "sms_delivery_report";
             }
 
             if (!event_consumed &&

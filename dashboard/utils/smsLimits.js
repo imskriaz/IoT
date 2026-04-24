@@ -7,15 +7,8 @@ const GSM_MULTI_PART_LIMIT = 153;
 const UCS2_SINGLE_PART_LIMIT = 70;
 const UCS2_MULTI_PART_LIMIT = 67;
 
-const GSM_BASIC_CHAR_SET = new Set(
-    (
-        "@\u00A3$\u00A5\u00E8\u00E9\u00F9\u00EC\u00F2\u00C7\n\u00D8\u00F8\r\u00C5\u00E5\u0394_"
-        + "\u03A6\u0393\u039B\u03A9\u03A0\u03A8\u03A3\u0398\u039E\u00C6\u00E6\u00DF\u00C9"
-        + " !\"#\u00A4%&'()*+,-./0123456789:;<=>?\u00A1ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        + "\u00C4\u00D6\u00D1\u00DC\u00A7\u00BFabcdefghijklmnopqrstuvwxyz\u00E4\u00F6\u00F1\u00FC\u00E0"
-    ).split('')
-);
 const GSM_EXTENSION_CHAR_SET = new Set(['^', '{', '}', '\\', '[', '~', ']', '|', '\u20AC']);
+const UCS2_BMP_MAX_CODEPOINT = 0xFFFF;
 
 function getUtf8ByteLength(text) {
     return Buffer.byteLength(String(text || ''), 'utf8');
@@ -33,18 +26,28 @@ function analyzeSmsText(value) {
     const text = String(value || '');
     let encoding = 'gsm7';
     let gsmUnits = 0;
+    let unsupportedUnicode = false;
+    const unsupportedCharacters = [];
 
     for (const char of text) {
-        if (GSM_BASIC_CHAR_SET.has(char)) {
-            gsmUnits += 1;
+        const codepoint = char.codePointAt(0);
+        if (codepoint > UCS2_BMP_MAX_CODEPOINT) {
+            unsupportedUnicode = true;
+            if (unsupportedCharacters.length < 5) {
+                unsupportedCharacters.push(char);
+            }
+            encoding = 'unicode';
+            continue;
+        }
+        if (codepoint > 0x7F) {
+            encoding = 'unicode';
             continue;
         }
         if (GSM_EXTENSION_CHAR_SET.has(char)) {
             gsmUnits += 2;
             continue;
         }
-        encoding = 'unicode';
-        break;
+        gsmUnits += 1;
     }
 
     const utf8Bytes = getUtf8ByteLength(text);
@@ -70,11 +73,18 @@ function analyzeSmsText(value) {
         maxUtf8Bytes: SMS_MAX_UTF8_BYTES,
         maxParts: SMS_MAX_PARTS,
         overByteLimit: utf8Bytes > SMS_MAX_UTF8_BYTES,
-        overPartLimit: parts > SMS_MAX_PARTS
+        overPartLimit: parts > SMS_MAX_PARTS,
+        unsupportedUnicode,
+        unsupportedCharacters,
+        transportEncoding: encoding === 'unicode' ? 'ucs2' : 'ira'
     };
 }
 
 function formatSmsLimitError(analysis = analyzeSmsText('')) {
+    if (analysis.unsupportedUnicode) {
+        return 'Message contains characters this device cannot send over SMS (outside UCS-2 BMP)';
+    }
+
     const reasons = [];
     if (analysis.overByteLimit) {
         reasons.push(`max ${SMS_MAX_UTF8_BYTES} UTF-8 bytes`);
@@ -95,6 +105,9 @@ function validateSmsMessageSize(value) {
     }
 
     const analysis = analyzeSmsText(text);
+    if (analysis.unsupportedUnicode) {
+        throw new Error('Message contains characters this device cannot send over SMS (outside UCS-2 BMP)');
+    }
     if (analysis.overByteLimit || analysis.overPartLimit) {
         throw new Error(formatSmsLimitError(analysis));
     }
@@ -102,12 +115,46 @@ function validateSmsMessageSize(value) {
     return true;
 }
 
+function resolveSmsTimeoutMs(valueOrAnalysis) {
+    const analysis = typeof valueOrAnalysis === 'object' && valueOrAnalysis
+        ? valueOrAnalysis
+        : analyzeSmsText(valueOrAnalysis);
+
+    if (analysis.parts > 1) {
+        return Math.min(120000, Math.max(60000, 45000 + (Number(analysis.parts || 1) * 5000)));
+    }
+
+    return analysis.encoding === 'unicode' ? 60000 : 45000;
+}
+
+function buildSmsTransportMetadata(valueOrAnalysis) {
+    const analysis = typeof valueOrAnalysis === 'object' && valueOrAnalysis
+        ? valueOrAnalysis
+        : analyzeSmsText(valueOrAnalysis);
+
+    return {
+        sms_encoding: analysis.encoding,
+        sms_transport_encoding: analysis.transportEncoding || (analysis.encoding === 'unicode' ? 'ucs2' : 'ira'),
+        sms_parts: analysis.parts,
+        sms_units: analysis.units,
+        sms_utf8_bytes: analysis.utf8Bytes,
+        sms_characters: analysis.characters,
+        sms_multipart: analysis.parts > 1
+    };
+}
+
 function resolveSmsCommand(value) {
     const analysis = analyzeSmsText(value);
+    if (analysis.unsupportedUnicode || analysis.overByteLimit || analysis.overPartLimit) {
+        throw new Error(formatSmsLimitError(analysis));
+    }
+
     return {
         analysis,
         command: analysis.parts > 1 ? 'send-sms-multipart' : 'send-sms',
-        multipart: analysis.parts > 1
+        multipart: analysis.parts > 1,
+        timeoutMs: resolveSmsTimeoutMs(analysis),
+        metadata: buildSmsTransportMetadata(analysis)
     };
 }
 
@@ -121,5 +168,7 @@ module.exports = {
     analyzeSmsText,
     formatSmsLimitError,
     validateSmsMessageSize,
+    resolveSmsTimeoutMs,
+    buildSmsTransportMetadata,
     resolveSmsCommand
 };

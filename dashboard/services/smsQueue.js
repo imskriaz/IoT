@@ -84,6 +84,8 @@ async function queueSmsForDelivery({
 
     const resolvedSmsCommand = resolveSmsCommand(message);
     const smsCommand = resolvedSmsCommand.command;
+    const smsTransport = resolvedSmsCommand.metadata || {};
+    const smsTimeoutMs = resolvedSmsCommand.timeoutMs || 60000;
     const messageId = buildSmsCommandMessageId(smsCommand);
     let smsId = existingSmsId;
     const normalizedSimSlot = Number.isInteger(Number(simSlot)) ? Number(simSlot) : null;
@@ -136,6 +138,7 @@ async function queueSmsForDelivery({
             status: 'queued',
             transport: 'http',
             simSlot: normalizedSimSlot,
+            sms: smsTransport,
             messageId
         };
 
@@ -161,10 +164,12 @@ async function queueSmsForDelivery({
                 to: formattedNumber,
                 message,
                 smsId,
-                sim_slot: normalizedSimSlot
+                sim_slot: normalizedSimSlot,
+                timeout: smsTimeoutMs,
+                ...smsTransport
             },
             false,
-            60000,
+            smsTimeoutMs,
             {
                 source: `${source}-sms`,
                 userId,
@@ -188,6 +193,7 @@ async function queueSmsForDelivery({
             status: smsStatus,
             command: smsCommand,
             simSlot: normalizedSimSlot,
+            sms: smsTransport,
             queueId: queueResult?.queueId || null,
             messageId
         };

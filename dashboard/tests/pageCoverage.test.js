@@ -405,7 +405,8 @@ describe('sidebar navigation coverage', () => {
 
         expect(html).toContain('window.appConfirm');
         expect(html).not.toContain('window.showConfirmModal');
-        expect(html).toContain('Clear Telephony Leftovers');
+        expect(html).toContain('Clear Filtered Queue');
+        expect(html).toContain('Telephony Leftovers');
         expect(html).toContain('live calls and USSD stay runtime-only over MQTT');
         expect(html).not.toContain('Clear Call Queue');
     });

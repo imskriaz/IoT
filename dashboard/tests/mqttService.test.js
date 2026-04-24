@@ -856,7 +856,7 @@ describe('mqttService durable SMS queue', () => {
         delete global.modemService;
     });
 
-    test('durable send-sms waits for the immediate firmware action result and completes the queue row', async () => {
+    test('durable ESP32 send-sms pre-dispatches and waits for the later firmware action result', async () => {
         const db = {
             run: jest.fn().mockResolvedValue({ changes: 1 }),
             get: jest.fn().mockResolvedValue(null),
@@ -894,7 +894,7 @@ describe('mqttService durable SMS queue', () => {
             expect.objectContaining({
                 status: 'waiting_response',
                 attempt_count: 1,
-                next_attempt_at: null
+                next_attempt_at: expect.any(String)
             })
         );
         expect(svc._publishCommandNow).toHaveBeenCalledWith(
@@ -905,25 +905,83 @@ describe('mqttService durable SMS queue', () => {
                 message: 'hello',
                 smsId: 41
             }),
-            true,
+            false,
             60000,
             expect.objectContaining({
                 messageId: 'send-sms_test',
                 source: 'dashboard-sms'
             })
         );
-        expect(svc._markPersistentQueueCompleted).toHaveBeenCalledWith(
+        expect(svc._markPersistentQueueCompleted).not.toHaveBeenCalled();
+        expect(svc._markPersistentQueueRetry).not.toHaveBeenCalled();
+    });
+
+    test('durable Android send-sms keeps the synchronous bridge path', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 1 }),
+            get: jest.fn().mockResolvedValue({ type: 'android-sms-bridge' }),
+            all: jest.fn().mockResolvedValue([])
+        };
+        global.app.locals.db = db;
+
+        svc.enqueueDeviceCommand = jest.fn((_deviceId, task) => task());
+        svc._updatePersistentQueueRow = jest.fn().mockResolvedValue();
+        svc._syncSmsStatusFromQueueRow = jest.fn().mockResolvedValue();
+        svc._emitDeviceQueueState = jest.fn().mockResolvedValue();
+        svc._markPersistentQueueCompleted = jest.fn().mockResolvedValue();
+        svc._markPersistentQueueRetry = jest.fn().mockResolvedValue();
+        svc._publishCommandNow = jest.fn().mockResolvedValue({
+            topic: 'device/android-1/command/send-sms',
+            messageId: 'send-sms_android'
+        });
+
+        svc._processPersistentQueueRow({
+            id: 'queue-android',
+            device_id: 'android-1',
+            command: 'send-sms',
+            payload: JSON.stringify({ to: '+8801628301525', message: 'hello', smsId: 42 }),
+            message_id: 'send-sms_android',
+            requires_response: 1,
+            attempt_count: 0,
+            timeout_ms: 60000,
+            source: 'dashboard-sms'
+        });
+
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(svc._updatePersistentQueueRow).toHaveBeenCalledWith(
+            'queue-android',
             expect.objectContaining({
-                id: 'queue-1',
-                command: 'send-sms',
-                message_id: 'send-sms_test'
-            }),
-            expect.objectContaining({
-                topic: 'device/device-1/command/send-sms',
-                messageId: 'send-sms_test'
+                status: 'waiting_response',
+                next_attempt_at: null
             })
         );
-        expect(svc._markPersistentQueueRetry).not.toHaveBeenCalled();
+        expect(svc._publishCommandNow).toHaveBeenCalledWith(
+            'android-1',
+            'send-sms',
+            expect.objectContaining({
+                to: '+8801628301525',
+                message: 'hello',
+                smsId: 42
+            }),
+            true,
+            60000,
+            expect.objectContaining({
+                messageId: 'send-sms_android',
+                source: 'dashboard-sms'
+            })
+        );
+        expect(svc._markPersistentQueueCompleted).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'queue-android',
+                command: 'send-sms',
+                message_id: 'send-sms_android'
+            }),
+            expect.objectContaining({
+                topic: 'device/android-1/command/send-sms',
+                messageId: 'send-sms_android'
+            })
+        );
     });
 
     test('durable queued SMS stays pending until device command subscription is ready', async () => {
@@ -1041,7 +1099,7 @@ describe('mqttService durable SMS queue', () => {
                 message: 'hello',
                 smsId: 76
             }),
-            true,
+            false,
             60000,
             expect.objectContaining({
                 messageId: 'send-sms_fresh_live_status'
@@ -1349,6 +1407,95 @@ describe('mqttService durable SMS queue', () => {
             expect.objectContaining({
                 success: true,
                 detail: 'sms_delivered'
+            })
+        );
+    });
+
+    test('failed sms/delivery report fails the waiting queue row immediately', async () => {
+        global.app.locals.db = {
+            get: jest.fn().mockResolvedValue({
+                id: 'queue-5',
+                device_id: 'device-1',
+                command: 'send-sms',
+                message_id: 'send-sms_delivery_failed',
+                status: 'failed'
+            }),
+            all: jest.fn().mockResolvedValue([{
+                id: 'queue-5',
+                device_id: 'device-1',
+                command: 'send-sms',
+                message_id: 'send-sms_delivery_failed',
+                status: 'waiting_response',
+                payload: JSON.stringify({ to: '+8801628301525', smsId: 43 })
+            }]),
+            run: jest.fn().mockResolvedValue({ changes: 1 })
+        };
+
+        svc._resolvePersistentQueueWaiter = jest.fn().mockResolvedValue();
+        svc._emitDeviceQueueState = jest.fn().mockResolvedValue();
+
+        svc.handleMessage(
+            'device/device-1/sms/delivery',
+            Buffer.from(JSON.stringify({
+                to: '+8801628301525',
+                delivered: false,
+                status: 'failed',
+                detail: 'sms_delivery_failed',
+                message_reference: 46
+            }))
+        );
+
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(global.app.locals.db.run).toHaveBeenCalledWith(
+            expect.stringContaining('UPDATE device_command_queue'),
+            expect.arrayContaining(['failed', expect.stringContaining('"message_reference":46'), expect.any(String), 'sms_delivery_failed'])
+        );
+        expect(global.app.locals.db.run).toHaveBeenCalledWith(
+            expect.stringContaining('UPDATE sms'),
+            ['failed', 'sms_delivery_failed', 'send-sms_delivery_failed', 43]
+        );
+        expect(svc._resolvePersistentQueueWaiter).toHaveBeenCalled();
+        expect(svc._emitDeviceQueueState).toHaveBeenCalledWith('device-1');
+    });
+
+    test('raw sms/delivery status report settles delivered queue row in dashboard logic', async () => {
+        global.app.locals.db = {
+            get: jest.fn().mockResolvedValue(null),
+            all: jest.fn().mockResolvedValue([{
+                id: 'queue-6',
+                device_id: 'device-1',
+                command: 'send-sms',
+                message_id: 'send-sms_delivery_raw',
+                status: 'waiting_response',
+                payload: JSON.stringify({ to: '+8801628301525', smsId: 44 })
+            }])
+        };
+
+        svc._markPersistentQueueCompleted = jest.fn().mockResolvedValue();
+
+        svc.handleMessage(
+            'device/device-1/sms/delivery',
+            Buffer.from(JSON.stringify({
+                to: '+8801628301525',
+                status_report_status: 0,
+                message_reference: 47,
+                raw_report: '+CDS: 49,47,"+8801628301525",145,"26/04/24,12:00:00+24","26/04/24,12:00:03+24",0'
+            }))
+        );
+
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(svc._markPersistentQueueCompleted).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'queue-6',
+                message_id: 'send-sms_delivery_raw'
+            }),
+            expect.objectContaining({
+                success: true,
+                detail: 'sms_delivered',
+                status_report_status: 0,
+                message_reference: 47
             })
         );
     });

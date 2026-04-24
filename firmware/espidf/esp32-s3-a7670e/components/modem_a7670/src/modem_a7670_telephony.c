@@ -18,7 +18,7 @@
 #define MODEM_A7670_SMS_COMMAND_LEN             192U
 #define MODEM_A7670_SMS_UCS2_NUMBER_LEN        (UNIFIED_TEXT_SHORT_LEN * 4U + 1U)
 #define MODEM_A7670_SMS_UCS2_TEXT_LEN          (UNIFIED_SMS_TEXT_MAX_LEN * 4U + 1U)
-#define MODEM_A7670_SMS_TEXT_FO                  17U
+#define MODEM_A7670_SMS_TEXT_FO                  49U
 #define MODEM_A7670_SMS_TEXT_VP_DEFAULT         167U
 #define MODEM_A7670_SMS_TEXT_PID                  0U
 #define MODEM_A7670_SMS_TEXT_DCS_GSM              0U
@@ -1348,6 +1348,12 @@ esp_err_t modem_a7670_cancel_ussd(char *response, size_t response_len, uint32_t 
 
     xSemaphoreGive(s_lock);
     return err;
+}
+
+esp_err_t modem_a7670_acknowledge_new_message(uint32_t timeout_ms) {
+    char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
+
+    return modem_a7670_command("AT+CNMA", response, sizeof(response), timeout_ms);
 }
 
 esp_err_t modem_a7670_read_sms(int storage_index, unified_sms_payload_t *out_payload, uint32_t timeout_ms) {

@@ -36,6 +36,8 @@ typedef struct {
     char path[CONFIG_UNIFIED_API_BRIDGE_PATH_LEN];
     char number[UNIFIED_TEXT_SHORT_LEN];
     char text[UNIFIED_SMS_TEXT_MAX_LEN];
+    char sms_encoding[16];
+    char sms_transport_encoding[16];
     char code[UNIFIED_TEXT_SHORT_LEN];
     char key[CONFIG_UNIFIED_API_BRIDGE_CONFIG_KEY_LEN];
     char value[CONFIG_UNIFIED_API_BRIDGE_CONFIG_VALUE_LEN];
@@ -55,6 +57,12 @@ typedef struct {
     bool firewall;
     uint32_t ttl_ms;
     uint32_t interval_ms;
+    uint16_t sms_parts;
+    uint16_t sms_units;
+    uint16_t sms_utf8_bytes;
+    uint16_t sms_characters;
+    bool sms_multipart_present;
+    bool sms_multipart;
     uint16_t max_entries;
 } api_bridge_request_t;
 

@@ -21,6 +21,7 @@ const INTERACTIVE_TELEPHONY_COMMANDS = [
 const ACTIVE_STATUSES = ['dispatching'];
 const OPEN_STATUSES = ['pending', 'dispatching', 'waiting_response', 'failed', 'ambiguous'];
 const CLEARABLE_BULK_STATUSES = ['pending', 'waiting_response', 'failed', 'ambiguous', 'completed'];
+const FILTERABLE_STATUSES = ['all', 'open', ...OPEN_STATUSES, 'completed'];
 
 function normalizeDeviceId(value) {
     return String(value || '').trim();
@@ -43,6 +44,21 @@ function normalizeScope(value) {
     return 'device';
 }
 
+function normalizeStatusFilter(value) {
+    const status = String(value || 'all').trim().toLowerCase();
+    return FILTERABLE_STATUSES.includes(status) ? status : 'all';
+}
+
+function clearableStatusesForFilter(status) {
+    if (status === 'open') {
+        return CLEARABLE_BULK_STATUSES.filter(clearable => OPEN_STATUSES.includes(clearable));
+    }
+    if (status === 'all') {
+        return CLEARABLE_BULK_STATUSES;
+    }
+    return CLEARABLE_BULK_STATUSES.includes(status) ? [status] : [];
+}
+
 async function emitQueueState(deviceId) {
     try {
         if (global.mqttService && typeof global.mqttService._emitDeviceQueueState === 'function') {
@@ -55,6 +71,10 @@ function buildScopeWhere(scope, params) {
     if (scope === 'call') {
         params.push(...INTERACTIVE_TELEPHONY_COMMANDS);
         return ` AND command IN (${sqlPlaceholders(INTERACTIVE_TELEPHONY_COMMANDS.length)})`;
+    }
+    if (scope === 'device') {
+        params.push(...INTERACTIVE_TELEPHONY_COMMANDS);
+        return ` AND (command IS NULL OR command NOT IN (${sqlPlaceholders(INTERACTIVE_TELEPHONY_COMMANDS.length)}))`;
     }
     return '';
 }
@@ -75,7 +95,7 @@ router.get('/', async (req, res) => {
         }
 
         const scope = normalizeScope(req.query.scope);
-        const status = String(req.query.status || 'all').trim().toLowerCase();
+        const status = normalizeStatusFilter(req.query.status);
         const limit = clamp(req.query.limit, 10, 200, 60);
         const params = [deviceId];
         let whereSql = 'WHERE device_id = ?';
@@ -206,8 +226,19 @@ router.post('/clear', async (req, res) => {
         }
 
         const scope = normalizeScope(req.body?.scope);
-        const params = [deviceId, ...CLEARABLE_BULK_STATUSES];
-        let whereSql = `WHERE device_id = ? AND status IN (${sqlPlaceholders(CLEARABLE_BULK_STATUSES.length)})`;
+        const status = normalizeStatusFilter(req.body?.status);
+        const clearableStatuses = clearableStatusesForFilter(status);
+
+        if (!clearableStatuses.length) {
+            return res.json({
+                success: true,
+                message: 'Nothing to clear',
+                data: { deleted: 0, deviceId, scope, status }
+            });
+        }
+
+        const params = [deviceId, ...clearableStatuses];
+        let whereSql = `WHERE device_id = ? AND status IN (${sqlPlaceholders(clearableStatuses.length)})`;
         whereSql += buildScopeWhere(scope, params);
 
         const countRow = await db.get(
@@ -220,7 +251,7 @@ router.post('/clear', async (req, res) => {
             return res.json({
                 success: true,
                 message: 'Nothing to clear',
-                data: { deleted: 0, deviceId, scope }
+                data: { deleted: 0, deviceId, scope, status }
             });
         }
 
@@ -230,7 +261,7 @@ router.post('/clear', async (req, res) => {
         res.json({
             success: true,
             message: `${count} queue item(s) cleared`,
-            data: { deleted: count, deviceId, scope }
+            data: { deleted: count, deviceId, scope, status }
         });
     } catch (error) {
         logger.error('Queue bulk clear error:', error);

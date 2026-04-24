@@ -3,8 +3,9 @@ const logger = require('../utils/logger');
 const EventEmitter = require('events');
 const crypto = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
-const { resolveSmsCommand } = require('../utils/smsLimits');
+const { resolveSmsCommand, buildSmsTransportMetadata, resolveSmsTimeoutMs } = require('../utils/smsLimits');
 const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
+const { normalizeSmsDeliveryReport } = require('../utils/smsDeliveryReports');
 
 function hasEnv(name) {
     return Object.prototype.hasOwnProperty.call(process.env, name);
@@ -180,10 +181,13 @@ const ACK_REQUIRED_DURABLE_COMMANDS = new Set([
     'gps-configure'
 ]);
 
-// SMS send is confirmed by the firmware action/result after the modem reports send success.
-// Do not treat it as a deferred durable result, or dashboard rows can drift into "ambiguous"
-// even when the device has already produced a concrete modem outcome.
-const ASYNC_RESULT_DURABLE_COMMANDS = new Set([]);
+// ESP32 firmware has its own automation queue, so durable SMS rows can be
+// pre-dispatched and settled by the later action/result. Android stays on the
+// synchronous path because the phone bridge has its own OS-level SMS behavior.
+const ESP32_ASYNC_RESULT_DURABLE_COMMANDS = new Set([
+    'send-sms',
+    'send-sms-multipart'
+]);
 
 const NON_REPLAY_SAFE_COMMANDS = new Set([
     'send-sms',
@@ -466,11 +470,19 @@ class MQTTService extends EventEmitter {
         const normalizedCommand = String(command || '').trim();
 
         if (normalizedCommand === 'send-sms' || normalizedCommand === 'send-sms-multipart') {
+            const text = String(payload.message || payload.text || '');
+            const smsMetadata = {
+                ...buildSmsTransportMetadata(text),
+                ...Object.fromEntries(
+                    Object.entries(payload || {}).filter(([key]) => key.startsWith('sms_'))
+                )
+            };
             const message = {
                 action_id: messageId,
                 number: String(payload.to || payload.number || '').trim(),
-                text: String(payload.message || payload.text || ''),
-                command: normalizedCommand === 'send-sms-multipart' ? 'send_sms_multipart' : 'send_sms'
+                text,
+                command: normalizedCommand === 'send-sms-multipart' ? 'send_sms_multipart' : 'send_sms',
+                ...smsMetadata
             };
             if (Number.isFinite(Number(payload.timeout)) && Number(payload.timeout) > 0) {
                 message.timeout = Number(payload.timeout);
@@ -894,8 +906,11 @@ class MQTTService extends EventEmitter {
                     this._settlePersistentQueueFromResponse(deviceId, data).catch((error) => {
                         logger.error('Failed to settle persistent queue from action result:', error);
                     });
-                } else if (topicParts[2] === 'sms' && topicParts[3] === 'delivered') {
-                    this._settlePersistentQueueFromSmsDelivery(deviceId, data).catch((error) => {
+                } else if (topicParts[2] === 'sms' && (topicParts[3] === 'delivered' || topicParts[3] === 'delivery')) {
+                    const deliveryData = topicParts[3] === 'delivered'
+                        ? { ...data, status: data?.status || 'delivered', delivered: data?.delivered !== false }
+                        : data;
+                    this._settlePersistentQueueFromSmsDelivery(deviceId, deliveryData).catch((error) => {
                         logger.error('Failed to settle persistent queue from SMS delivery:', error);
                     });
                 }
@@ -1185,7 +1200,36 @@ class MQTTService extends EventEmitter {
 
     _usesAsyncDurableResult(command, options = {}) {
         if (options?.forceSyncResponse === true) return false;
-        return ASYNC_RESULT_DURABLE_COMMANDS.has(String(command || '').trim());
+        return ESP32_ASYNC_RESULT_DURABLE_COMMANDS.has(String(command || '').trim());
+    }
+
+    async _isAndroidDevice(deviceId) {
+        const normalizedDeviceId = this._normalizeDeviceId(deviceId);
+        const db = this._db();
+        if (!normalizedDeviceId || !this._hasDbMethods(db, ['get'])) {
+            return false;
+        }
+
+        try {
+            const row = await db.get(
+                `SELECT type
+                 FROM devices
+                 WHERE id = ?
+                 LIMIT 1`,
+                [normalizedDeviceId]
+            );
+            return String(row?.type || '').trim().toLowerCase().includes('android');
+        } catch (_) {
+            return false;
+        }
+    }
+
+    async _usesAsyncDurableResultForRow(row) {
+        if (!row || !this._usesAsyncDurableResult(row.command)) {
+            return false;
+        }
+
+        return !await this._isAndroidDevice(row.device_id);
     }
 
     _commandDomain(command, options = {}) {
@@ -1918,8 +1962,36 @@ class MQTTService extends EventEmitter {
     }
 
     async _settlePersistentQueueFromSmsDelivery(deviceId, data) {
+        const deliveryReport = normalizeSmsDeliveryReport(data);
         const row = await this._findPersistentSmsQueueRow(deviceId, data);
         if (!row) return false;
+
+        if (deliveryReport.pending) {
+            return false;
+        }
+
+        if (deliveryReport.failed) {
+            const detail = data?.error || data?.message || data?.detail || 'SMS delivery failed';
+            await this._updatePersistentQueueRow(row.id, {
+                status: 'failed',
+                response_payload: JSON.stringify(data),
+                completed_at: this._sqlTimestamp(),
+                last_error: detail,
+                next_attempt_at: null
+            });
+            await this._syncSmsStatusFromQueueRow({
+                ...row,
+                status: 'failed',
+                last_error: detail
+            }, 'failed', detail);
+            const db = this._db();
+            const failed = db ? await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id]) : null;
+            if (failed) {
+                await this._resolvePersistentQueueWaiter(failed);
+            }
+            await this._emitDeviceQueueState(row.device_id);
+            return true;
+        }
 
         await this._markPersistentQueueCompleted(row, {
             ...data,
@@ -2044,7 +2116,7 @@ class MQTTService extends EventEmitter {
                 }
 
                 const payload = row.payload ? JSON.parse(row.payload) : {};
-                const usesAsyncResult = Boolean(row.requires_response) && this._usesAsyncDurableResult(row.command);
+                const usesAsyncResult = Boolean(row.requires_response) && await this._usesAsyncDurableResultForRow(row);
                 const nextAttemptAt = usesAsyncResult
                     ? this._sqlTimestamp(Date.now() + Number(row.timeout_ms || 30000))
                     : null;
@@ -2458,7 +2530,13 @@ class MQTTService extends EventEmitter {
     // SMS Commands
     sendSms(deviceId, to, message) {
         const resolved = resolveSmsCommand(message);
-        return this.publishCommand(deviceId, resolved.command, { to, message }, true, 60000);
+        return this.publishCommand(
+            deviceId,
+            resolved.command,
+            { to, message, timeout: resolved.timeoutMs, ...(resolved.metadata || {}) },
+            true,
+            resolved.timeoutMs || resolveSmsTimeoutMs(message)
+        );
     }
 
     // Call Commands

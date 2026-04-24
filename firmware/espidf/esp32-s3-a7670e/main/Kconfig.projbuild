@@ -112,7 +112,7 @@ config UNIFIED_API_BRIDGE_PAYLOAD_LEN
 config UNIFIED_AUTOMATION_QUEUE_DEPTH
     int "Automation bridge queue depth"
     range 2 32
-    default 8
+    default 16
 
 config UNIFIED_AUTOMATION_TOPIC_LEN
     int "Automation bridge topic buffer length"

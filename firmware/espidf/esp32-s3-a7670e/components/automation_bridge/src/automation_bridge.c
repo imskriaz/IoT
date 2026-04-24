@@ -102,6 +102,7 @@ static void automation_bridge_record_failure_locked(esp_err_t err, const char *d
 static uint16_t automation_bridge_command_priority(unified_action_command_t command) {
     switch (command) {
         case UNIFIED_ACTION_CMD_SEND_SMS:
+        case UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART:
         case UNIFIED_ACTION_CMD_SEND_USSD:
         case UNIFIED_ACTION_CMD_CANCEL_USSD:
         case UNIFIED_ACTION_CMD_DIAL_NUMBER:
@@ -627,6 +628,8 @@ static esp_err_t automation_bridge_parse_item(
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "path"), out_request->path, sizeof(out_request->path));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "number"), out_request->number, sizeof(out_request->number));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "text"), out_request->text, sizeof(out_request->text));
+    automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "sms_encoding"), out_request->sms_encoding, sizeof(out_request->sms_encoding));
+    automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "sms_transport_encoding"), out_request->sms_transport_encoding, sizeof(out_request->sms_transport_encoding));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "code"), out_request->code, sizeof(out_request->code));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "key"), out_request->key, sizeof(out_request->key));
     automation_bridge_copy_json_scalar(cJSON_GetObjectItemCaseSensitive(payload, "value"), out_request->value, sizeof(out_request->value));
@@ -665,6 +668,27 @@ static esp_err_t automation_bridge_parse_item(
     node = cJSON_GetObjectItemCaseSensitive(payload, "max_entries");
     if (cJSON_IsNumber(node) && node->valuedouble > 0) {
         out_request->max_entries = (uint16_t)node->valuedouble;
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "sms_parts");
+    if (cJSON_IsNumber(node) && node->valuedouble > 0) {
+        out_request->sms_parts = (uint16_t)node->valuedouble;
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "sms_units");
+    if (cJSON_IsNumber(node) && node->valuedouble > 0) {
+        out_request->sms_units = (uint16_t)node->valuedouble;
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "sms_utf8_bytes");
+    if (cJSON_IsNumber(node) && node->valuedouble > 0) {
+        out_request->sms_utf8_bytes = (uint16_t)node->valuedouble;
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "sms_characters");
+    if (cJSON_IsNumber(node) && node->valuedouble > 0) {
+        out_request->sms_characters = (uint16_t)node->valuedouble;
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "sms_multipart");
+    if (cJSON_IsBool(node)) {
+        out_request->sms_multipart_present = true;
+        out_request->sms_multipart = cJSON_IsTrue(node);
     }
     node = cJSON_GetObjectItemCaseSensitive(payload, "ttl_ms");
     if (!node) {

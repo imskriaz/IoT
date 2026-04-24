@@ -89,4 +89,47 @@ describe('automationEngine', () => {
         const twinUpdates = db.run.mock.calls.filter(([sql]) => sql.includes('device_twin'));
         expect(twinUpdates).toHaveLength(0);
     });
+
+    test('publishes automation SMS with Unicode metadata and timeout', async () => {
+        const unicodeMessage = '\u0985'.repeat(80);
+        const flows = [{
+            id: 3,
+            name: 'Unicode SMS alert',
+            device_id: 'dev-3',
+            nodes: JSON.stringify([
+                { id: 't1', type: 'trigger.telemetry', config: { field: 'temperature' } },
+                {
+                    id: 'a1',
+                    type: 'action.send_sms',
+                    config: { to: '+8801555123456', message: unicodeMessage }
+                }
+            ]),
+            edges: JSON.stringify([{ sourceId: 't1', targetId: 'a1' }])
+        }];
+        const db = makeDb(flows);
+        const mqttService = {
+            connected: true,
+            publishCommand: jest.fn().mockResolvedValue({ success: true })
+        };
+
+        automationEngine.init(db, mqttService, { emit: jest.fn() });
+        await automationEngine.onEvent('telemetry', { temperature: 35 }, 'dev-3');
+
+        expect(mqttService.publishCommand).toHaveBeenCalledWith(
+            'dev-3',
+            'send-sms-multipart',
+            expect.objectContaining({
+                to: '+8801555123456',
+                message: unicodeMessage,
+                sms_encoding: 'unicode',
+                sms_transport_encoding: 'ucs2',
+                sms_parts: 2,
+                sms_multipart: true,
+                timeout: 60000
+            }),
+            false,
+            60000,
+            {}
+        );
+    });
 });

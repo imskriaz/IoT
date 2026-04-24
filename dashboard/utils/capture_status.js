@@ -150,8 +150,8 @@ function getVerifierPath() {
         '..',
         '..',
         'firmware',
-        'esp32-s3-a7670e',
         'espidf',
+        'esp32-s3-a7670e',
         'verify-status-payload.js'
     );
 }

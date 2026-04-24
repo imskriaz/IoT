@@ -7,11 +7,8 @@
         <button class="btn btn-outline-secondary btn-sm" onclick="refreshQueueManager()">
             <i class="bi bi-arrow-repeat me-1"></i>Refresh
         </button>
-        <button class="btn btn-outline-warning btn-sm" onclick="clearQueueScope('call')">
-            <i class="bi bi-telephone-x me-1"></i>Clear Telephony Leftovers
-        </button>
-        <button class="btn btn-outline-danger btn-sm" onclick="clearQueueScope('device')">
-            <i class="bi bi-trash3 me-1"></i>Clear Device Queue
+        <button class="btn btn-outline-danger btn-sm" onclick="clearFilteredQueue()">
+            <i class="bi bi-trash3 me-1"></i>Clear Filtered Queue
         </button>
         <button class="btn btn-outline-primary btn-sm" onclick="runQueueAction('restart-modem')">
             <i class="bi bi-router me-1"></i>Restart Modem
@@ -211,6 +208,31 @@
         }
     }
 
+    function selectedQueueFilters() {
+        return {
+            scope: document.getElementById('qmScope')?.value || 'device',
+            status: document.getElementById('qmStatus')?.value || 'all',
+            limit: document.getElementById('qmLimit')?.value || '60'
+        };
+    }
+
+    function scopeLabel(scope) {
+        switch (scope) {
+            case 'call': return 'telephony leftover rows';
+            case 'all': return 'command rows';
+            default: return 'device queue rows';
+        }
+    }
+
+    function statusLabel(status) {
+        switch (status) {
+            case 'open': return 'open';
+            case 'all': return 'all clearable';
+            case 'waiting_response': return 'waiting response';
+            default: return String(status || 'all').replace(/_/g, ' ');
+        }
+    }
+
     function renderSummary(data) {
         const summary = data?.summary || {};
         const domains = data?.domains || {};
@@ -326,9 +348,7 @@
             await window.resolveActiveDeviceId(false);
         }
 
-        const scope = document.getElementById('qmScope').value;
-        const status = document.getElementById('qmStatus').value;
-        const limit = document.getElementById('qmLimit').value;
+        const { scope, status, limit } = selectedQueueFilters();
         const url = `/api/queue?deviceId=${encodeURIComponent(activeDeviceId())}&scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(status)}&limit=${encodeURIComponent(limit)}`;
         const response = await fetch(url, { cache: 'no-store' });
         const payload = await response.json();
@@ -382,9 +402,10 @@
         refreshQueueManager();
     };
 
-    window.clearQueueScope = async function (scope) {
-        const label = scope === 'call' ? 'legacy telephony leftovers' : 'device queue data';
-        const ok = await askQueueConfirm(`Clear all ${label} for the active device? Active in-flight work will be kept.`, {
+    window.clearFilteredQueue = async function () {
+        const { scope, status } = selectedQueueFilters();
+        const label = `${statusLabel(status)} ${scopeLabel(scope)}`;
+        const ok = await askQueueConfirm(`Clear ${label} for the active device? Active in-flight work will be kept.`, {
             title: 'Clear Queue',
             confirmText: 'Clear',
             confirmClass: 'btn btn-danger'
@@ -394,7 +415,7 @@
         const response = await fetch('/api/queue/clear', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ deviceId: activeDeviceId(), scope })
+            body: JSON.stringify({ deviceId: activeDeviceId(), scope, status })
         });
         const payload = await response.json();
         if (typeof showToast === 'function') {

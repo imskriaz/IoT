@@ -1103,6 +1103,65 @@ static unified_action_response_t api_bridge_execute_status_watch(
     return api_bridge_build_response(action, UNIFIED_ACTION_RESULT_COMPLETED, ESP_OK, UNIFIED_FEATURE_REASON_NONE, "status_watch_updated");
 }
 
+static unified_action_response_t api_bridge_execute_send_sms(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    unified_action_response_t response = {0};
+    bool force_multipart = false;
+    char escaped_encoding[32] = {0};
+    char escaped_transport_encoding[32] = {0};
+
+    if (request) {
+        if (request->sms_parts > 1U) {
+            force_multipart = true;
+        } else if (request->sms_multipart_present) {
+            force_multipart = request->sms_multipart;
+        } else if (action && action->command == UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART) {
+            force_multipart = true;
+        }
+    } else if (action && action->command == UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART) {
+        force_multipart = true;
+    }
+
+    response = force_multipart
+        ? sms_service_send_multipart(request ? request->number : NULL, request ? request->text : NULL, action ? action->timeout_ms : 0U)
+        : sms_service_send(request ? request->number : NULL, request ? request->text : NULL, action ? action->timeout_ms : 0U);
+    if (action) {
+        response.action = *action;
+    }
+
+    if (payload && payload_len > 0U && request) {
+        api_bridge_escape_json(
+            request->sms_encoding[0] ? request->sms_encoding : "auto",
+            escaped_encoding,
+            sizeof(escaped_encoding)
+        );
+        api_bridge_escape_json(
+            request->sms_transport_encoding[0] ? request->sms_transport_encoding : "auto",
+            escaped_transport_encoding,
+            sizeof(escaped_transport_encoding)
+        );
+        if (snprintf(
+                payload,
+                payload_len,
+                "{\"sms_encoding\":\"%s\",\"sms_transport_encoding\":\"%s\",\"sms_parts\":%u,\"sms_units\":%u,\"sms_utf8_bytes\":%u,\"sms_characters\":%u,\"sms_multipart\":%s}",
+                escaped_encoding,
+                escaped_transport_encoding,
+                (unsigned int)request->sms_parts,
+                (unsigned int)request->sms_units,
+                (unsigned int)request->sms_utf8_bytes,
+                (unsigned int)request->sms_characters,
+                force_multipart ? "true" : "false") >= (int)payload_len) {
+            payload[0] = '\0';
+        }
+    }
+
+    return response;
+}
+
 static unified_action_response_t api_bridge_dispatch_action(
     const unified_action_envelope_t *action,
     const api_bridge_request_t *request,
@@ -1139,13 +1198,8 @@ static unified_action_response_t api_bridge_dispatch_action(
         case UNIFIED_ACTION_CMD_STATUS_WATCH:
             return api_bridge_execute_status_watch(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_SEND_SMS:
-            response = sms_service_send(request ? request->number : NULL, request ? request->text : NULL, action->timeout_ms);
-            response.action = *action;
-            return response;
         case UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART:
-            response = sms_service_send_multipart(request ? request->number : NULL, request ? request->text : NULL, action->timeout_ms);
-            response.action = *action;
-            return response;
+            return api_bridge_execute_send_sms(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_SEND_USSD:
             return api_bridge_execute_send_ussd(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_CANCEL_USSD:

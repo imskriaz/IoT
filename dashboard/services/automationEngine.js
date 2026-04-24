@@ -415,8 +415,10 @@ class AutomationEngine {
                         const resolved = resolveSmsCommand(message);
                         await this._publishCommand(context.deviceId, resolved.command, {
                             to,
-                            message
-                        });
+                            message,
+                            timeout: resolved.timeoutMs,
+                            ...(resolved.metadata || {})
+                        }, false, resolved.timeoutMs);
                     }
                     break;
                 case 'action.send_notification': {
@@ -528,9 +530,9 @@ class AutomationEngine {
         }
     }
 
-    async _publishCommand(deviceId, command, payload) {
+    async _publishCommand(deviceId, command, payload, waitForResponse = false, timeout = 30000, options = {}) {
         if (!this.mqttService?.connected) throw new Error('MQTT not connected');
-        await this.mqttService.publishCommand(deviceId, command, payload);
+        await this.mqttService.publishCommand(deviceId, command, payload, waitForResponse, timeout, options);
     }
 
     async _publish(topic, payload) {

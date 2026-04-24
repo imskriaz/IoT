@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -81,6 +82,9 @@ static bool s_telephony_baseline_configured;
 static int s_sms_index_queue[CONFIG_UNIFIED_MODEM_EVENT_QUEUE_DEPTH];
 static size_t s_sms_head;
 static size_t s_sms_count;
+static unified_sms_delivery_payload_t s_sms_delivery_queue[CONFIG_UNIFIED_MODEM_EVENT_QUEUE_DEPTH];
+static size_t s_sms_delivery_head;
+static size_t s_sms_delivery_count;
 static modem_a7670_mqtt_message_t s_mqtt_queue[MODEM_A7670_MQTT_QUEUE_DEPTH];
 static size_t s_mqtt_head;
 static size_t s_mqtt_count;
@@ -156,8 +160,10 @@ static bool modem_a7670_mqtt_topic_is_command(const char *topic);
 static bool modem_a7670_infer_mqtt_topic_from_payload_locked(char *topic, size_t topic_len, const char *payload);
 static void modem_a7670_queue_mqtt_message_locked(const char *topic, const char *payload);
 static void modem_a7670_queue_sms_index_locked(int index);
+static void modem_a7670_queue_sms_delivery_locked(const unified_sms_delivery_payload_t *payload);
 static void modem_a7670_queue_ussd_result_locked(const unified_ussd_payload_t *payload);
 static void modem_a7670_parse_sms_index_locked(const char *line);
+static void modem_a7670_parse_sms_delivery_report_locked(const char *line);
 static void modem_a7670_parse_ussd_result_locked(const char *line);
 static esp_err_t modem_a7670_refresh_data_session_locked(uint32_t timeout_ms);
 static esp_err_t modem_a7670_open_network_stack_locked(char *response, size_t response_len, uint32_t timeout_ms);
@@ -691,6 +697,28 @@ static void modem_a7670_queue_sms_index_locked(int index) {
     }
 }
 
+static void modem_a7670_queue_sms_delivery_locked(const unified_sms_delivery_payload_t *payload) {
+    size_t write_index = 0U;
+
+    if (!payload) {
+        return;
+    }
+
+    if (s_sms_delivery_count < CONFIG_UNIFIED_MODEM_EVENT_QUEUE_DEPTH) {
+        write_index = (s_sms_delivery_head + s_sms_delivery_count) % CONFIG_UNIFIED_MODEM_EVENT_QUEUE_DEPTH;
+        s_sms_delivery_count++;
+    } else {
+        write_index = s_sms_delivery_head;
+        s_sms_delivery_head = (s_sms_delivery_head + 1U) % CONFIG_UNIFIED_MODEM_EVENT_QUEUE_DEPTH;
+        s_status.timeout_count++;
+    }
+
+    s_sms_delivery_queue[write_index] = *payload;
+    if (s_sms_event_listener) {
+        s_sms_event_listener();
+    }
+}
+
 static void modem_a7670_queue_ussd_result_locked(const unified_ussd_payload_t *payload) {
     size_t write_index = 0U;
 
@@ -746,6 +774,62 @@ static void modem_a7670_parse_sms_index_locked(const char *line) {
     }
 
     modem_a7670_queue_sms_index_locked(index);
+}
+
+static void modem_a7670_parse_sms_delivery_report_locked(const char *line) {
+    unified_sms_delivery_payload_t payload = {0};
+    const char *cursor = NULL;
+    const char *comma = NULL;
+    char *end = NULL;
+    long fo = -1;
+    long mr = -1;
+    long st = -1;
+
+    if (!line || strncmp(line, "+CDS:", 5) != 0) {
+        return;
+    }
+
+    cursor = strchr(line, ':');
+    if (!cursor) {
+        return;
+    }
+    cursor++;
+    while (*cursor == ' ') {
+        cursor++;
+    }
+
+    fo = strtol(cursor, &end, 10);
+    if (end == cursor || *end != ',') {
+        return;
+    }
+
+    cursor = end + 1;
+    while (*cursor == ' ') {
+        cursor++;
+    }
+    mr = strtol(cursor, &end, 10);
+    if (end == cursor || mr < 0 || mr > UINT16_MAX) {
+        return;
+    }
+
+    comma = strrchr(line, ',');
+    if (!comma) {
+        return;
+    }
+    st = strtol(comma + 1, &end, 10);
+    if (end == comma + 1 || st < 0 || st > UINT16_MAX) {
+        return;
+    }
+
+    (void)fo;
+    (void)modem_a7670_extract_quoted_field(line, 0, payload.to, sizeof(payload.to));
+    payload.message_reference = (uint16_t)mr;
+    payload.status_report_status = (uint16_t)st;
+    payload.sim_slot = 0U;
+    payload.timestamp_ms = unified_time_now_ms();
+    unified_copy_cstr(payload.raw, sizeof(payload.raw), line);
+
+    modem_a7670_queue_sms_delivery_locked(&payload);
 }
 
 static void modem_a7670_parse_ussd_result_locked(const char *line) {
@@ -1208,6 +1292,8 @@ static void modem_a7670_parse_line_locked(const char *line) {
         modem_a7670_parse_ussd_result_locked(line);
     } else if (strncmp(line, "+CMTI:", 6) == 0) {
         modem_a7670_parse_sms_index_locked(line);
+    } else if (strncmp(line, "+CDS:", 5) == 0) {
+        modem_a7670_parse_sms_delivery_report_locked(line);
     }
 }
 
@@ -1675,14 +1761,18 @@ static esp_err_t modem_a7670_probe_uart_sideband(bool refresh_data_session) {
             modem_a7670_command("AT+CREG=2", response, sizeof(scratch->probe_response), CONFIG_UNIFIED_MODEM_AT_TIMEOUT_MS) == ESP_OK &&
             modem_a7670_command("AT+CGREG=2", response, sizeof(scratch->probe_response), CONFIG_UNIFIED_MODEM_AT_TIMEOUT_MS) == ESP_OK &&
             modem_a7670_command("AT+CEREG=2", response, sizeof(scratch->probe_response), CONFIG_UNIFIED_MODEM_AT_TIMEOUT_MS) == ESP_OK &&
+            /* A76XX AT manual: CSMS=1 selects GSM phase 2+ SMS service and
+             * CGSMS=3 keeps MO SMS circuit-switched preferred with GPRS fallback. */
+            modem_a7670_command("AT+CSMS=1", response, sizeof(scratch->probe_response), CONFIG_UNIFIED_MODEM_AT_TIMEOUT_MS) == ESP_OK &&
+            modem_a7670_command("AT+CGSMS=3", response, sizeof(scratch->probe_response), CONFIG_UNIFIED_MODEM_AT_TIMEOUT_MS) == ESP_OK &&
             /* Set SMS storage to modem flash (ME) instead of SIM for larger capacity (typically 200+ messages vs 20-30). */
             modem_a7670_command("AT+CPMS=\"ME\",\"ME\",\"ME\"", response, sizeof(scratch->probe_response), CONFIG_UNIFIED_MODEM_AT_TIMEOUT_MS) == ESP_OK &&
             /* SIMCom documents IRA as the default-safe TE character set.
              * GSM can interfere with software flow control on some revisions. */
             modem_a7670_command("AT+CSCS=\"IRA\"", response, sizeof(scratch->probe_response), CONFIG_UNIFIED_MODEM_AT_TIMEOUT_MS) == ESP_OK &&
             modem_a7670_command("AT+CMGF=1", response, sizeof(scratch->probe_response), CONFIG_UNIFIED_MODEM_AT_TIMEOUT_MS) == ESP_OK &&
-            /* Store incoming SMS and emit +CMTI index URCs so reads are queued and not lost. */
-            modem_a7670_command("AT+CNMI=2,1,0,0,0", response, sizeof(scratch->probe_response), CONFIG_UNIFIED_MODEM_AT_TIMEOUT_MS) == ESP_OK) {
+            /* Store incoming SMS via +CMTI and route status reports via +CDS for fast delivery updates. */
+            modem_a7670_command("AT+CNMI=2,1,0,1,0", response, sizeof(scratch->probe_response), CONFIG_UNIFIED_MODEM_AT_TIMEOUT_MS) == ESP_OK) {
             s_telephony_baseline_configured = true;
         }
     }
@@ -2884,6 +2974,28 @@ bool modem_a7670_pop_sms_index(int *out_index) {
         *out_index = s_sms_index_queue[s_sms_head];
         s_sms_head = (s_sms_head + 1U) % CONFIG_UNIFIED_MODEM_EVENT_QUEUE_DEPTH;
         s_sms_count--;
+        has_value = true;
+    }
+
+    xSemaphoreGive(s_lock);
+    return has_value;
+}
+
+bool modem_a7670_pop_sms_delivery(unified_sms_delivery_payload_t *out_payload) {
+    bool has_value = false;
+
+    if (!out_payload || !s_lock) {
+        return false;
+    }
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return false;
+    }
+
+    if (s_sms_delivery_count > 0U) {
+        *out_payload = s_sms_delivery_queue[s_sms_delivery_head];
+        memset(&s_sms_delivery_queue[s_sms_delivery_head], 0, sizeof(s_sms_delivery_queue[s_sms_delivery_head]));
+        s_sms_delivery_head = (s_sms_delivery_head + 1U) % CONFIG_UNIFIED_MODEM_EVENT_QUEUE_DEPTH;
+        s_sms_delivery_count--;
         has_value = true;
     }
 

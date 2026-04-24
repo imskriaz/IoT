@@ -17,6 +17,15 @@ typedef struct {
 } unified_sms_payload_t;
 
 typedef struct {
+    char to[UNIFIED_TEXT_SHORT_LEN];
+    char raw[UNIFIED_TEXT_LONG_LEN];
+    uint16_t message_reference;
+    uint16_t status_report_status;
+    uint8_t sim_slot;
+    uint32_t timestamp_ms;
+} unified_sms_delivery_payload_t;
+
+typedef struct {
     char number[UNIFIED_TEXT_SHORT_LEN];
     char state[UNIFIED_TEXT_SHORT_LEN];
     uint8_t sim_slot;

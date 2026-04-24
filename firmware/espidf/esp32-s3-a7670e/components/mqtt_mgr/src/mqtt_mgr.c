@@ -1641,6 +1641,31 @@ esp_err_t mqtt_mgr_publish_sms_incoming(const unified_sms_payload_t *payload) {
     return err;
 }
 
+esp_err_t mqtt_mgr_publish_sms_delivery(const unified_sms_delivery_payload_t *payload) {
+    char to[UNIFIED_TEXT_SHORT_LEN * 2U] = {0};
+    char raw[UNIFIED_TEXT_LONG_LEN * 2U] = {0};
+    char json[384] = {0};
+
+    if (!payload) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    mqtt_mgr_copy_json_string(to, sizeof(to), payload->to);
+    mqtt_mgr_copy_json_string(raw, sizeof(raw), payload->raw);
+    snprintf(
+        json,
+        sizeof(json),
+        "{\"type\":\"sms_delivery\",\"to\":\"%s\",\"message_reference\":%u,\"status_report_status\":%u,\"sim_slot\":%u,\"timestamp\":%" PRIu32 ",\"raw_report\":\"%s\"}",
+        to,
+        (unsigned)payload->message_reference,
+        (unsigned)payload->status_report_status,
+        (unsigned)payload->sim_slot,
+        payload->timestamp_ms,
+        raw
+    );
+    return mqtt_mgr_publish_text("sms/delivery", json);
+}
+
 esp_err_t mqtt_mgr_publish_call_event(const unified_call_payload_t *payload) {
     char number[64] = {0};
     char state[64] = {0};

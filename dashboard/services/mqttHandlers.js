@@ -21,6 +21,7 @@ const {
 const { syncDeviceSimInventory } = require('./simInventoryService');
 const { parseUssdMenuOptions } = require('../utils/ussdSession');
 const { extractSimScope, appendSimScopeCondition } = require('../utils/simScope');
+const { normalizeSmsDeliveryReport } = require('../utils/smsDeliveryReports');
 
 const INITIAL_STATUS_PRIME_DELAY_MS = 20000;
 const INITIAL_STATUS_PRIME_SPREAD_MS = 1000;
@@ -1475,6 +1476,60 @@ class MQTTHandlers {
             }
 
             this.toDevice(deviceId, 'sms:delivered', { deviceId, ...data });
+        });
+
+        this.mqttService.on('sms:delivery', async (deviceId, data = {}) => {
+            if (this.isDeletedDevice(deviceId)) return;
+
+            const deliveryReport = normalizeSmsDeliveryReport(data);
+            const deliveryStatus = deliveryReport.status;
+            const errorText = deliveryStatus === 'failed'
+                ? (data?.error || data?.message || data?.detail || 'SMS delivery failed')
+                : null;
+
+            try {
+                const db = this.app.locals.db;
+                if (db && deliveryStatus !== 'pending') {
+                    const messageId = String(data?.messageId || data?.action_id || '').trim();
+                    if (messageId) {
+                        await db.run(
+                            `UPDATE sms
+                             SET status = ?,
+                                 delivered_at = CASE WHEN ? = 'delivered' THEN CURRENT_TIMESTAMP ELSE delivered_at END,
+                                 error = ?
+                             WHERE device_id = ?
+                               AND external_id = ?`,
+                            [deliveryStatus, deliveryStatus, errorText, deviceId, messageId]
+                        );
+                    } else {
+                        await db.run(`
+                            UPDATE sms
+                            SET status = ?,
+                                delivered_at = CASE WHEN ? = 'delivered' THEN CURRENT_TIMESTAMP ELSE delivered_at END,
+                                error = ?
+                            WHERE rowid = (
+                                SELECT rowid
+                                FROM sms
+                                WHERE device_id = ?
+                                  AND to_number = ?
+                                  AND status IN ('queued', 'sending', 'sent')
+                                ORDER BY timestamp DESC
+                                LIMIT 1
+                            )
+                        `, [deliveryStatus, deliveryStatus, errorText, deviceId, data.to || data.number || '']);
+                    }
+                }
+            } catch (error) {
+                logger.error('Error updating SMS delivery report status:', error);
+            }
+
+            this.toDevice(
+                deviceId,
+                deliveryStatus === 'delivered'
+                    ? 'sms:delivered'
+                    : (deliveryStatus === 'failed' ? 'sms:send-failed' : 'sms:delivery'),
+                { deviceId, ...data, status: deliveryStatus, error: errorText }
+            );
         });
     }
 

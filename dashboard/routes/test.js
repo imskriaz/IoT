@@ -4,6 +4,7 @@ const { body, validationResult } = require('express-validator');
 const logger = require('../utils/logger');
 const { DEFAULT_DEVICE_ID } = require('../config/device');
 const { getDeviceCapabilities, isCapabilityAvailable } = require('../utils/deviceCapabilities');
+const { resolveSmsCommand } = require('../utils/smsLimits');
 const fs = require('fs');
 const path = require('path');
 
@@ -866,7 +867,7 @@ async function testModem(deviceId, runId, test, params) {
 async function testSMS(deviceId, runId, test, params) {
     const startTime = Date.now();
     const timeoutMs = Math.max(10000, Number(test.timeout || 10000));
-    const targetNumber = String(params.to || '').trim();
+    let targetNumber = String(params.to || '').trim();
     const message = String(params.message || `Dashboard SMS test ${new Date().toISOString()}`).trim();
 
     updateTestProgress(deviceId, runId, 15, 'Requesting live device status...');
@@ -903,18 +904,36 @@ async function testSMS(deviceId, runId, test, params) {
         smsLastDestination: statusPayload.sms_last_destination || null
     };
 
+    if (!targetNumber) {
+        targetNumber = String(
+            statusPayload.modem_subscriber_number ||
+            statusPayload.subscriber_number ||
+            statusPayload.sim_number ||
+            ''
+        ).trim();
+        if (targetNumber) {
+            readiness.selfTestNumber = targetNumber;
+        }
+    }
+
     updateTestProgress(deviceId, runId, 55, 'Evaluating SMS readiness...');
 
     let sendResult = null;
     if (targetNumber) {
-        updateTestProgress(deviceId, runId, 75, `Sending live SMS to ${targetNumber}...`);
+        const resolvedSms = resolveSmsCommand(message);
+        updateTestProgress(deviceId, runId, 75, `Sending ${resolvedSms.analysis.encoding === 'unicode' ? 'Unicode' : 'GSM'} SMS to ${targetNumber}...`);
         sendResult = await publishTestCommand(
             deviceId,
             runId,
-            'send-sms',
-            { to: targetNumber, message },
+            resolvedSms.command,
+            {
+                to: targetNumber,
+                message,
+                timeout: resolvedSms.timeoutMs,
+                ...(resolvedSms.metadata || {})
+            },
             true,
-            60000,
+            resolvedSms.timeoutMs || 60000,
             'send test sms'
         );
     }

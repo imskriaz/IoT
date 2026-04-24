@@ -98,10 +98,15 @@ describe('sms route queue-first delivery', () => {
             expect.objectContaining({
                 to: '+8801555123456',
                 message: 'queued hello',
-                smsId: 41
+                smsId: 41,
+                sms_encoding: 'gsm7',
+                sms_transport_encoding: 'ira',
+                sms_parts: 1,
+                sms_multipart: false,
+                timeout: 45000
             }),
             false,
-            60000,
+            45000,
             expect.objectContaining({
                 source: 'dashboard-sms',
                 userId: 7,
@@ -150,10 +155,15 @@ describe('sms route queue-first delivery', () => {
             expect.objectContaining({
                 to: '+8801555123456',
                 message: multipartMessage,
-                smsId: 61
+                smsId: 61,
+                sms_encoding: 'gsm7',
+                sms_transport_encoding: 'ira',
+                sms_parts: 6,
+                sms_multipart: true,
+                timeout: 75000
             }),
             false,
-            60000,
+            75000,
             expect.objectContaining({
                 messageId: expect.stringMatching(/^send-sms-multipart_/)
             })
@@ -199,7 +209,12 @@ describe('sms route queue-first delivery', () => {
             expect.objectContaining({
                 to: '+8801555123456',
                 message: banglaMessage,
-                smsId: 71
+                smsId: 71,
+                sms_encoding: 'unicode',
+                sms_transport_encoding: 'ucs2',
+                sms_parts: 1,
+                sms_multipart: false,
+                timeout: 60000
             }),
             false,
             60000,
@@ -248,7 +263,12 @@ describe('sms route queue-first delivery', () => {
             expect.objectContaining({
                 to: '+8801555123456',
                 message: banglaMultipartMessage,
-                smsId: 72
+                smsId: 72,
+                sms_encoding: 'unicode',
+                sms_transport_encoding: 'ucs2',
+                sms_parts: 2,
+                sms_multipart: true,
+                timeout: 60000
             }),
             false,
             60000,
