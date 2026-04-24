@@ -493,19 +493,12 @@ class MQTTService extends EventEmitter {
                 smsMetadata.sms_pdu.trim() &&
                 (payloadProvidesPdu || !metadataPduIsMultipart);
             const message = {
-                action_id: messageId,
-                command: normalizedCommand === 'send-sms-multipart' ? 'send_sms_multipart' : 'send_sms'
+                action_id: messageId
             };
             if (hasDashboardPdu) {
                 message.sms_pdu = smsMetadata.sms_pdu;
-                if (Number.isFinite(Number(smsMetadata.sms_pdu_length)) && Number(smsMetadata.sms_pdu_length) > 0) {
-                    message.sms_pdu_length = Number(smsMetadata.sms_pdu_length);
-                }
-                const pduCount = Number(smsMetadata.sms_pdu_count);
-                if (Number.isFinite(pduCount) && pduCount > 1 && normalizedCommand !== 'send-sms-multipart') {
-                    message.sms_parts = pduCount;
-                }
             } else {
+                message.command = normalizedCommand === 'send-sms-multipart' ? 'send_sms_multipart' : 'send_sms';
                 message.number = number;
                 message.text = text;
                 if (smsMetadata.sms_transport_encoding) {

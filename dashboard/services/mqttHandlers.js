@@ -180,14 +180,29 @@ function normalizeSmsTimestamp(value) {
     if (typeof value === 'string') {
         const trimmed = value.trim();
         if (trimmed) {
-            const parsed = new Date(trimmed);
-            if (Number.isFinite(parsed.getTime()) && parsed.getFullYear() >= 2020) {
-                return parsed.toISOString();
+            const parsedMs = parseSmsTimestampMs(trimmed);
+            if (Number.isFinite(parsedMs)) {
+                const parsed = new Date(parsedMs);
+                if (parsed.getFullYear() >= 2020) {
+                    return parsed.toISOString();
+                }
             }
         }
     }
 
     return new Date().toISOString();
+}
+
+function parseSmsTimestampMs(value) {
+    const text = String(value || '').trim();
+    if (!text) return NaN;
+
+    const isoLikeWithoutZone = text.replace(' ', 'T');
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(isoLikeWithoutZone)) {
+        return Date.parse(`${isoLikeWithoutZone}Z`);
+    }
+
+    return Date.parse(text);
 }
 
 function formatUptime(seconds) {
@@ -713,14 +728,14 @@ class MQTTHandlers {
     }
 
     _findRecentMatchingOutgoingSms(rows, incomingTimestamp, simSlot = null) {
-        const incomingMs = Date.parse(String(incomingTimestamp || ''));
+        const incomingMs = parseSmsTimestampMs(incomingTimestamp);
         const timeWindowMs = 15 * 60 * 1000;
         const normalizedSimSlot = simSlot == null || simSlot === '' ? null : Number(simSlot);
         const candidates = Array.isArray(rows) ? rows : [];
         let best = null;
 
         for (const row of candidates) {
-            const outgoingMs = Date.parse(String(row?.timestamp || ''));
+            const outgoingMs = parseSmsTimestampMs(row?.timestamp);
             const rowSimSlot = row?.sim_slot == null || row?.sim_slot === '' ? null : Number(row.sim_slot);
 
             if (normalizedSimSlot !== null && rowSimSlot !== null && rowSimSlot !== normalizedSimSlot) {

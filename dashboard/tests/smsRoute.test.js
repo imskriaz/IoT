@@ -260,7 +260,7 @@ describe('sms route queue-first delivery', () => {
             queued: true,
             id: 72
         }));
-        expect(global.mqttService.publishCommand).toHaveBeenCalledTimes(2);
+        expect(global.mqttService.publishCommand).toHaveBeenCalledTimes(5);
         expect(global.mqttService.publishCommand).toHaveBeenNthCalledWith(
             1,
             'device-1',
@@ -279,7 +279,7 @@ describe('sms route queue-first delivery', () => {
             })
         );
         expect(global.mqttService.publishCommand).toHaveBeenNthCalledWith(
-            2,
+            5,
             'device-1',
             'send-sms',
             expect.objectContaining({
@@ -292,7 +292,7 @@ describe('sms route queue-first delivery', () => {
             false,
             60000,
             expect.objectContaining({
-                messageId: expect.stringMatching(/^sms_.*_p2$/)
+                messageId: expect.stringMatching(/^sms_.*_p5$/)
             })
         );
     });

@@ -6,6 +6,8 @@ const { assertUserSmsWithinLimits } = require('./userAccessService');
 const { resolveSmsCommandForRecipient } = require('../utils/smsLimits');
 const { buildSmsSubmitPdus } = require('../utils/smsPdu');
 
+const MODEM_MQTT_UNICODE_PDU_SEGMENT_SIZE = 17;
+
 function buildSmsCommandMessageId(command = 'send-sms') {
     const normalized = String(command || 'send-sms').trim().toLowerCase();
     const prefix = normalized === 'send-sms' || normalized === 'send-sms-multipart' ? 'sms' : 'cmd';
@@ -163,7 +165,7 @@ async function queueSmsForDelivery({
             Number(smsTransport.sms_parts) > 1
             ? buildSmsSubmitPdus(formattedNumber, message, {
                 requestStatusReport: true,
-                segmentSize: 50
+                segmentSize: MODEM_MQTT_UNICODE_PDU_SEGMENT_SIZE
             }).map((pdu) => pdu.pdu)
             : [];
         const queueResults = [];

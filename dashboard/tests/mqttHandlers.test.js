@@ -682,6 +682,56 @@ describe('MQTTHandlers SMS storage', () => {
         );
     });
 
+    test('reconciles a sent outgoing SMS when dashboard timestamp has no timezone', async () => {
+        const { mqttService, db, room } = buildSmsSubject();
+
+        db.get.mockImplementation(async (sql) => {
+            const query = String(sql);
+            if (query.includes('SELECT id FROM devices')) {
+                return { id: 'test-device-1' };
+            }
+            return null;
+        });
+        db.all.mockImplementation(async (sql) => {
+            const query = String(sql);
+            if (query.includes("FROM sms") && query.includes("type = 'outgoing'")) {
+                return [{
+                    id: 272,
+                    conversation_id: 20,
+                    external_id: null,
+                    status: 'sent',
+                    timestamp: '2026-04-24T11:43:41.444',
+                    sim_slot: 0
+                }];
+            }
+            return [];
+        });
+
+        mqttService.emit('sms:incoming', 'test-device-1', {
+            from: '+8801555123456',
+            message: 'regular loopback token',
+            timestamp: '2026-04-24T11:45:15.229Z',
+            sim_slot: 0
+        });
+
+        await flushAsync();
+
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining("SET status = 'delivered'"),
+            ['2026-04-24T11:45:15.229Z', 272]
+        );
+        expect(room.emit).toHaveBeenCalledWith(
+            'sms:delivered',
+            expect.objectContaining({
+                deviceId: 'test-device-1',
+                id: 272,
+                conversationId: 20,
+                evidence: 'incoming_sms_match',
+                status: 'delivered'
+            })
+        );
+    });
+
     test('failed firmware delivery report marks latest outgoing SMS failed', async () => {
         const { mqttService, db, room } = buildSmsSubject();
 
