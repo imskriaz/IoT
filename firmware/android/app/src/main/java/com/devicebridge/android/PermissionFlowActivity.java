@@ -18,8 +18,10 @@ public class PermissionFlowActivity extends Activity {
 
     private TextView headline;
     private TextView detail;
+    private TextView progressSummary;
     private TextView permissionList;
     private Button grantButton;
+    private Button settingsButton;
     private Button continueButton;
     private boolean autoPrompted;
     private boolean autoRouting;
@@ -82,9 +84,12 @@ public class PermissionFlowActivity extends Activity {
 
     private LinearLayout buildActiveCard() {
         LinearLayout card = BridgeUi.sectionCard(this, "Next Access", "");
+        progressSummary = BridgeUi.textBlock(this, 12, false);
+        progressSummary.setTypeface(Typeface.DEFAULT_BOLD);
         headline = BridgeUi.textBlock(this, 15, true);
         headline.setTypeface(Typeface.DEFAULT_BOLD);
         detail = BridgeUi.textBlock(this, 12, false);
+        card.addView(progressSummary, BridgeUi.fullWidth(this));
         card.addView(headline, BridgeUi.fullWidth(this));
         card.addView(detail, BridgeUi.fullWidth(this));
         return card;
@@ -104,7 +109,7 @@ public class PermissionFlowActivity extends Activity {
         LinearLayout row = BridgeUi.horizontalRow(this);
         grantButton = BridgeUi.smallButton(this, "Grant Next", "#0d6efd", Color.WHITE);
         grantButton.setOnClickListener(v -> requestNextPermission());
-        Button settingsButton = BridgeUi.smallButton(this, "App Settings", "#e2e8f0", Color.parseColor("#0f172a"));
+        settingsButton = BridgeUi.smallButton(this, "App Settings", "#e2e8f0", Color.parseColor("#0f172a"));
         settingsButton.setOnClickListener(v -> BridgePermissionHelper.openAppSettings(this));
         row.addView(grantButton, BridgeUi.weightedWidth());
         row.addView(BridgeUi.spacer(this));
@@ -119,23 +124,40 @@ public class PermissionFlowActivity extends Activity {
 
     private void render() {
         BridgePermissionHelper.PermissionItem missing = BridgePermissionHelper.firstMissingCore(this);
+        List<BridgePermissionHelper.PermissionItem> items = BridgePermissionHelper.collectCore(this);
+        int grantedCount = 0;
+        int settingsCount = 0;
+        for (BridgePermissionHelper.PermissionItem item : items) {
+            if (item.granted) {
+                grantedCount += 1;
+            } else if (item.needsSettings) {
+                settingsCount += 1;
+            }
+        }
+
+        progressSummary.setText(grantedCount + " of " + items.size() + " required permissions ready"
+                + (settingsCount > 0 ? " - " + settingsCount + " needs App Settings" : ""));
+
         if (missing == null) {
             headline.setText("All access ready");
-            detail.setText("Everything needed is granted. Moving to the next screen...");
+            detail.setText("Everything needed is granted. Continue to the bridge dashboard.");
             grantButton.setEnabled(false);
-            continueButton.setEnabled(false);
-            continueButton.setVisibility(Button.GONE);
+            grantButton.setText("Ready");
+            settingsButton.setEnabled(false);
+            continueButton.setVisibility(Button.VISIBLE);
+            continueButton.setEnabled(true);
         } else {
             headline.setText(missing.label);
             detail.setText(BridgePermissionHelper.purposeFor(missing.permission)
                     + (missing.needsSettings ? "\n\nAndroid is blocking the prompt. Open App Settings and allow it there." : ""));
             grantButton.setEnabled(!missing.needsSettings);
+            grantButton.setText(missing.needsSettings ? "Use App Settings" : "Grant " + missing.label);
+            settingsButton.setEnabled(true);
             continueButton.setVisibility(Button.VISIBLE);
             continueButton.setEnabled(false);
         }
 
         StringBuilder builder = new StringBuilder();
-        List<BridgePermissionHelper.PermissionItem> items = BridgePermissionHelper.collectCore(this);
         for (BridgePermissionHelper.PermissionItem item : items) {
             if (builder.length() > 0) {
                 builder.append('\n');

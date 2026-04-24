@@ -534,6 +534,7 @@ public class HomeActivity extends Activity {
         scroll.addView(root);
 
         root.addView(setupHero(), fullWidth(12));
+        root.addView(setupStepsCard(), fullWidth(12));
         if (!setupStatus.trim().isEmpty()) {
             root.addView(statusBanner(setupStatus), fullWidth(12));
         }
@@ -643,6 +644,33 @@ public class HomeActivity extends Activity {
         pills.addView(pill(deviceId.isEmpty() ? "New device" : deviceId, "#e0f2fe", "#075985"));
         hero.addView(pills);
         return hero;
+    }
+
+    private View setupStepsCard() {
+        LinearLayout card = card(14, 22);
+        card.addView(text("Setup path", 15, "#0f172a", true), fullWidth(8));
+        card.addView(setupStepRow("1", "Scan or paste setup code", "Import the dashboard provisioning token.", "#0b5ed7"), fullWidth(8));
+        card.addView(setupStepRow("2", "Grant bridge access", "Allow SMS, Wi-Fi status, and notifications when prompted.", "#0f766e"), fullWidth(8));
+        card.addView(setupStepRow("3", "Start bridge", "Keep the foreground service running so dashboard commands reach this phone.", "#7c3aed"));
+        return card;
+    }
+
+    private View setupStepRow(String number, String title, String detail, String accent) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView badge = text(number, 12, accent, true);
+        badge.setGravity(Gravity.CENTER);
+        badge.setBackground(translucentRound(accent, 0x20, 999));
+        row.addView(badge, fixed(28, 28, 10));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(text(title, 12, "#0f172a", true));
+        copy.addView(text(detail, 11, "#64748b", false));
+        row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        return row;
     }
 
     private View statusBanner(String message) {

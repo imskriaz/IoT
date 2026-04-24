@@ -15,7 +15,7 @@ Current transport rule:
 
 ## Repo Paths
 
-- ESP32 active firmware: [firmware/esp32-s3-a7670e/espidf](D:/Projects/IoT/firmware/esp32-s3-a7670e/espidf)
+- ESP32 active firmware: [firmware/espidf/esp32-s3-a7670e](D:/Projects/IoT/firmware/espidf/esp32-s3-a7670e)
 - Android bridge app: [firmware/android](D:/Projects/IoT/firmware/android)
 - Flutter UI: [firmware/android/flutter_ui](D:/Projects/IoT/firmware/android/flutter_ui)
 - Dashboard server: [dashboard](D:/Projects/IoT/dashboard)
@@ -89,11 +89,11 @@ The table below uses the preferred runtime lane for each feature.
 
 ## Build Notes
 
-- Keep the current firmware folder layout as-is: `firmware/esp32-s3-a7670e/espidf`.
+- Keep the current firmware folder layout as-is: `firmware/espidf/esp32-s3-a7670e`.
 - Use `.\.toolchain\build-firmware.ps1` to build the ESP32 firmware.
 - Use `.\.toolchain\flash-firmware.ps1 -Port COM5` to flash it.
-- Dashboard status validation uses `firmware/esp32-s3-a7670e/espidf/verify-status-payload.js`.
-- For firmware behavior, the vendor bundle under `firmware/esp32-s3-a7670e/docs/vendor/` is the source of truth.
+- Dashboard status validation uses `firmware/espidf/esp32-s3-a7670e/verify-status-payload.js`.
+- For firmware behavior, the vendor bundle under `firmware/espidf/esp32-s3-a7670e/docs/vendor/` is the source of truth.
 
 ## Dashboard Flow Audit
 
@@ -104,7 +104,7 @@ The current ESP32 dashboard audit was reviewed in this order: `SMS`, `Call`, `Mo
 - `Modem`: supported for modem readiness, SIM/operator state, signal, mobile-data enable or disable, APN updates, and MQTT session health. Keep modem capability decisions aligned with the status payload and device capability profile.
 - `Internet`: Wi-Fi is the preferred internet path. The modem data lane is the fallback path when Wi-Fi is unavailable. Dashboard actions should assume support for Wi-Fi status, scan, reconnect, disconnect, toggle, and modem-data routing rather than direct browser-to-device internet control.
 
-These support statements are intentionally constrained to the active firmware under `firmware/esp32-s3-a7670e/espidf` and the vendor references under `firmware/esp32-s3-a7670e/docs/vendor/`.
+These support statements are intentionally constrained to the active firmware under `firmware/espidf/esp32-s3-a7670e` and the vendor references under `firmware/espidf/esp32-s3-a7670e/docs/vendor/`.
 
 ## More Detail
 

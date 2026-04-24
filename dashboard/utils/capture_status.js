@@ -145,15 +145,28 @@ function fileStamp() {
 }
 
 function getVerifierPath() {
-    return path.join(
-        __dirname,
-        '..',
-        '..',
-        'firmware',
-        'espidf',
-        'esp32-s3-a7670e',
-        'verify-status-payload.js'
-    );
+    const candidates = [
+        path.join(
+            __dirname,
+            '..',
+            '..',
+            'firmware',
+            'espidf',
+            'esp32-s3-a7670e',
+            'verify-status-payload.js'
+        ),
+        path.join(
+            __dirname,
+            '..',
+            '..',
+            'firmware',
+            'esp32-s3-a7670e',
+            'espidf',
+            'verify-status-payload.js'
+        )
+    ];
+
+    return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
 }
 
 function validatePayload(savedPath) {

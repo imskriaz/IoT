@@ -1387,8 +1387,17 @@ function renderProvisioningPanel() {
             <div class="row g-4 align-items-start">
                 <div class="col-lg-5 text-center">
                     <h5 class="mb-2">Device Bridge App Setup</h5>
-                    <p class="text-muted small mb-3">Open the Device Bridge app and scan this QR. It carries the same secure setup code shown on the right.</p>
+                    <p class="text-muted small mb-3">Open the Device Bridge app on the phone and scan this QR. It carries the same secure setup code shown on the right.</p>
                     <img src="${provisioning.qr_data_url}" alt="Device Bridge setup QR" class="img-fluid border rounded p-2 bg-white" style="max-width:280px;">
+                    <div class="alert alert-primary small text-start mt-3 mb-0">
+                        <div class="fw-semibold mb-1"><i class="bi bi-phone me-1"></i>Phone-side order</div>
+                        <ol class="mb-0 ps-3">
+                            <li>Open Device Bridge on the installed phone.</li>
+                            <li>Tap Scan dashboard QR or paste the setup code.</li>
+                            <li>Grant the missing SMS, Wi-Fi, and notification permissions.</li>
+                            <li>Start the bridge and keep battery optimization disabled.</li>
+                        </ol>
+                    </div>
                 </div>
                 <div class="col-lg-7">
                     <h6 class="mb-2">Provisioning summary</h6>
@@ -1405,7 +1414,15 @@ function renderProvisioningPanel() {
                         No raw MQTT credentials are shown here. Use the secure setup code below or the QR scanner in the Device Bridge app.
                     </div>
                     <label class="form-label small text-muted">Secure setup code</label>
-                    <textarea class="form-control font-monospace" rows="8" readonly>${escHtml(provisioning.setup_token || '')}</textarea>
+                    <textarea class="form-control font-monospace" id="androidSetupToken" rows="8" readonly>${escHtml(provisioning.setup_token || '')}</textarea>
+                    <div class="d-flex flex-wrap gap-2 mt-2">
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyAndroidSetupCode()">
+                            <i class="bi bi-clipboard me-1"></i>Copy setup code
+                        </button>
+                        <a class="btn btn-sm btn-outline-secondary" href="/devices/settings?device=${encodeURIComponent(summary.device_id || '')}">
+                            <i class="bi bi-gear me-1"></i>Open device settings
+                        </a>
+                    </div>
                 </div>
             </div>
         `;
@@ -1415,6 +1432,22 @@ function renderProvisioningPanel() {
 
     panel.style.display = 'none';
     content.innerHTML = '';
+}
+
+function copyAndroidSetupCode() {
+    const token = document.getElementById('androidSetupToken')?.value || '';
+    if (!token) {
+        showToast('No setup code is available yet.', 'warning');
+        return;
+    }
+    navigator.clipboard.writeText(token)
+        .then(() => showToast('Setup code copied.', 'success'))
+        .catch(() => {
+            const field = document.getElementById('androidSetupToken');
+            field?.focus();
+            field?.select();
+            showToast('Select and copy the setup code manually.', 'warning');
+        });
 }
 
 function activateDoneDevice(event) {
