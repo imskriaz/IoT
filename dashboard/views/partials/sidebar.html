@@ -1,0 +1,811 @@
+<% const deviceNavVisible = (typeof hasActiveDevice === 'undefined') ? Boolean(typeof deviceId === 'undefined' ? '' : deviceId) : Boolean(hasActiveDevice); %>
+<div class="sidebar-content <%= deviceNavVisible ? '' : 'device-nav-empty' %>">
+    <!-- User Info (mobile only) -->
+    <div class="d-md-none mb-4 pb-3 border-bottom">
+        <div class="d-flex align-items-center">
+            <div class="bg-primary bg-opacity-10 rounded-circle p-3 me-3">
+                <i class="bi bi-person-circle fs-3 text-primary"></i>
+            </div>
+            <div>
+                <h6 class="mb-1">
+                    <%= user?.name || user?.username %>
+                </h6>
+                <small class="text-muted">
+                    <%= user?.email || 'No email' %>
+                </small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Device Selector -->
+    <div class="mb-3 pb-2 border-bottom" data-device-nav="true" data-device-selector="true">
+        <label class="sidebar-device-label form-label mb-1">Device</label>
+        <select class="form-select form-select-sm" id="sidebarDeviceSelector" onchange="switchDevice(this.value)" title="Switch active device">
+            <option value="">Loading...</option>
+        </select>
+    </div>
+    <div class="mb-2 pb-2 border-bottom app-hidden" id="sidebarSimSelectorWrap" data-device-nav="true" data-sim-selector="true">
+        <select class="form-select form-select-sm" id="sidebarSimSelector" onchange="switchActiveSim(this.value)" title="Choose active SIM for this device">
+            <option value="">Primary SIM</option>
+        </select>
+    </div>
+
+    <!-- Main Navigation -->
+    <ul class="nav nav-pills flex-column mb-4">
+        <li class="nav-item">
+            <a href="/dashboard" class="nav-link <%= title === 'Dashboard' ? 'active' : '' %>">
+                <i class="bi bi-speedometer2"></i>
+                <span>Dashboard</span>
+            </a>
+        </li>
+
+        <!-- Communication Section -->
+        <li class="nav-item mt-3" data-device-nav="true" data-nav-section-header="communication">
+            <small class="text-muted text-uppercase fw-bold px-2">Communication</small>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="communication" data-cap="sms">
+            <a href="/sms"
+                class="nav-link d-flex justify-content-between align-items-center <%= title === 'SMS Management' ? 'active' : '' %>">
+                <span>
+                    <i class="bi bi-chat-dots"></i>
+                    <span>SMS</span>
+                </span>
+                <span class="app-hidden badge bg-danger rounded-pill" id="unreadSmsBadge">0</span>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="communication" data-cap="calls">
+            <a href="/calls" class="nav-link <%= title === 'Call Management' ? 'active' : '' %>">
+                <i class="bi bi-telephone"></i>
+                <span>Calls</span>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="communication" data-cap="contacts">
+            <a href="/contacts" class="nav-link <%= title === 'Contact Management' ? 'active' : '' %>">
+                <i class="bi bi-person-lines-fill"></i>
+                <span>Contacts</span>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="communication" data-cap="ussd">
+            <a href="/ussd" class="nav-link <%= title === 'USSD Services' ? 'active' : '' %>">
+                <i class="bi bi-telephone-forward"></i>
+                <span>USSD</span>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="communication" data-cap="internet" data-hide-device-type="android">
+            <a href="/modem" class="nav-link <%= title === 'Modem Control' ? 'active' : '' %>">
+                <i class="bi bi-wifi"></i>
+                <span>Internet</span>
+            </a>
+        </li>
+
+        <!-- Module Section -->
+        <li class="nav-item mt-3" data-device-nav="true" data-nav-section-header="module">
+            <small class="text-muted text-uppercase fw-bold px-2">Module</small>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="module" data-cap="webcam">
+            <a href="/webcam" class="nav-link <%= title === 'Camera' ? 'active' : '' %>">
+                <i class="bi bi-camera"></i>
+                <span>Camera</span>
+                <i class="app-hidden cap-warn cap-warn-icon bi bi-question-circle-fill text-warning ms-auto" title="Camera module not on this device"></i>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="module" data-cap="intercom">
+            <a href="/intercom" class="nav-link <%= title === 'Intercom' ? 'active' : '' %>">
+                <i class="bi bi-camera-video"></i>
+                <span>Intercom</span>
+                <i class="app-hidden cap-warn cap-warn-icon bi bi-question-circle-fill text-warning ms-auto" title="Intercom support depends on camera and audio modules"></i>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="module" data-cap-any="storage,sd">
+            <a href="/storage" class="nav-link <%= title === 'Storage Manager' ? 'active' : '' %>">
+                <i class="bi bi-hdd-stack"></i>
+                <span>Storage</span>
+                <i class="app-hidden cap-warn cap-warn-icon bi bi-question-circle-fill text-warning ms-auto" title="SD card not on this device"></i>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="module" data-cap="gps">
+            <a href="/location" class="nav-link <%= (title === 'GPS' || title === 'GPS Location') ? 'active' : '' %>">
+                <i class="bi bi-geo-alt"></i>
+                <span>GPS</span>
+                <span class="app-hidden badge bg-info ms-2" id="gpsBadge">3D</span>
+                <i class="app-hidden cap-warn cap-warn-icon bi bi-question-circle-fill text-warning ms-auto" title="GPS not on this device"></i>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="module" data-cap="gpio">
+            <a href="/gpio" class="nav-link <%= title === 'GPIO' ? 'active' : '' %>">
+                <i class="bi bi-motherboard"></i>
+                <span>GPIO</span>
+                <span class="app-hidden badge bg-success ms-2" id="gpioBadge">8</span>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="module" data-cap="display">
+            <a href="/display" class="nav-link <%= title === 'Display' ? 'active' : '' %>">
+                <i class="bi bi-display"></i>
+                <span>Display</span>
+                <i class="app-hidden cap-warn cap-warn-icon bi bi-question-circle-fill text-warning ms-auto" title="Display support pending on this device"></i>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="module" data-cap="nfc">
+            <a href="/nfc" class="nav-link <%= title === 'NFC' ? 'active' : '' %>">
+                <i class="bi bi-broadcast-pin"></i>
+                <span>NFC</span>
+                <i class="app-hidden cap-warn cap-warn-icon bi bi-question-circle-fill text-warning ms-auto" title="NFC support pending on this device"></i>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="module" data-cap="rfid">
+            <a href="/rfid" class="nav-link <%= title === 'RFID' ? 'active' : '' %>">
+                <i class="bi bi-upc-scan"></i>
+                <span>RFID</span>
+                <i class="app-hidden cap-warn cap-warn-icon bi bi-question-circle-fill text-warning ms-auto" title="RFID support pending on this device"></i>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="module" data-cap="touch">
+            <a href="/touch" class="nav-link <%= title === 'Touch' ? 'active' : '' %>">
+                <i class="bi bi-hand-index"></i>
+                <span>Touch</span>
+                <i class="app-hidden cap-warn cap-warn-icon bi bi-question-circle-fill text-warning ms-auto" title="Touch support pending on this device"></i>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="module" data-cap="keyboard">
+            <a href="/keyboard" class="nav-link <%= title === 'Keyboard' ? 'active' : '' %>">
+                <i class="bi bi-keyboard"></i>
+                <span>Keyboard</span>
+                <i class="app-hidden cap-warn cap-warn-icon bi bi-question-circle-fill text-warning ms-auto" title="Keyboard support pending on this device"></i>
+            </a>
+        </li>
+
+        <!-- Tools Section -->
+        <li class="nav-item mt-3">
+            <small class="text-muted text-uppercase fw-bold px-2">Tools</small>
+        </li>
+        <li class="nav-item" data-device-nav="true">
+            <a href="/automation" class="nav-link <%= title === 'Automation' ? 'active' : '' %>">
+                <i class="bi bi-diagram-3"></i>
+                <span>Automation</span>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true">
+            <a href="/test" class="nav-link <%= title === 'Device Test Center' ? 'active' : '' %>">
+                <i class="bi bi-clipboard2-pulse"></i>
+                <span>Tests</span>
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="/logs" class="nav-link <%= title === 'System Logs' ? 'active' : '' %>">
+                <i class="bi bi-journal-text"></i>
+                <span>Logs</span>
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="/api-docs" class="nav-link" target="_blank">
+                <i class="bi bi-braces-asterisk"></i>
+                <span>API Explorer</span>
+            </a>
+        </li>
+
+        <!-- Admin Section (admin+ only) -->
+        <% if (user && (user.role === 'admin' || user.role === 'superadmin')) { %>
+        <li class="nav-item mt-3">
+            <small class="text-muted text-uppercase fw-bold px-2">Admin</small>
+        </li>
+        <li class="nav-item">
+            <a href="/admin/users" class="nav-link <%= title === 'User Management' ? 'active' : '' %>">
+                <i class="bi bi-people"></i>
+                <span>Users</span>
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="/admin/gateway" class="nav-link <%= title === 'Payment Gateways' ? 'active' : '' %>">
+                <i class="bi bi-credit-card-2-front"></i>
+                <span>Gateways</span>
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="/admin/packages" class="nav-link <%= title === 'Packages' ? 'active' : '' %>">
+                <i class="bi bi-box-seam"></i>
+                <span>Packages</span>
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="/ota" class="nav-link <%= title === 'OTA Firmware Manager' ? 'active' : '' %>">
+                <i class="bi bi-cloud-upload"></i>
+                <span>OTA Firmware</span>
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="/devices" class="nav-link <%= title === 'Device Manager' ? 'active' : '' %>">
+                <i class="bi bi-cpu"></i>
+                <span>Devices</span>
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="/settings" class="nav-link <%= title === 'System Settings' ? 'active' : '' %>">
+                <i class="bi bi-gear"></i>
+                <span>System Settings</span>
+            </a>
+        </li>
+        <% } %>
+
+        <!-- Device Section -->
+        <li class="nav-item mt-3" data-device-nav="true" data-nav-section-header="device">
+            <small class="text-muted text-uppercase fw-bold px-2">Device</small>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="device">
+            <a href="/devices/settings" data-device-aware-href="/devices/settings" class="nav-link <%= title === 'Device Settings' ? 'active' : '' %>">
+                <i class="bi bi-sliders"></i>
+                <span>Device Settings</span>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="device">
+            <a href="/devices/queue" data-device-aware-href="/devices/queue" class="nav-link <%= title === 'Queue Manager' ? 'active' : '' %>">
+                <i class="bi bi-list-task"></i>
+                <span>Queue Manager</span>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="device">
+            <a href="/devices/about" data-device-aware-href="/devices/about" class="nav-link <%= title === 'Device About' ? 'active' : '' %>">
+                <i class="bi bi-info-circle"></i>
+                <span>Device About</span>
+            </a>
+        </li>
+        <li class="nav-item" data-device-nav="true" data-nav-section="device">
+            <a href="/devices/capabilities" data-device-aware-href="/devices/capabilities" class="nav-link <%= title === 'Capability Editor' ? 'active' : '' %>">
+                <i class="bi bi-toggles"></i>
+                <span>Capabilities</span>
+            </a>
+        </li>
+    </ul>
+
+    <!-- Compact device metrics strip at bottom -->
+    <div id="sidebarMetricsStrip" class="app-hidden mt-2 pt-2 border-top">
+        <div class="d-flex align-items-center justify-content-between small text-muted mb-1">
+            <span id="smSignal"><i class="bi bi-wifi me-1"></i>--%</span>
+            <span id="smBattery"><i class="bi bi-battery-half me-1"></i>--%</span>
+            <span id="smNetwork" class="sidebar-network-truncate text-truncate">---</span>
+        </div>
+        <div id="smQueue" class="small text-muted mb-1">Queue: idle</div>
+        <div class="progress thin-progress-sm mb-1"><div id="smSignalBar" class="progress-bar bg-success"></div></div>
+    </div>
+
+    <!-- Hidden elements retained for JS compatibility -->
+    <div class="app-hidden">
+        <span id="serverConnecting"></span>
+        <span id="serverConnected"></span>
+        <span id="serverDisconnected"></span>
+        <span id="serverStatusText"></span>
+        <span id="mqttConnecting"></span>
+        <span id="mqttConnected"></span>
+        <span id="mqttDisconnected"></span>
+        <span id="mqttStatusText"></span>
+        <span id="deviceOffline"></span>
+        <span id="deviceOnline"></span>
+        <span id="sidebarCompatDeviceStatusText"></span>
+        <span id="metricsPanel"></span>
+        <span id="sidebarUptime"></span>
+        <span id="sidebarSignal"></span>
+        <span id="sidebarSignalBar"></span>
+        <span id="sidebarBattery"></span>
+        <span id="sidebarBatteryBar"></span>
+        <span id="sidebarCharging"></span>
+        <span id="sidebarNetwork"></span>
+        <span id="sidebarOperator"></span>
+        <span id="sidebarModuleHealth"></span>
+        <span id="sidebarCompatPanelDashboardQueue"></span>
+        <span id="sidebarCompatPanelDeviceQueue"></span>
+        <span id="sidebarCompatPanelQueueRecent"></span>
+        <span id="sidebarCompatSmQueue"></span>
+        <span id="gpsInfo"></span>
+        <span id="gpsFix"></span>
+        <span id="gpsLat"></span>
+        <span id="gpsLng"></span>
+        <span id="gpsSat"></span>
+        <span id="loadingSkeleton"></span>
+    </div>
+</div>
+
+<style>
+    .sidebar .nav-link {
+        padding: 0.42rem 0.52rem;
+        border-radius: 0.45rem;
+        font-size: 0.86rem;
+        line-height: 1.2;
+    }
+
+    .sidebar .nav-link i {
+        margin-right: 0.42rem;
+        width: 1rem;
+        text-align: center;
+        font-size: 0.92rem;
+    }
+
+    .sidebar .nav-item.mt-3 {
+        margin-top: 0.8rem !important;
+    }
+
+    .sidebar .text-uppercase {
+        letter-spacing: 0.04em;
+        font-size: 0.66rem;
+    }
+
+    /* Connection Panel Styles */
+    .connection-panel {
+        background: white;
+        border-radius: 8px;
+        padding: 0.62rem;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+    
+    .status-item {
+        padding: 0.14rem 0;
+        border-bottom: 1px solid rgba(0,0,0,0.05);
+    }
+    
+    .status-item:last-child {
+        border-bottom: none;
+    }
+    
+    .status-indicator {
+        width: 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .status-indicator .spinner-grow {
+        animation-duration: 1.5s;
+    }
+    
+    /* Metrics Panel */
+    .metrics-panel {
+        border-left: 3px solid #0d6efd;
+        transition: all 0.3s ease;
+        padding: 0.45rem !important;
+    }
+    
+    /* GPS Info */
+    .gps-info {
+        border-left: 3px solid #dc3545;
+        padding: 0.45rem !important;
+    }
+    
+    /* Loading Skeleton Animation */
+    .loading-skeleton {
+        animation: pulse 1.5s ease-in-out infinite;
+    }
+    
+    .skeleton-line {
+        height: 1rem;
+        background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+        background-size: 200% 100%;
+        animation: loading 1.5s infinite;
+        border-radius: 4px;
+        margin: 0.5rem 0;
+    }
+    
+    @keyframes loading {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+    }
+    
+    @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.7; }
+        100% { opacity: 1; }
+    }
+    
+    /* Battery Icon Animation */
+    .bi-battery {
+        position: relative;
+    }
+    
+    .charging-badge {
+        animation: blink 1s infinite;
+    }
+    
+    @keyframes blink {
+        0% { opacity: 1; }
+        50% { opacity: 0.5; }
+        100% { opacity: 1; }
+    }
+    
+    /* Progress Bars */
+    .progress {
+        background-color: #e9ecef;
+        overflow: hidden;
+    }
+    
+    .progress-bar {
+        transition: width 0.3s ease;
+    }
+    
+    /* Custom Scrollbar */
+    .connection-panel::-webkit-scrollbar {
+        width: 4px;
+    }
+    
+    .connection-panel::-webkit-scrollbar-track {
+        background: #f1f1f1;
+    }
+    
+    .connection-panel::-webkit-scrollbar-thumb {
+        background: #c1c1c1;
+        border-radius: 2px;
+    }
+    
+    .connection-panel::-webkit-scrollbar-thumb:hover {
+        background: #a8a8a8;
+    }
+    
+    /* Mobile adjustments */
+    @media (max-width: 767.98px) {
+        .connection-panel {
+            padding: 0.55rem;
+        }
+
+        .status-item {
+            font-size: 0.82rem;
+        }
+
+        .nav-pills .nav-link {
+            padding: 0.52rem 0.6rem;
+        }
+
+        .nav-pills .nav-link i {
+            width: 1.1rem;
+            font-size: 0.92rem;
+        }
+    }
+
+    /* Dark mode sidebar */
+    [data-bs-theme="dark"] .sidebar {
+        background-color: #1e2227;
+        border-right-color: #3a3f45;
+    }
+    [data-bs-theme="dark"] .connection-panel {
+        background: #25292f;
+    }
+    [data-bs-theme="dark"] .metrics-panel,
+    [data-bs-theme="dark"] .module-health,
+    [data-bs-theme="dark"] .gps-info,
+    [data-bs-theme="dark"] #sidebarMetricsStrip {
+        background-color: #2c3035 !important;
+        color: #dee2e6;
+    }
+    [data-bs-theme="dark"] .skeleton-line {
+        background: linear-gradient(90deg, #2c3035 25%, #3a3f45 50%, #2c3035 75%);
+        background-size: 200% 100%;
+    }
+    [data-bs-theme="dark"] .sidebar .nav-link:not(.active) {
+        color: #adb5bd;
+    }
+    [data-bs-theme="dark"] .sidebar .nav-link:hover:not(.active) {
+        background-color: #2c3035;
+        color: #dee2e6;
+    }
+
+    .sidebar-content.device-nav-empty [data-device-nav="true"] {
+        display: none !important;
+    }
+</style>
+
+<script>
+(function initSidebarDeviceCacheHelpers() {
+    const SIDEBAR_DEVICE_LIST_CACHE_KEY = 'sidebarDeviceListCache_v1';
+
+    function normalizeSidebarCapabilityPayload(value) {
+        if (!value) return {};
+        try {
+            const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    function normalizeSidebarCacheDevices(devices) {
+        return (Array.isArray(devices) ? devices : []).map(device => ({
+            id: String(device?.id || '').trim(),
+            name: String(device?.name || '').trim(),
+            online: Boolean(device?.online),
+            type: String(device?.type || '').trim(),
+            deviceType: String(device?.deviceType || '').trim(),
+            capabilities: normalizeSidebarCapabilityPayload(device?.capabilities)
+        })).filter(device => device.id);
+    }
+
+    window.readCachedSidebarDevices = function readCachedSidebarDevices() {
+        try {
+            const payload = JSON.parse(localStorage.getItem(SIDEBAR_DEVICE_LIST_CACHE_KEY) || 'null');
+            return normalizeSidebarCacheDevices(payload?.devices);
+        } catch (_) {
+            return [];
+        }
+    };
+
+    window.persistCachedSidebarDevices = function persistCachedSidebarDevices(devices) {
+        try {
+            localStorage.setItem(SIDEBAR_DEVICE_LIST_CACHE_KEY, JSON.stringify({
+                savedAt: Date.now(),
+                devices: normalizeSidebarCacheDevices(devices)
+            }));
+        } catch (_) {}
+    };
+
+    window.persistCachedSidebarDeviceCapabilities = function persistCachedSidebarDeviceCapabilities(devices) {
+        normalizeSidebarCacheDevices(devices).forEach(device => {
+            if (!device.id) return;
+            try {
+                localStorage.setItem('deviceCaps_' + device.id, JSON.stringify(device.capabilities || {}));
+            } catch (_) {}
+        });
+    };
+})();
+
+function renderSidebarDeviceSelectorOptions(sel, devices, resolvedActiveId) {
+    if (!sel) return '';
+
+    const current = String(window.getActiveDeviceId ? window.getActiveDeviceId() : (window.DEVICE_ID || localStorage.getItem('activeDeviceId') || '')).trim();
+    const normalizedDevices = Array.isArray(devices) ? devices : [];
+    window.HAS_REGISTERED_DEVICES = normalizedDevices.length > 0;
+    cacheSidebarDeviceCatalog(normalizedDevices);
+    const selectedId = normalizedDevices.some(d => d.id === current)
+        ? current
+        : (normalizedDevices.some(d => d.id === resolvedActiveId) ? resolvedActiveId : (normalizedDevices[0]?.id || ''));
+
+    let opts = '';
+    if (normalizedDevices.length) {
+        opts = normalizedDevices.map(d => {
+            const label = (d.name && d.name !== d.id) ? d.name + ' (' + d.id + ')' : d.id;
+            const online = d.online ? '● ' : '○ ';
+            return '<option value="' + d.id + '"' + (d.id === selectedId ? ' selected' : '') + '>' + online + label + '</option>';
+        }).join('');
+    } else {
+        setActiveDeviceContext('');
+        opts = '<option value="">No devices onboarded</option>';
+    }
+    opts += '<option value="__add_new__">+ Add New Device</option>';
+    sel.innerHTML = opts;
+
+    if (selectedId) {
+        setActiveDeviceContext(selectedId);
+    } else {
+        window.HAS_ACTIVE_DEVICE = false;
+    }
+
+    return selectedId;
+}
+
+function renderSidebarDeviceSelectorPlaceholder(sel, deviceId) {
+    if (!sel) return '';
+    const normalizedId = String(deviceId || '').trim();
+    if (!normalizedId) return '';
+
+    sel.innerHTML = '<option value="' + normalizedId + '" selected>' + normalizedId + '</option>'
+        + '<option value="__add_new__">+ Add New Device</option>';
+    setActiveDeviceContext(normalizedId);
+    return normalizedId;
+}
+
+(function loadDeviceSelector() {
+    const sel = document.getElementById('sidebarDeviceSelector');
+    if (!sel) return;
+    const cachedDevices = (window.HAS_REGISTERED_DEVICES === false || window.HAS_ACTIVE_DEVICE === false)
+        ? []
+        : (typeof window.readCachedSidebarDevices === 'function'
+        ? window.readCachedSidebarDevices()
+        : []);
+    const currentDeviceId = String(window.getActiveDeviceId ? window.getActiveDeviceId() : (window.DEVICE_ID || localStorage.getItem('activeDeviceId') || '')).trim();
+
+    if (cachedDevices.length) {
+        if (typeof window.persistCachedSidebarDeviceCapabilities === 'function') {
+            window.persistCachedSidebarDeviceCapabilities(cachedDevices);
+        }
+        renderSidebarDeviceSelectorOptions(sel, cachedDevices, '');
+    } else if (currentDeviceId) {
+        renderSidebarDeviceSelectorPlaceholder(sel, currentDeviceId);
+    }
+
+    Promise.all([
+        fetch('/api/devices/active').then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/devices').then(r => r.json())
+    ])
+        .then(([activePayload, data]) => {
+            const current = String(window.getActiveDeviceId ? window.getActiveDeviceId() : (window.DEVICE_ID || localStorage.getItem('activeDeviceId') || '')).trim();
+            const resolvedActiveId = String(activePayload?.deviceId || '').trim();
+            const devices = Array.isArray(data.devices) ? data.devices : [];
+            window.HAS_REGISTERED_DEVICES = Boolean(data.success && devices.length);
+            if (typeof window.persistCachedSidebarDevices === 'function') {
+                window.persistCachedSidebarDevices(devices);
+            }
+            if (typeof window.persistCachedSidebarDeviceCapabilities === 'function') {
+                window.persistCachedSidebarDeviceCapabilities(devices);
+            }
+            cacheSidebarDeviceCatalog(devices);
+            const selectedId = devices.some(d => d.id === current)
+                ? current
+                : (devices.some(d => d.id === resolvedActiveId) ? resolvedActiveId : (devices[0]?.id || ''));
+            let opts = '';
+            if (data.success && devices.length) {
+                opts = devices.map(d => {
+                    const label = (d.name && d.name !== d.id) ? d.name + ' (' + d.id + ')' : d.id;
+                    const online = d.online ? '● ' : '○ ';
+                    return '<option value="' + d.id + '"' + (d.id === selectedId ? ' selected' : '') + '>' + online + label + '</option>';
+                }).join('');
+            } else {
+                setActiveDeviceContext('');
+                window.HAS_ACTIVE_DEVICE = false;
+                opts = '<option value="">No devices onboarded</option>';
+            }
+            opts += '<option value="__add_new__">+ Add New Device</option>';
+            sel.innerHTML = opts;
+
+            if (selectedId && selectedId !== current) {
+                setActiveDeviceContext(selectedId);
+                if (selectedId !== resolvedActiveId) {
+                    persistActiveDeviceSelection(selectedId).catch(() => {});
+                }
+            }
+            if (window.refreshSidebarDeviceNavigation) {
+                window.refreshSidebarDeviceNavigation();
+            }
+            if (selectedId) {
+                if (typeof window.scheduleDeviceEnvelopeRefresh === 'function') {
+                    window.scheduleDeviceEnvelopeRefresh(100);
+                } else {
+                    window.__pendingDeviceEnvelopeRefresh = true;
+                }
+            }
+        })
+        .catch(() => {
+            if (!cachedDevices.length) {
+                cacheSidebarDeviceCatalog([]);
+                setActiveDeviceContext('');
+                window.HAS_REGISTERED_DEVICES = false;
+                window.HAS_ACTIVE_DEVICE = false;
+                sel.innerHTML = '<option value="">No devices onboarded</option>'
+                              + '<option value="__add_new__">+ Add New Device</option>';
+            }
+            if (window.refreshSidebarDeviceNavigation) {
+                window.refreshSidebarDeviceNavigation();
+            }
+        });
+})();
+
+function normalizeSidebarDeviceType(type) {
+    return String(type || '').trim().toLowerCase();
+}
+
+function cacheSidebarDeviceCatalog(devices) {
+    const catalog = {};
+    (Array.isArray(devices) ? devices : []).forEach(device => {
+        const id = String(device?.id || '').trim();
+        if (!id) return;
+        catalog[id] = {
+            id,
+            type: normalizeSidebarDeviceType(device?.deviceType || device?.type)
+        };
+    });
+    window.__sidebarDeviceCatalog = catalog;
+    try {
+        localStorage.setItem('sidebarDeviceCatalog_v1', JSON.stringify(catalog));
+    } catch (_) {}
+}
+
+function resolveSidebarDeviceType(deviceId) {
+    const normalizedId = String(deviceId || '').trim();
+    if (!normalizedId) return '';
+    let catalog = window.__sidebarDeviceCatalog || {};
+    if (!catalog[normalizedId]) {
+        try {
+            catalog = JSON.parse(localStorage.getItem('sidebarDeviceCatalog_v1') || '{}') || {};
+        } catch (_) {
+            catalog = {};
+        }
+    }
+    return normalizeSidebarDeviceType(catalog[normalizedId]?.type);
+}
+
+function setActiveDeviceTypeContext(deviceId) {
+    const type = resolveSidebarDeviceType(deviceId);
+    window.ACTIVE_DEVICE_TYPE = type;
+    if (type) {
+        localStorage.setItem('activeDeviceType', type);
+    } else {
+        localStorage.removeItem('activeDeviceType');
+    }
+}
+
+window.getActiveDeviceType = function getActiveDeviceType() {
+    const currentDeviceId = window.DEVICE_ID || localStorage.getItem('activeDeviceId') || '';
+    return normalizeSidebarDeviceType(window.ACTIVE_DEVICE_TYPE || resolveSidebarDeviceType(currentDeviceId) || localStorage.getItem('activeDeviceType') || '');
+};
+
+function setActiveDeviceContext(deviceId) {
+    const sel = document.getElementById('sidebarDeviceSelector');
+    if (deviceId) {
+        localStorage.setItem('activeDeviceId', deviceId);
+        window.DEVICE_ID = deviceId;
+        window.HAS_ACTIVE_DEVICE = true;
+        setActiveDeviceTypeContext(deviceId);
+    } else {
+        localStorage.removeItem('activeDeviceId');
+        window.DEVICE_ID = '';
+        window.HAS_ACTIVE_DEVICE = false;
+        setActiveDeviceTypeContext('');
+    }
+    if (sel && deviceId) {
+        sel.value = deviceId;
+    }
+}
+
+async function persistActiveDeviceSelection(deviceId) {
+    const response = await fetch('/api/devices/active', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+        },
+        body: JSON.stringify({ deviceId })
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data?.success) {
+        throw new Error(data?.message || 'Failed to switch device');
+    }
+    return data;
+}
+
+window.setActiveDeviceContext = setActiveDeviceContext;
+window.persistActiveDeviceSelection = persistActiveDeviceSelection;
+
+function syncDeviceScopedLocation(deviceId) {
+    const nextDeviceId = String(deviceId || '').trim();
+    if (!nextDeviceId || !window.history?.replaceState) return;
+
+    const url = new URL(window.location.href);
+    const deviceScopedPaths = new Set([
+        '/devices/about',
+        '/devices/settings',
+        '/devices/queue',
+        '/devices/capabilities'
+    ]);
+
+    if (!deviceScopedPaths.has(url.pathname)) {
+        return;
+    }
+
+    url.searchParams.set('device', nextDeviceId);
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+}
+
+async function switchDevice(deviceId) {
+    if (!deviceId) return;
+    if (deviceId === '__add_new__') {
+        window.location.href = '/onboard';
+        return;
+    }
+    const previousDeviceId = window.DEVICE_ID || localStorage.getItem('activeDeviceId') || '';
+    setActiveDeviceContext(deviceId);
+    try {
+        await persistActiveDeviceSelection(deviceId);
+    } catch (error) {
+        setActiveDeviceContext(previousDeviceId);
+        if (window.showToast) {
+            window.showToast(error.message || 'Failed to switch device', 'danger');
+        }
+        return;
+    }
+    syncDeviceScopedLocation(deviceId);
+    // Re-subscribe Socket.IO to the new device room
+    if (window.socket) {
+        window.socket.emit('subscribe:device', { deviceId });
+    }
+    window.dispatchEvent(new CustomEvent('device:changed', { detail: { deviceId } }));
+    if (window.refreshSidebarDeviceNavigation) {
+        window.refreshSidebarDeviceNavigation();
+    }
+    // Show toast if available
+    if (window.showToast) {
+        window.showToast('Switched to device: ' + deviceId, 'info');
+    }
+}
+</script>

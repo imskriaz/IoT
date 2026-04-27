@@ -1,0 +1,330 @@
+<!-- System Logs Page -->
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4 gap-3">
+    <div>
+        <h2 class="mb-1">
+            <i class="bi bi-journal-text me-2"></i>System Logs
+        </h2>
+        <p class="text-muted mb-0">Live server and MQTT event log viewer</p>
+    </div>
+    <div class="d-flex gap-2 flex-wrap align-items-center">
+        <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" id="autoRefreshToggle" checked>
+            <label class="form-check-label small" for="autoRefreshToggle">Auto-refresh (10s)</label>
+        </div>
+        <button class="btn btn-outline-primary btn-sm" id="refreshBtn" onclick="refreshLogs()">
+            <i class="bi bi-arrow-repeat"></i> Refresh
+        </button>
+        <button class="btn btn-outline-secondary btn-sm" onclick="clearDisplay()">
+            <i class="bi bi-eraser"></i> Clear View
+        </button>
+        <button class="btn btn-outline-danger btn-sm" onclick="clearActiveLog()">
+            <i class="bi bi-trash"></i> Clear Tab
+        </button>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <div class="row g-2 align-items-end">
+            <div class="col-6 col-md-3">
+                <label class="form-label small mb-1">Level</label>
+                <select class="form-select form-select-sm" id="levelFilter">
+                    <option value="">All levels</option>
+                    <option value="error">Error</option>
+                    <option value="warn">Warn</option>
+                    <option value="info">Info</option>
+                    <option value="debug">Debug</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label small mb-1">Limit</label>
+                <select class="form-select form-select-sm" id="limitFilter">
+                    <option value="50">50 lines</option>
+                    <option value="100" selected>100 lines</option>
+                    <option value="200">200 lines</option>
+                    <option value="500">500 lines</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label small mb-1">Search</label>
+                <input type="text" class="form-control form-control-sm" id="searchFilter" placeholder="Filter messages...">
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Log Tabs -->
+<ul class="nav nav-tabs mb-0" id="logTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="app-tab" data-bs-toggle="tab" data-bs-target="#app-pane"
+                type="button" data-source="app">
+            <i class="bi bi-server me-1"></i>App
+            <span class="badge bg-secondary ms-1" id="appCount">0</span>
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="mqtt-tab" data-bs-toggle="tab" data-bs-target="#mqtt-pane"
+                type="button" data-source="mqtt">
+            <i class="bi bi-broadcast me-1"></i>MQTT
+            <span class="badge bg-secondary ms-1" id="mqttCount">0</span>
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="error-tab" data-bs-toggle="tab" data-bs-target="#error-pane"
+                type="button" data-source="error">
+            <i class="bi bi-exclamation-triangle me-1"></i>Errors
+            <span class="badge bg-danger ms-1" id="errorCount">0</span>
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade show active" id="app-pane" role="tabpanel">
+        <div class="log-container" id="app-log"></div>
+    </div>
+    <div class="tab-pane fade" id="mqtt-pane" role="tabpanel">
+        <div class="log-container" id="mqtt-log"></div>
+    </div>
+    <div class="tab-pane fade" id="error-pane" role="tabpanel">
+        <div class="log-container" id="error-log"></div>
+    </div>
+</div>
+
+<style>
+.log-container {
+    background: #1e1e2e;
+    border: 1px solid #dee2e6;
+    border-top: none;
+    border-radius: 0 0 0.375rem 0.375rem;
+    min-height: 420px;
+    max-height: 600px;
+    overflow-y: auto;
+    font-family: 'Courier New', monospace;
+    font-size: 0.78rem;
+    padding: 0.5rem;
+}
+
+.log-entry {
+    display: grid;
+    grid-template-columns: 160px 60px 1fr;
+    gap: 0.5rem;
+    padding: 0.15rem 0.25rem;
+    border-radius: 3px;
+    align-items: baseline;
+    line-height: 1.4;
+}
+
+.log-entry:hover { background: rgba(255,255,255,0.05); }
+
+.log-entry.level-error { background: rgba(220,53,69,0.15); }
+.log-entry.level-warn  { background: rgba(255,193,7,0.10); }
+
+.log-ts   { color: #6c757d; white-space: nowrap; font-size: 0.73rem; }
+.log-lvl  { font-weight: 600; text-transform: uppercase; font-size: 0.72rem; text-align: center; }
+.log-msg  { color: #cdd6f4; word-break: break-word; }
+
+.level-error .log-lvl { color: #f38ba8; }
+.level-warn  .log-lvl { color: #f9e2af; }
+.level-info  .log-lvl { color: #89dceb; }
+.level-debug .log-lvl { color: #a6e3a1; }
+
+.log-meta {
+    grid-column: 3;
+    color: #6c757d;
+    font-size: 0.71rem;
+    margin-top: 0.1rem;
+    word-break: break-all;
+}
+
+.log-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    color: #6c757d;
+    font-family: inherit;
+}
+</style>
+
+<script>
+(function () {
+    'use strict';
+
+    let autoRefreshTimer = null;
+    let activeSource = 'app';
+    let searchTerm = '';
+    const lastFetch = { app: null, mqtt: null, error: null };
+    const clearedAt  = { app: null, mqtt: null, error: null };
+
+    function escHtml(s) {
+        return String(s || '')
+            .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function levelColor(lvl) {
+        return { error: 'danger', warn: 'warning', info: 'info', debug: 'success' }[lvl] || 'secondary';
+    }
+
+    function renderEntries(source, entries) {
+        const container = document.getElementById(source + '-log');
+        if (!container) return;
+
+        const filter = searchTerm.toLowerCase();
+        const filtered = filter
+            ? entries.filter(e => (e.message || '').toLowerCase().includes(filter))
+            : entries;
+
+        if (!filtered.length) {
+            container.innerHTML = '<div class="log-empty"><i class="bi bi-inbox me-2"></i>No log entries found</div>';
+            return;
+        }
+
+        const html = filtered.map(e => {
+            const ts  = e.timestamp ? e.timestamp.replace('T', ' ').substring(0, 23) : '';
+            const lvl = (e.level || 'info').toLowerCase();
+            const msg = escHtml(e.message || '');
+
+            // Collect extra meta fields (skip standard ones)
+            const skip = new Set(['timestamp','level','message','service','stack']);
+            const meta = Object.entries(e)
+                .filter(([k]) => !skip.has(k))
+                .map(([k, v]) => `<span class="me-2"><b>${escHtml(k)}:</b> ${escHtml(typeof v === 'object' ? JSON.stringify(v) : v)}</span>`)
+                .join('');
+
+            const stackHtml = e.stack
+                ? `<div class="log-meta text-danger">${escHtml(e.stack).replace(/\n/g,'<br>')}</div>`
+                : '';
+            const metaHtml = meta ? `<div class="log-meta">${meta}</div>` : '';
+
+            return `
+<div class="log-entry level-${lvl}">
+    <span class="log-ts">${escHtml(ts)}</span>
+    <span class="log-lvl">${escHtml(lvl)}</span>
+    <span class="log-msg">${msg}</span>
+    ${metaHtml}${stackHtml}
+</div>`.trim();
+        }).join('');
+
+        container.innerHTML = html;
+
+        // Update count badge
+        const badgeId = source === 'app' ? 'appCount' : source === 'mqtt' ? 'mqttCount' : 'errorCount';
+        const badge = document.getElementById(badgeId);
+        if (badge) badge.textContent = filtered.length;
+    }
+
+    async function fetchLogs(source) {
+        const level  = document.getElementById('levelFilter').value;
+        const limit  = document.getElementById('limitFilter').value;
+        const params = new URLSearchParams({ source, limit });
+        if (level) params.set('level', level);
+        if (clearedAt[source]) params.set('since', clearedAt[source]);
+
+        try {
+            const res  = await fetch('/api/logs?' + params.toString());
+            const data = await res.json();
+            if (data.success) {
+                renderEntries(source, data.entries);
+                lastFetch[source] = new Date().toISOString();
+            }
+        } catch (err) {
+            console.error('Fetch logs error:', err);
+        }
+    }
+
+    window.refreshLogs = function () {
+        fetchLogs(activeSource);
+    };
+
+    window.clearDisplay = function () {
+        const container = document.getElementById(activeSource + '-log');
+        if (container) container.innerHTML = '<div class="log-empty"><i class="bi bi-trash me-2"></i>Display cleared</div>';
+        // Set a since-filter so subsequent fetches only return new entries
+        clearedAt[activeSource] = new Date().toISOString();
+        const badge = document.getElementById(
+            activeSource === 'app' ? 'appCount' : activeSource === 'mqtt' ? 'mqttCount' : 'errorCount'
+        );
+        if (badge) badge.textContent = '0';
+    };
+
+    window.clearActiveLog = async function () {
+        if (!confirm(`Clear stored ${activeSource} logs? This cannot be undone.`)) return;
+
+        try {
+            const res = await fetch('/api/logs?source=' + encodeURIComponent(activeSource), {
+                method: 'DELETE'
+            });
+            const data = await res.json();
+            if (!data.success) {
+                throw new Error(data.message || 'Failed to clear logs');
+            }
+            clearedAt[activeSource] = new Date().toISOString();
+            renderEntries(activeSource, []);
+            if (typeof showToast === 'function') {
+                showToast(`${activeSource.toUpperCase()} logs cleared`, 'success');
+            }
+        } catch (error) {
+            console.error('Clear logs error:', error);
+            if (typeof showToast === 'function') {
+                showToast(error.message || 'Failed to clear logs', 'danger');
+            }
+        }
+    };
+
+    function startAutoRefresh() {
+        stopAutoRefresh();
+        autoRefreshTimer = setInterval(() => {
+            if (document.getElementById('autoRefreshToggle').checked) {
+                fetchLogs(activeSource);
+            }
+        }, 10000);
+    }
+
+    function stopAutoRefresh() {
+        if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        // Tab switching
+        document.querySelectorAll('#logTabs [data-source]').forEach(btn => {
+            btn.addEventListener('shown.bs.tab', function () {
+                activeSource = this.dataset.source;
+                fetchLogs(activeSource);
+            });
+        });
+
+        // Filter changes
+        ['levelFilter', 'limitFilter'].forEach(id => {
+            document.getElementById(id).addEventListener('change', () => fetchLogs(activeSource));
+        });
+
+        // Search
+        let searchTimer;
+        document.getElementById('searchFilter').addEventListener('input', function () {
+            clearTimeout(searchTimer);
+            searchTerm = this.value;
+            searchTimer = setTimeout(() => fetchLogs(activeSource), 300);
+        });
+
+        // Auto-refresh toggle
+        document.getElementById('autoRefreshToggle').addEventListener('change', function () {
+            if (this.checked) startAutoRefresh(); else stopAutoRefresh();
+        });
+
+        // Socket.IO: push new log entries in real-time if available
+        if (window.socket) {
+            window.socket.on('log:entry', function (entry) {
+                // Only inject to matching source tab
+                const src = entry.service === 'mqtt' ? 'mqtt' : 'app';
+                // Re-fetch to keep the view consistent
+                if (src === activeSource) fetchLogs(activeSource);
+            });
+        }
+
+        // Initial load
+        fetchLogs('app');
+        startAutoRefresh();
+    });
+})();
+</script>

@@ -1,0 +1,966 @@
+<%# Automation — Visual Flow Editor %>
+<style>
+/* ─── Flow Editor Overlay ─── */
+#flowEditor { position:fixed;inset:0;z-index:1060;display:flex;flex-direction:column;background:var(--bs-body-bg); }
+#flowEditor.d-none { display:none !important; }
+.fe-toolbar { height:52px;min-height:52px;background:var(--bs-body-bg);border-bottom:1px solid var(--bs-border-color);display:flex;align-items:center;gap:.5rem;padding:0 .75rem;z-index:10;flex-shrink:0; }
+.fe-toolbar .fe-flow-name { font-size:.9rem;font-weight:600;border:none;background:transparent;color:var(--bs-body-color);min-width:120px;max-width:240px; }
+.fe-toolbar .fe-flow-name:focus { outline:none;border-bottom:2px solid var(--bs-primary); }
+.fe-body { display:flex;flex:1;overflow:hidden; }
+.fe-palette { width:200px;min-width:200px;border-right:1px solid var(--bs-border-color);background:var(--bs-body-bg);overflow-y:auto;padding:.5rem;display:flex;flex-direction:column;gap:.25rem; }
+.fe-palette-item { display:flex;align-items:center;gap:.5rem;padding:.4rem .6rem;border-radius:6px;cursor:grab;border:1px solid var(--bs-border-color);font-size:.75rem;user-select:none;background:var(--bs-body-bg);transition:box-shadow .1s; }
+.fe-palette-item:hover { box-shadow:0 2px 8px rgba(0,0,0,.12); }
+.fe-palette-item.pi-trigger  { border-left:3px solid #0d6efd; }
+.fe-palette-item.pi-condition { border-left:3px solid #fd7e14; }
+.fe-palette-item.pi-action    { border-left:3px solid #198754; }
+.fe-palette-item.pi-integration { border-left:3px solid #0dcaf0; }
+.fe-palette-item.pi-ai        { border-left:3px solid #6f42c1; }
+.fe-palette-sep { font-size:.65rem;font-weight:700;text-transform:uppercase;color:var(--bs-secondary-color);padding:.4rem .3rem .1rem;letter-spacing:.06em; }
+.fe-canvas-wrap { flex:1;overflow:hidden;position:relative;background-image:radial-gradient(circle,var(--bs-border-color) 1px,transparent 1px);background-size:24px 24px; }
+.fe-canvas-wrap.panning { cursor:grabbing; }
+.fe-canvas { position:absolute;top:0;left:0;width:4000px;height:3000px;transform-origin:0 0; }
+.fe-canvas svg.fe-edge-layer { position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible; }
+.fe-node { position:absolute;min-width:168px;max-width:220px;background:var(--bs-card-bg,var(--bs-body-bg));border:1.5px solid var(--bs-border-color);border-radius:8px;cursor:move;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,.08);transition:box-shadow .15s; }
+.fe-node:hover { box-shadow:0 4px 16px rgba(0,0,0,.15); }
+.fe-node.selected { box-shadow:0 0 0 2.5px var(--bs-primary); }
+.fe-node-header { display:flex;align-items:center;gap:.4rem;padding:.45rem .6rem;border-bottom:1px solid var(--bs-border-color);border-radius:7px 7px 0 0;font-size:.73rem;font-weight:600; }
+.fe-node-body { padding:.4rem .6rem;font-size:.68rem;color:var(--bs-secondary-color); }
+.fe-node-label { word-break:break-word;line-height:1.3; }
+.fe-node[data-group="trigger"]     .fe-node-header { border-top:3px solid #0d6efd; }
+.fe-node[data-group="condition"]   .fe-node-header { border-top:3px solid #fd7e14; }
+.fe-node[data-group="action"]      .fe-node-header { border-top:3px solid #198754; }
+.fe-node[data-group="integration"] .fe-node-header { border-top:3px solid #0dcaf0; }
+.fe-node[data-group="ai"]          .fe-node-header { border-top:3px solid #6f42c1; }
+.fe-port { position:absolute;width:12px;height:12px;border-radius:50%;border:2px solid var(--bs-body-bg);top:50%;transform:translateY(-50%);cursor:crosshair;pointer-events:all;z-index:3; }
+.fe-port.out { right:-7px;background:#6c757d; }
+.fe-port.in  { left:-7px;background:#6c757d; }
+.fe-port.out[data-handle="yes"] { top:35%;transform:none;background:#198754; }
+.fe-port.out[data-handle="no"]  { top:65%;transform:none;background:#dc3545; }
+.fe-port:hover { background:#0d6efd !important;transform:translateY(-50%) scale(1.4); }
+.fe-inspector { width:270px;min-width:270px;border-left:1px solid var(--bs-border-color);background:var(--bs-body-bg);overflow-y:auto;padding:.75rem;display:flex;flex-direction:column;gap:.5rem; }
+.fe-inspector h6 { font-size:.78rem;font-weight:700;margin-bottom:.35rem; }
+.fe-inspector .form-label { font-size:.72rem; }
+.fe-inspector .form-control,.fe-inspector .form-select { font-size:.75rem;padding:.25rem .5rem; }
+.fe-inspector .conn-badge { display:inline-flex;align-items:center;gap:.3rem;font-size:.68rem;background:var(--bs-secondary-bg);border-radius:20px;padding:.1rem .45rem;cursor:pointer; }
+.fe-inspector .conn-badge:hover { background:var(--bs-danger-bg-subtle);text-decoration:line-through; }
+.fe-edge { fill:none;stroke:var(--bs-secondary-color);stroke-width:1.8; }
+.fe-edge.edge-preview { stroke:#0d6efd;stroke-dasharray:5 3;stroke-width:1.5; }
+.fe-edge.selected { stroke:#0d6efd;stroke-width:2.5; }
+.np-card { border:1px solid var(--bs-border-color);border-radius:8px;padding:.55rem .7rem;cursor:pointer;transition:box-shadow .1s,border-color .1s;display:flex;align-items:flex-start;gap:.5rem; }
+.np-card:hover { box-shadow:0 2px 8px rgba(0,0,0,.12);border-color:var(--bs-primary); }
+.np-card-icon { font-size:1.1rem;flex-shrink:0;margin-top:.1rem; }
+.np-card-title { font-size:.77rem;font-weight:600;margin-bottom:.1rem; }
+.np-card-desc { font-size:.68rem;color:var(--bs-secondary-color);line-height:1.3; }
+.flow-card { border-left:4px solid var(--bs-border-color);transition:border-color .2s; }
+.flow-card.enabled { border-left-color:#198754; }
+.flow-card.disabled { border-left-color:#adb5bd; }
+.fe-zoom-controls { position:absolute;bottom:12px;right:12px;z-index:5;display:flex;flex-direction:column;gap:4px; }
+.fe-zoom-controls button { width:28px;height:28px;padding:0;font-size:.8rem;line-height:1; }
+.fe-hint { position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;text-align:center; }
+@media (max-width:767px) {
+  .fe-palette { display:none; }
+  .fe-inspector { width:100%;min-width:0;max-height:40vh;border-left:none;border-top:1px solid var(--bs-border-color); }
+  .fe-body { flex-direction:column; }
+}
+</style>
+
+<!-- ─── List View ─────────────────────────────────── -->
+<div id="autoListView">
+  <div class="d-flex justify-content-between align-items-center mb-3 gap-2 flex-wrap">
+    <div>
+      <h2 class="mb-1 fs-4"><i class="bi bi-diagram-3 me-2 text-primary"></i>Automation Flows</h2>
+      <p class="text-muted small mb-0">Visual node-based IoT automation — connect triggers, conditions and actions</p>
+    </div>
+    <div class="d-flex gap-2">
+      <button class="btn btn-sm btn-primary" onclick="openFlowEditor(null)"><i class="bi bi-plus-lg me-1"></i>New Flow</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="loadFlows()"><i class="bi bi-arrow-repeat"></i></button>
+    </div>
+  </div>
+  <div class="row g-2 mb-3">
+    <div class="col-6 col-md-3"><div class="border rounded p-2 text-center"><small class="text-muted d-block">Total</small><strong id="statTotal" class="fs-6">0</strong></div></div>
+    <div class="col-6 col-md-3"><div class="border rounded p-2 text-center"><small class="text-muted d-block">Active</small><strong id="statActive" class="fs-6 text-success">0</strong></div></div>
+    <div class="col-6 col-md-3"><div class="border rounded p-2 text-center"><small class="text-muted d-block">Triggered Today</small><strong id="statToday" class="fs-6 text-primary">0</strong></div></div>
+    <div class="col-6 col-md-3"><div class="border rounded p-2 text-center"><small class="text-muted d-block">Errors</small><strong id="statErrors" class="fs-6 text-danger">0</strong></div></div>
+  </div>
+  <div id="flowsLoading" class="text-center py-4"><div class="spinner-border spinner-border-sm text-primary me-2"></div>Loading...</div>
+  <div id="flowsEmpty" class="text-center py-5 d-none">
+    <i class="bi bi-diagram-3 text-muted" style="font-size:2.5rem"></i>
+    <p class="text-muted mt-2">No flows yet. Create one to get started.</p>
+    <button class="btn btn-sm btn-primary" onclick="openFlowEditor(null)"><i class="bi bi-plus-lg me-1"></i>Create Flow</button>
+  </div>
+  <div id="flowsList" class="d-flex flex-column gap-2 d-none"></div>
+</div>
+
+<!-- ─── Flow Editor Overlay ───────────────────────── -->
+<div id="flowEditor" class="d-none">
+  <div class="fe-toolbar">
+    <button class="btn btn-sm btn-outline-secondary" onclick="closeFlowEditor()" title="Back"><i class="bi bi-arrow-left"></i></button>
+    <input id="feFlowName" class="fe-flow-name" type="text" value="New Flow" placeholder="Flow name…" spellcheck="false">
+    <select id="feDeviceSelect" class="form-select form-select-sm" style="max-width:140px"><option value="1">Device 1</option></select>
+    <div class="form-check form-switch mb-0 ms-1">
+      <input class="form-check-input" type="checkbox" id="feEnabled" checked title="Active">
+      <label class="form-check-label small" for="feEnabled">Active</label>
+    </div>
+    <div class="ms-auto d-flex gap-2 align-items-center">
+      <span id="feSaveStatus" class="small text-muted"></span>
+      <button class="btn btn-sm btn-outline-secondary" onclick="testRunFlow()" id="feTestBtn"><i class="bi bi-play-fill me-1"></i>Test</button>
+      <button class="btn btn-sm btn-primary" onclick="saveFlow()" id="feSaveBtn"><i class="bi bi-floppy me-1"></i>Save</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="showLogsPanel()" title="Logs"><i class="bi bi-journal-text"></i></button>
+    </div>
+  </div>
+  <div class="fe-body">
+    <div class="fe-palette" id="fePalette"></div>
+    <div class="fe-canvas-wrap" id="feCanvasWrap">
+      <div class="fe-canvas" id="feCanvas">
+        <svg class="fe-edge-layer" id="feEdgeSvg"></svg>
+      </div>
+      <div id="feCanvasHint" class="fe-hint text-muted small">
+        <i class="bi bi-diagram-3 d-block mb-2" style="font-size:2rem;opacity:.2"></i>
+        <span style="opacity:.35">Drag nodes from the left panel</span>
+      </div>
+      <div class="fe-zoom-controls">
+        <button class="btn btn-sm btn-outline-secondary" onclick="feZoom(1.15)" title="Zoom in"><i class="bi bi-plus-lg"></i></button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="feZoom(1/1.15)" title="Zoom out"><i class="bi bi-dash-lg"></i></button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="feZoomFit()" title="Fit"><i class="bi bi-fullscreen"></i></button>
+      </div>
+    </div>
+    <div class="fe-inspector" id="feInspector">
+      <div class="text-muted small text-center mt-3" id="feInspectorEmpty">
+        <i class="bi bi-cursor-text d-block mb-1" style="font-size:1.5rem;opacity:.3"></i>Click a node to inspect it
+      </div>
+      <div id="feInspectorContent" class="d-none"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Node Picker Modal ─────────────────────────── -->
+<div class="modal fade" id="nodePickerModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0"><i class="bi bi-grid-3x3-gap me-2"></i>Add Node</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <ul class="nav nav-tabs px-3 pt-2" id="npTabs">
+          <li class="nav-item"><a class="nav-link active small" data-bs-toggle="tab" href="#npTriggers">Triggers</a></li>
+          <li class="nav-item"><a class="nav-link small" data-bs-toggle="tab" href="#npConditions">Conditions</a></li>
+          <li class="nav-item"><a class="nav-link small" data-bs-toggle="tab" href="#npActions">Actions</a></li>
+          <li class="nav-item"><a class="nav-link small" data-bs-toggle="tab" href="#npIntegrations">Integrations</a></li>
+          <li class="nav-item"><a class="nav-link small" data-bs-toggle="tab" href="#npAI">AI / Logic</a></li>
+        </ul>
+        <div class="tab-content p-3">
+          <div class="tab-pane fade show active" id="npTriggers"><div class="row g-2" id="npTriggersGrid"></div></div>
+          <div class="tab-pane fade" id="npConditions"><div class="row g-2" id="npConditionsGrid"></div></div>
+          <div class="tab-pane fade" id="npActions"><div class="row g-2" id="npActionsGrid"></div></div>
+          <div class="tab-pane fade" id="npIntegrations"><div class="row g-2" id="npIntegrationsGrid"></div></div>
+          <div class="tab-pane fade" id="npAI"><div class="row g-2" id="npAIGrid"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Logs Modal ────────────────────────────────── -->
+<div class="modal fade" id="logsModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0"><i class="bi bi-journal-text me-2"></i>Execution Logs</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body"><div id="logsContent" class="p-1"></div></div>
+    </div>
+  </div>
+</div>
+
+<script id="automationScript">
+// ══════════════════════════════════════════════════════════════
+// Automation Flow Editor — Vanilla JS
+// ══════════════════════════════════════════════════════════════
+
+// ── Node catalog ─────────────────────────────────────────────
+const NODE_CATALOG = {
+  trigger: [
+    { type:'sms-received',     icon:'💬', label:'SMS Received',       desc:'Fires when device receives an SMS' },
+    { type:'sms-delivered',    icon:'✅', label:'SMS Delivered',       desc:'Delivery report received' },
+    { type:'call-incoming',    icon:'📞', label:'Incoming Call',       desc:'Device is ringing' },
+    { type:'call-connected',   icon:'🤝', label:'Call Connected',      desc:'Call was answered' },
+    { type:'call-ended',       icon:'📴', label:'Call Ended',          desc:'Call ended (with duration)' },
+    { type:'gps-fix',          icon:'📍', label:'GPS Fix',             desc:'New GPS location published' },
+    { type:'battery-low',      icon:'🔋', label:'Battery Low',         desc:'Battery drops below threshold' },
+    { type:'battery-charging', icon:'⚡', label:'Charging Changed',    desc:'Charging state changed' },
+    { type:'gpio-change',      icon:'🔌', label:'GPIO Change',         desc:'Pin input state changed' },
+    { type:'touch-press',      icon:'👆', label:'Touch Press',         desc:'Capacitive touch event' },
+    { type:'ussd-response',    icon:'📟', label:'USSD Response',       desc:'USSD code returned a response' },
+    { type:'device-online',    icon:'🟢', label:'Device Online',       desc:'Device connects to MQTT' },
+    { type:'device-offline',   icon:'🔴', label:'Device Offline',      desc:'Device heartbeat timeout' },
+    { type:'status-update',    icon:'📊', label:'Status Update',       desc:'Periodic status telemetry' },
+    { type:'ota-success',      icon:'🆙', label:'OTA Success',         desc:'Firmware updated successfully' },
+    { type:'storage-error',    icon:'💾', label:'Storage Error',       desc:'SD card operation failed' },
+    { type:'manual',           icon:'▶️', label:'Manual / Webhook',    desc:'Triggered manually or via HTTP' },
+  ],
+  condition: [
+    { type:'battery-level',    icon:'🔋', label:'Battery Level',       desc:'Compare battery % to a value' },
+    { type:'time-range',       icon:'🕐', label:'Time of Day',          desc:'Only proceed in a time window' },
+    { type:'gps-geofence',     icon:'🗺️', label:'GPS Geofence',         desc:'Inside / outside a radius' },
+    { type:'signal-strength',  icon:'📶', label:'Signal Strength',      desc:'Compare RSSI / network type' },
+    { type:'sms-contains',     icon:'💬', label:'SMS Contains',         desc:'Message text match / regex' },
+    { type:'gpio-state',       icon:'🔌', label:'GPIO State',           desc:'Pin is HIGH or LOW' },
+    { type:'device-field',     icon:'🔍', label:'Device Field',         desc:'Any status field comparison' },
+    { type:'counter',          icon:'🔢', label:'Counter / Rate',       desc:'Limit to N times per window' },
+    { type:'js-eval',          icon:'⚙️', label:'JS Expression',        desc:'Custom boolean expression' },
+  ],
+  action: [
+    { type:'send-sms',         icon:'📤', label:'Send SMS',             desc:'Send an SMS via device' },
+    { type:'make-call',        icon:'📞', label:'Make Call',            desc:'Dial a number' },
+    { type:'end-call',         icon:'📴', label:'End Call',             desc:'Hang up current call' },
+    { type:'gpio-write',       icon:'⚡', label:'GPIO Write',           desc:'Set a pin HIGH/LOW/PWM' },
+    { type:'gpio-pwm',         icon:'〰️', label:'GPIO PWM',             desc:'Set PWM duty on a pin' },
+    { type:'led-color',        icon:'💡', label:'Set LED Color',        desc:'Set NeoPixel RGB' },
+    { type:'send-ussd',        icon:'📟', label:'Send USSD',            desc:'Send a USSD code' },
+    { type:'ota-update',       icon:'🆙', label:'OTA Update',           desc:'Trigger firmware OTA' },
+    { type:'gps-enable',       icon:'📍', label:'GPS On/Off',           desc:'Enable or disable GPS polling' },
+    { type:'mqtt-publish',     icon:'📡', label:'MQTT Publish',         desc:'Publish to any MQTT topic' },
+    { type:'wait',             icon:'⏱️', label:'Wait / Delay',         desc:'Pause execution for N seconds' },
+    { type:'set-variable',     icon:'📝', label:'Set Variable',         desc:'Store a value in flow context' },
+    { type:'log-event',        icon:'📋', label:'Log Event',            desc:'Write a record to the log' },
+  ],
+  integration: [
+    { type:'webhook-out',      icon:'🌐', label:'HTTP Webhook',         desc:'POST data to an external URL' },
+    { type:'webhook-in',       icon:'🎯', label:'Webhook Trigger',      desc:'Accept incoming HTTP POST' },
+    { type:'telegram',         icon:'✈️', label:'Telegram Message',     desc:'Send a Telegram notification' },
+    { type:'email',            icon:'📧', label:'Send Email',           desc:'Send an email via SMTP' },
+    { type:'push-notify',      icon:'🔔', label:'Push Notification',    desc:'Dashboard browser notification' },
+    { type:'store-db',         icon:'🗄️', label:'Store to DB',          desc:'Write a record to the database' },
+    { type:'read-db',          icon:'📖', label:'Read from DB',         desc:'Query a record from the database' },
+    { type:'spreadsheet',      icon:'📊', label:'Spreadsheet Row',      desc:'Append a row to Google Sheets' },
+  ],
+  ai: [
+    { type:'llm-prompt',       icon:'🤖', label:'LLM Prompt',           desc:'Send a prompt to an LLM API' },
+    { type:'classify',         icon:'🏷️', label:'Classify Text',        desc:'Label SMS or event text' },
+    { type:'extract-entity',   icon:'🔎', label:'Extract Entity',       desc:'Pull numbers/names from text' },
+    { type:'branch',           icon:'🌿', label:'Branch (if/else)',      desc:'Route based on a condition' },
+    { type:'merge',            icon:'⛙',  label:'Merge',                desc:'Wait for all incoming paths' },
+    { type:'for-each',         icon:'🔁', label:'For Each',             desc:'Iterate over an array' },
+    { type:'rate-limit',       icon:'🚦', label:'Rate Limit',           desc:'Throttle to N calls per window' },
+    { type:'transform',        icon:'🔀', label:'Transform',            desc:'Map / reshape context fields' },
+  ]
+};
+
+// Inspector field schemas per node type
+const NODE_FIELDS = {
+  'sms-received':     [{ key:'from', label:'From number filter', ph:'+15551234567  (blank=any)' }],
+  'sms-contains':     [{ key:'match', label:'Text / regex', ph:'keyword or /pattern/i' }],
+  'call-incoming':    [{ key:'from', label:'From filter', ph:'blank = any' }],
+  'battery-low':      [{ key:'threshold', label:'Threshold %', ph:'20', type:'number' }],
+  'battery-level':    [{ key:'op', label:'Operator', type:'select', options:['<','<=','>','>=','=='] }, { key:'value', label:'Percent', ph:'20', type:'number' }],
+  'gpio-change':      [{ key:'pin', label:'GPIO pin', ph:'35', type:'number' }],
+  'gpio-state':       [{ key:'pin', label:'GPIO pin', ph:'35', type:'number' }, { key:'state', label:'State', type:'select', options:['HIGH','LOW'] }],
+  'gpio-write':       [{ key:'pin', label:'GPIO pin', ph:'35', type:'number' }, { key:'value', label:'Value (0/1)', ph:'1', type:'number' }],
+  'gpio-pwm':         [{ key:'pin', label:'GPIO pin', ph:'33', type:'number' }, { key:'duty', label:'Duty 0-255', ph:'128', type:'number' }, { key:'freq', label:'Freq Hz', ph:'1000', type:'number' }],
+  'led-color':        [{ key:'r', label:'R', ph:'0', type:'number' }, { key:'g', label:'G', ph:'200', type:'number' }, { key:'b', label:'B', ph:'0', type:'number' }],
+  'send-sms':         [{ key:'to', label:'To', ph:'{{trigger.from}} or +15551234567' }, { key:'message', label:'Message', ph:'Hello {{trigger.from}}!' }],
+  'make-call':        [{ key:'number', label:'Number', ph:'+15551234567' }],
+  'send-ussd':        [{ key:'code', label:'USSD code', ph:'*222#' }],
+  'ota-update':       [{ key:'url', label:'OTA URL', ph:'http://server/firmware.bin' }],
+  'gps-enable':       [{ key:'enabled', label:'Enable GPS', type:'select', options:['true','false'] }],
+  'mqtt-publish':     [{ key:'topic', label:'Topic', ph:'device/1/command/led' }, { key:'payload', label:'Payload (JSON)', ph:'{"r":255,"g":0,"b":0}' }],
+  'webhook-out':      [{ key:'url', label:'URL', ph:'https://…/webhook' }, { key:'method', label:'Method', type:'select', options:['POST','GET','PUT'] }, { key:'body', label:'Body template', ph:'{"text":"{{trigger.message}}"}' }],
+  'telegram':         [{ key:'token', label:'Bot token', ph:'123456:ABC…' }, { key:'chat_id', label:'Chat ID', ph:'-100123456' }, { key:'text', label:'Message', ph:'{{trigger.from}}: {{trigger.message}}' }],
+  'email':            [{ key:'to', label:'To', ph:'admin@example.com' }, { key:'subject', label:'Subject', ph:'IoT Alert' }, { key:'body', label:'Body', ph:'{{trigger.message}}' }],
+  'push-notify':      [{ key:'title', label:'Title', ph:'IoT Event' }, { key:'body', label:'Body', ph:'{{trigger.message}}' }],
+  'time-range':       [{ key:'start', label:'Start (HH:MM)', ph:'08:00' }, { key:'end', label:'End (HH:MM)', ph:'22:00' }],
+  'gps-geofence':     [{ key:'lat', label:'Lat', ph:'23.8103', type:'number' }, { key:'lon', label:'Lon', ph:'90.4125', type:'number' }, { key:'radius', label:'Radius (m)', ph:'500', type:'number' }, { key:'mode', label:'Mode', type:'select', options:['inside','outside'] }],
+  'signal-strength':  [{ key:'op', label:'Operator', type:'select', options:['<','>='] }, { key:'value', label:'RSSI value', ph:'10', type:'number' }],
+  'wait':             [{ key:'seconds', label:'Seconds', ph:'5', type:'number' }],
+  'set-variable':     [{ key:'name', label:'Variable name', ph:'myVar' }, { key:'value', label:'Value / template', ph:'{{trigger.from}}' }],
+  'log-event':        [{ key:'message', label:'Log message', ph:'Flow triggered: {{trigger.message}}' }],
+  'store-db':         [{ key:'table', label:'Table', ph:'automation_events' }, { key:'data', label:'JSON data', ph:'{"from":"{{trigger.from}}"}' }],
+  'llm-prompt':       [{ key:'prompt', label:'Prompt', ph:'Summarize: {{trigger.message}}' }, { key:'model', label:'Model', ph:'gpt-4o-mini' }, { key:'output', label:'Output var', ph:'llmResult' }],
+  'classify':         [{ key:'text', label:'Text field', ph:'{{trigger.message}}' }, { key:'labels', label:'Labels (comma)', ph:'spam,normal,urgent' }, { key:'output', label:'Output var', ph:'category' }],
+  'extract-entity':   [{ key:'text', label:'Text', ph:'{{trigger.message}}' }, { key:'entity', label:'Entity type', type:'select', options:['phone','number','email','date'] }, { key:'output', label:'Output var', ph:'extracted' }],
+  'js-eval':          [{ key:'expr', label:'JS expression', ph:'context.trigger.battery > 20' }],
+  'device-field':     [{ key:'field', label:'Field path', ph:'system.battery' }, { key:'op', label:'Op', type:'select', options:['==','!=','<','<=','>','>=','contains'] }, { key:'value', label:'Value', ph:'50' }],
+  'counter':          [{ key:'limit', label:'Max per window', ph:'3', type:'number' }, { key:'window', label:'Window (min)', ph:'60', type:'number' }],
+  'for-each':         [{ key:'array', label:'Array path', ph:'context.items' }],
+  'transform':        [{ key:'mapping', label:'Mapping (JS)', ph:'{ result: context.trigger.battery + "%" }' }],
+  'rate-limit':       [{ key:'limit', label:'Calls', ph:'5', type:'number' }, { key:'window', label:'Per (min)', ph:'10', type:'number' }],
+};
+
+// ── State ─────────────────────────────────────────────────────
+let _flows = [];
+let _currentFlowId = null;
+let _nodes = [];    // { id, type, group, x, y, config, label }
+let _edges = [];    // { id, fromNode, fromPort, toNode, toPort }
+let _selectedNodeId = null;
+let _selectedEdgeId = null;
+let _scale = 1;
+let _panX = 0, _panY = 0;
+let _isPanning = false;
+let _panStartX = 0, _panStartY = 0;
+let _panOriginX = 0, _panOriginY = 0;
+let _dragNodeId = null;
+let _dragOffX = 0, _dragOffY = 0;
+let _portDragActive = false;
+let _portDragFrom = null; // { nodeId, port, handle }
+let _portDragPreviewEnd = { x:0, y:0 };
+let _nextNodeId = 1;
+let _dirty = false;
+
+function _uid() { return 'n' + (_nextNodeId++); }
+function _edgeId() { return 'e' + Date.now() + Math.random().toString(36).slice(2,6); }
+
+// ── DOM refs ──────────────────────────────────────────────────
+const $listView    = () => document.getElementById('autoListView');
+const $editor      = () => document.getElementById('flowEditor');
+const $canvas      = () => document.getElementById('feCanvas');
+const $canvasWrap  = () => document.getElementById('feCanvasWrap');
+const $edgeSvg     = () => document.getElementById('feEdgeSvg');
+const $inspector   = () => document.getElementById('feInspectorContent');
+const $inspEmpty   = () => document.getElementById('feInspectorEmpty');
+const $palette     = () => document.getElementById('fePalette');
+const $hint        = () => document.getElementById('feCanvasHint');
+
+// ══════════════════════════════════════════════════════════════
+// LIST VIEW
+// ══════════════════════════════════════════════════════════════
+async function loadFlows() {
+  document.getElementById('flowsLoading').classList.remove('d-none');
+  document.getElementById('flowsList').classList.add('d-none');
+  document.getElementById('flowsEmpty').classList.add('d-none');
+  try {
+    const r = await fetch('/api/automation/flows');
+    _flows = await r.json();
+    renderFlowList();
+  } catch(e) {
+    console.error('loadFlows', e);
+    document.getElementById('flowsLoading').innerHTML = '<span class="text-danger small">Failed to load flows</span>';
+  }
+}
+
+function renderFlowList() {
+  const loading = document.getElementById('flowsLoading');
+  const list    = document.getElementById('flowsList');
+  const empty   = document.getElementById('flowsEmpty');
+  loading.classList.add('d-none');
+
+  const total  = _flows.length;
+  const active = _flows.filter(f => f.enabled).length;
+  const today  = _flows.filter(f => f.last_triggered && f.last_triggered.startsWith(new Date().toISOString().slice(0,10))).length;
+  const errors = _flows.filter(f => f.last_result === 'error').length;
+  document.getElementById('statTotal').textContent  = total;
+  document.getElementById('statActive').textContent = active;
+  document.getElementById('statToday').textContent  = today;
+  document.getElementById('statErrors').textContent = errors;
+
+  if (!_flows.length) { empty.classList.remove('d-none'); return; }
+  list.classList.remove('d-none');
+  list.innerHTML = _flows.map(f => `
+    <div class="card p-2 flow-card ${f.enabled ? 'enabled' : 'disabled'}" id="fc-${f.id}">
+      <div class="d-flex align-items-center gap-2">
+        <div class="flex-grow-1 overflow-hidden">
+          <div class="fw-semibold small text-truncate">${_esc(f.name)}</div>
+          <div class="text-muted" style="font-size:.7rem">
+            ${f.trigger_count||0} triggers
+            ${f.last_triggered ? '· last: ' + _relTime(f.last_triggered) : ''}
+            ${f.last_result === 'error' ? '<span class="text-danger">· error</span>' : ''}
+          </div>
+        </div>
+        <div class="d-flex align-items-center gap-1 flex-shrink-0">
+          <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" title="Enable" ${f.enabled ? 'checked' : ''} onchange="toggleFlow(${f.id}, this.checked)">
+          </div>
+          <button class="btn btn-sm btn-outline-secondary btn-sm py-0 px-1" onclick="openFlowEditor(${f.id})" title="Edit"><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-sm btn-outline-danger btn-sm py-0 px-1" onclick="deleteFlow(${f.id})" title="Delete"><i class="bi bi-trash3"></i></button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+async function toggleFlow(id, enabled) {
+  await fetch(`/api/automation/flows/${id}/toggle`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ enabled }) });
+  loadFlows();
+}
+
+async function deleteFlow(id) {
+  if (!confirm('Delete this flow?')) return;
+  await fetch(`/api/automation/flows/${id}`, { method:'DELETE' });
+  loadFlows();
+}
+
+// ══════════════════════════════════════════════════════════════
+// OPEN / CLOSE EDITOR
+// ══════════════════════════════════════════════════════════════
+async function openFlowEditor(id) {
+  _currentFlowId = id;
+  _nodes = []; _edges = []; _selectedNodeId = null; _selectedEdgeId = null;
+  _scale = 1; _panX = 80; _panY = 80; _dirty = false;
+  document.getElementById('feSaveStatus').textContent = '';
+
+  if (id) {
+    const r = await fetch(`/api/automation/flows/${id}`);
+    const f = await r.json();
+    document.getElementById('feFlowName').value = f.name || 'Untitled';
+    document.getElementById('feEnabled').checked = !!f.enabled;
+    try { _nodes = JSON.parse(f.nodes || '[]'); } catch(e) { _nodes = []; }
+    try { _edges = JSON.parse(f.edges || '[]'); } catch(e) { _edges = []; }
+    if (_nodes.length) {
+      _nextNodeId = Math.max(..._nodes.map(n => parseInt(n.id.slice(1))||0)) + 1;
+    }
+  } else {
+    document.getElementById('feFlowName').value = 'New Flow';
+    document.getElementById('feEnabled').checked = true;
+  }
+
+  $listView().classList.add('d-none');
+  $editor().classList.remove('d-none');
+  buildPalette();
+  renderCanvas();
+  applyTransform();
+  _bindCanvasEvents();
+}
+
+function closeFlowEditor() {
+  if (_dirty && !confirm('Unsaved changes — leave anyway?')) return;
+  $editor().classList.add('d-none');
+  $listView().classList.remove('d-none');
+  _unbindCanvasEvents();
+  loadFlows();
+}
+
+// ══════════════════════════════════════════════════════════════
+// PALETTE
+// ══════════════════════════════════════════════════════════════
+function buildPalette() {
+  const groups = ['trigger','condition','action','integration','ai'];
+  const labels = { trigger:'Triggers', condition:'Conditions', action:'Actions', integration:'Integrations', ai:'AI / Logic' };
+  $palette().innerHTML = groups.map(g => `
+    <div class="fe-palette-sep">${labels[g]}</div>
+    ${NODE_CATALOG[g].slice(0,5).map(n => `
+      <div class="fe-palette-item pi-${g}" draggable="true"
+           data-type="${n.type}" data-group="${g}"
+           title="${n.desc}">
+        <span>${n.icon}</span><span>${n.label}</span>
+      </div>`).join('')}
+    <div class="fe-palette-item pi-${g}" style="opacity:.65;font-style:italic;cursor:pointer" onclick="showNodePicker('${g}')">
+      <span>➕</span><span>More…</span>
+    </div>`).join('');
+
+  $palette().querySelectorAll('.fe-palette-item[draggable]').forEach(el => {
+    el.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('nodeType', el.dataset.type);
+      e.dataTransfer.setData('nodeGroup', el.dataset.group);
+    });
+  });
+}
+
+// ── Node Picker Modal ─────────────────────────────────────────
+function showNodePicker(focusGroup) {
+  const grids = { trigger:'npTriggersGrid', condition:'npConditionsGrid', action:'npActionsGrid', integration:'npIntegrationsGrid', ai:'npAIGrid' };
+  for (const [g, gridId] of Object.entries(grids)) {
+    const grid = document.getElementById(gridId);
+    grid.innerHTML = NODE_CATALOG[g].map(n => `
+      <div class="col-6 col-md-4">
+        <div class="np-card" onclick="addNodeFromPicker('${n.type}','${g}')">
+          <span class="np-card-icon">${n.icon}</span>
+          <div><div class="np-card-title">${n.label}</div><div class="np-card-desc">${n.desc}</div></div>
+        </div>
+      </div>`).join('');
+  }
+  if (focusGroup) {
+    const tabMap = { trigger:'npTriggers', condition:'npConditions', action:'npActions', integration:'npIntegrations', ai:'npAI' };
+    const tabEl = document.querySelector(`#npTabs a[href="#${tabMap[focusGroup]}"]`);
+    if (tabEl) bootstrap.Tab.getOrCreateInstance(tabEl).show();
+  }
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('nodePickerModal')).show();
+}
+
+function addNodeFromPicker(type, group) {
+  bootstrap.Modal.getInstance(document.getElementById('nodePickerModal'))?.hide();
+  const cx = ($canvasWrap().clientWidth / 2 - _panX) / _scale;
+  const cy = ($canvasWrap().clientHeight / 2 - _panY) / _scale;
+  addNode(type, group, cx - 84, cy - 30);
+}
+
+// ══════════════════════════════════════════════════════════════
+// NODE MANAGEMENT
+// ══════════════════════════════════════════════════════════════
+function _nodeMeta(type, group) {
+  const catalog = NODE_CATALOG[group] || [];
+  return catalog.find(n => n.type === type) || { icon:'⚙️', label: type };
+}
+
+function addNode(type, group, x, y) {
+  const meta = _nodeMeta(type, group);
+  const node = { id: _uid(), type, group, x: Math.round(x), y: Math.round(y), config:{}, label: meta.label };
+  _nodes.push(node);
+  renderCanvas();
+  selectNode(node.id);
+  _setDirty();
+  return node;
+}
+
+function removeNode(id) {
+  _nodes = _nodes.filter(n => n.id !== id);
+  _edges = _edges.filter(e => e.fromNode !== id && e.toNode !== id);
+  if (_selectedNodeId === id) { _selectedNodeId = null; renderInspector(null); }
+  renderCanvas();
+  _setDirty();
+}
+
+function selectNode(id) {
+  _selectedNodeId = id;
+  _selectedEdgeId = null;
+  $canvas().querySelectorAll('.fe-node').forEach(el => el.classList.toggle('selected', el.dataset.id === id));
+  renderInspector(id ? _nodes.find(n => n.id === id) : null);
+}
+
+function selectEdge(id) {
+  _selectedEdgeId = id;
+  _selectedNodeId = null;
+  $canvas().querySelectorAll('.fe-node').forEach(el => el.classList.remove('selected'));
+  renderInspector(null);
+  $edgeSvg().querySelectorAll('.fe-edge').forEach(el => el.classList.toggle('selected', el.dataset.id === id));
+}
+
+// ══════════════════════════════════════════════════════════════
+// CANVAS RENDERING
+// ══════════════════════════════════════════════════════════════
+function renderCanvas() {
+  // Remove old nodes (keep SVG)
+  $canvas().querySelectorAll('.fe-node').forEach(el => el.remove());
+  $hint().style.display = _nodes.length ? 'none' : '';
+
+  _nodes.forEach(node => {
+    const meta = _nodeMeta(node.type, node.group);
+    const isCondition = node.group === 'condition';
+
+    const el = document.createElement('div');
+    el.className = `fe-node`;
+    el.dataset.id = node.id;
+    el.dataset.group = node.group;
+    el.style.left = node.x + 'px';
+    el.style.top  = node.y + 'px';
+    if (node.id === _selectedNodeId) el.classList.add('selected');
+
+    // IN port (left)
+    const inPort = document.createElement('div');
+    inPort.className = 'fe-port in';
+    inPort.dataset.node = node.id;
+    inPort.dataset.port = 'in';
+    el.appendChild(inPort);
+
+    // Header
+    const hdr = document.createElement('div');
+    hdr.className = 'fe-node-header';
+    hdr.innerHTML = `<span>${meta.icon}</span><span class="fe-node-label">${node.label || meta.label}</span>
+      <button class="btn btn-sm p-0 ms-auto border-0 text-muted" style="font-size:.7rem;line-height:1" onclick="removeNode('${node.id}')" title="Remove">✕</button>`;
+    el.appendChild(hdr);
+
+    // Body (config summary)
+    const cfg = node.config || {};
+    const cfgKeys = Object.keys(cfg).filter(k => cfg[k]);
+    if (cfgKeys.length) {
+      const body = document.createElement('div');
+      body.className = 'fe-node-body';
+      body.textContent = cfgKeys.slice(0,2).map(k => `${k}: ${String(cfg[k]).slice(0,16)}`).join(' · ');
+      el.appendChild(body);
+    }
+
+    // OUT port(s)
+    if (isCondition) {
+      const yes = document.createElement('div');
+      yes.className = 'fe-port out'; yes.dataset.node = node.id; yes.dataset.port = 'out'; yes.dataset.handle = 'yes';
+      yes.title = 'YES'; el.appendChild(yes);
+      const no = document.createElement('div');
+      no.className = 'fe-port out'; no.dataset.node = node.id; no.dataset.port = 'out'; no.dataset.handle = 'no';
+      no.title = 'NO'; el.appendChild(no);
+    } else {
+      const out = document.createElement('div');
+      out.className = 'fe-port out'; out.dataset.node = node.id; out.dataset.port = 'out'; out.dataset.handle = 'default';
+      el.appendChild(out);
+    }
+
+    $canvas().appendChild(el);
+  });
+
+  renderEdges();
+}
+
+function renderEdges() {
+  const svg = $edgeSvg();
+  svg.innerHTML = '';
+  _edges.forEach(edge => {
+    const path = _edgePathForEdge(edge);
+    if (!path) return;
+    const el = document.createElementNS('http://www.w3.org/2000/svg','path');
+    el.setAttribute('d', path);
+    el.setAttribute('class', `fe-edge${edge.id === _selectedEdgeId ? ' selected' : ''}`);
+    el.dataset.id = edge.id;
+    el.style.pointerEvents = 'stroke';
+    el.addEventListener('click', e => { e.stopPropagation(); selectEdge(edge.id); });
+    svg.appendChild(el);
+  });
+  // preview line during drag
+  if (_portDragActive && _portDragFrom) {
+    const fromXY = _portXY(_portDragFrom.nodeId, _portDragFrom.port, _portDragFrom.handle);
+    if (fromXY) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg','path');
+      el.setAttribute('d', _bezier(fromXY.x, fromXY.y, _portDragPreviewEnd.x, _portDragPreviewEnd.y));
+      el.setAttribute('class','fe-edge edge-preview');
+      svg.appendChild(el);
+    }
+  }
+}
+
+function _portXY(nodeId, port, handle) {
+  const node = _nodes.find(n => n.id === nodeId);
+  if (!node) return null;
+  const el = $canvas().querySelector(`.fe-node[data-id="${nodeId}"] .fe-port.${port}[data-handle="${handle}"]`)
+          || $canvas().querySelector(`.fe-node[data-id="${nodeId}"] .fe-port.${port}`);
+  if (!el) return null;
+  const nodeEl = $canvas().querySelector(`.fe-node[data-id="${nodeId}"]`);
+  const nx = parseInt(nodeEl.style.left)||0;
+  const ny = parseInt(nodeEl.style.top)||0;
+  const nw = nodeEl.offsetWidth;
+  const nh = nodeEl.offsetHeight;
+  if (port === 'out') {
+    const handle_ = el.dataset.handle;
+    const py = handle_ === 'yes' ? nh * 0.35 : handle_ === 'no' ? nh * 0.65 : nh / 2;
+    return { x: nx + nw, y: ny + py };
+  } else {
+    return { x: nx, y: ny + nh / 2 };
+  }
+}
+
+function _edgePathForEdge(edge) {
+  const from = _portXY(edge.fromNode, 'out', edge.fromHandle || 'default');
+  const to   = _portXY(edge.toNode,   'in',  'in');
+  if (!from || !to) return null;
+  return _bezier(from.x, from.y, to.x, to.y);
+}
+
+function _bezier(x1,y1,x2,y2) {
+  const cx = (x2 - x1) * 0.5;
+  return `M${x1},${y1} C${x1+cx},${y1} ${x2-cx},${y2} ${x2},${y2}`;
+}
+
+// ── Transform / zoom ──────────────────────────────────────────
+function applyTransform() {
+  $canvas().style.transform = `translate(${_panX}px,${_panY}px) scale(${_scale})`;
+}
+
+function feZoom(factor) {
+  _scale = Math.min(2.5, Math.max(0.2, _scale * factor));
+  applyTransform();
+}
+
+function feZoomFit() {
+  if (!_nodes.length) { _scale=1; _panX=80; _panY=80; applyTransform(); return; }
+  const xs = _nodes.map(n=>n.x); const ys = _nodes.map(n=>n.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs)+200;
+  const minY = Math.min(...ys), maxY = Math.max(...ys)+80;
+  const W = $canvasWrap().clientWidth, H = $canvasWrap().clientHeight;
+  _scale = Math.min(2, Math.min(W/(maxX-minX+80), H/(maxY-minY+80)));
+  _panX = (W - (maxX-minX)*_scale)/2 - minX*_scale;
+  _panY = (H - (maxY-minY)*_scale)/2 - minY*_scale;
+  applyTransform();
+}
+
+// ══════════════════════════════════════════════════════════════
+// CANVAS EVENTS
+// ══════════════════════════════════════════════════════════════
+let _canvasListeners = {};
+
+function _bindCanvasEvents() {
+  const wrap = $canvasWrap();
+  _canvasListeners.dragover = e => { e.preventDefault(); };
+  _canvasListeners.drop = e => {
+    e.preventDefault();
+    const type  = e.dataTransfer.getData('nodeType');
+    const group = e.dataTransfer.getData('nodeGroup');
+    if (!type || !group) return;
+    const rect = wrap.getBoundingClientRect();
+    const x = (e.clientX - rect.left - _panX) / _scale;
+    const y = (e.clientY - rect.top  - _panY) / _scale;
+    addNode(type, group, x - 84, y - 30);
+  };
+  _canvasListeners.mousedown = e => {
+    const portEl = e.target.closest('.fe-port');
+    if (portEl) { _startPortDrag(portEl, e); return; }
+    const nodeEl = e.target.closest('.fe-node');
+    if (nodeEl && e.target.tagName !== 'BUTTON') {
+      selectNode(nodeEl.dataset.id);
+      _startNodeDrag(nodeEl, e);
+      return;
+    }
+    if (e.target === wrap || e.target.classList.contains('fe-canvas-wrap') || e.target.classList.contains('fe-canvas')) {
+      selectNode(null);
+      _startPan(e);
+    }
+  };
+  _canvasListeners.mousemove = e => {
+    if (_isPanning) { _doPan(e); return; }
+    if (_dragNodeId) { _doNodeDrag(e); return; }
+    if (_portDragActive) { _doPortDrag(e); return; }
+  };
+  _canvasListeners.mouseup = e => {
+    if (_isPanning) { _endPan(); return; }
+    if (_dragNodeId) { _endNodeDrag(); return; }
+    if (_portDragActive) { _endPortDrag(e); return; }
+  };
+
+  wrap.addEventListener('dragover', _canvasListeners.dragover);
+  wrap.addEventListener('drop',     _canvasListeners.drop);
+  wrap.addEventListener('mousedown', _canvasListeners.mousedown);
+  window.addEventListener('mousemove', _canvasListeners.mousemove);
+  window.addEventListener('mouseup',   _canvasListeners.mouseup);
+
+  // Delete key
+  _canvasListeners.keydown = e => {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && e.target === document.body) {
+      if (_selectedNodeId) removeNode(_selectedNodeId);
+      else if (_selectedEdgeId) { _edges = _edges.filter(ed => ed.id !== _selectedEdgeId); _selectedEdgeId=null; renderEdges(); _setDirty(); }
+    }
+  };
+  window.addEventListener('keydown', _canvasListeners.keydown);
+}
+
+function _unbindCanvasEvents() {
+  const wrap = $canvasWrap();
+  if (!wrap) return;
+  wrap.removeEventListener('dragover',  _canvasListeners.dragover);
+  wrap.removeEventListener('drop',      _canvasListeners.drop);
+  wrap.removeEventListener('mousedown', _canvasListeners.mousedown);
+  window.removeEventListener('mousemove', _canvasListeners.mousemove);
+  window.removeEventListener('mouseup',   _canvasListeners.mouseup);
+  window.removeEventListener('keydown',   _canvasListeners.keydown);
+}
+
+// Pan
+function _startPan(e) { _isPanning=true; _panStartX=e.clientX; _panStartY=e.clientY; _panOriginX=_panX; _panOriginY=_panY; $canvasWrap().classList.add('panning'); }
+function _doPan(e) { _panX=_panOriginX+(e.clientX-_panStartX); _panY=_panOriginY+(e.clientY-_panStartY); applyTransform(); }
+function _endPan() { _isPanning=false; $canvasWrap().classList.remove('panning'); }
+
+// Node drag
+function _startNodeDrag(el, e) {
+  _dragNodeId = el.dataset.id;
+  const node = _nodes.find(n => n.id === _dragNodeId);
+  const rect = $canvasWrap().getBoundingClientRect();
+  _dragOffX = (e.clientX - rect.left - _panX) / _scale - node.x;
+  _dragOffY = (e.clientY - rect.top  - _panY) / _scale - node.y;
+}
+function _doNodeDrag(e) {
+  const node = _nodes.find(n => n.id === _dragNodeId);
+  if (!node) return;
+  const rect = $canvasWrap().getBoundingClientRect();
+  node.x = Math.round((e.clientX - rect.left - _panX) / _scale - _dragOffX);
+  node.y = Math.round((e.clientY - rect.top  - _panY) / _scale - _dragOffY);
+  const el = $canvas().querySelector(`.fe-node[data-id="${_dragNodeId}"]`);
+  if (el) { el.style.left = node.x+'px'; el.style.top = node.y+'px'; }
+  renderEdges();
+}
+function _endNodeDrag() { _dragNodeId=null; _setDirty(); }
+
+// Port drag (drawing connections)
+function _startPortDrag(portEl, e) {
+  e.stopPropagation();
+  _portDragActive = true;
+  _portDragFrom = { nodeId: portEl.dataset.node, port: portEl.dataset.port, handle: portEl.dataset.handle || 'default' };
+  const rect = $canvasWrap().getBoundingClientRect();
+  _portDragPreviewEnd = { x:(e.clientX-rect.left-_panX)/_scale, y:(e.clientY-rect.top-_panY)/_scale };
+}
+function _doPortDrag(e) {
+  const rect = $canvasWrap().getBoundingClientRect();
+  _portDragPreviewEnd = { x:(e.clientX-rect.left-_panX)/_scale, y:(e.clientY-rect.top-_panY)/_scale };
+  renderEdges();
+}
+function _endPortDrag(e) {
+  _portDragActive = false;
+  const targetEl = document.elementFromPoint(e.clientX, e.clientY);
+  const portEl   = targetEl && targetEl.closest('.fe-port');
+  if (portEl && portEl.dataset.node !== _portDragFrom.nodeId) {
+    const fromPort = _portDragFrom.port;
+    const toPort   = portEl.dataset.port;
+    // Must connect out→in
+    const [srcPort, dstPort] = fromPort === 'out' ? [_portDragFrom, portEl] : [{ nodeId:portEl.dataset.node, port:portEl.dataset.port, handle:portEl.dataset.handle||'default'}, _portDragFrom];
+    if (srcPort.port === 'out' && dstPort.port === 'in') {
+      const edge = { id:_edgeId(), fromNode:srcPort.nodeId, fromHandle:srcPort.handle||'default', toNode:dstPort.nodeId||portEl.dataset.node };
+      _edges.push(edge);
+      _setDirty();
+    }
+  }
+  _portDragFrom = null;
+  renderEdges();
+}
+
+// ══════════════════════════════════════════════════════════════
+// INSPECTOR
+// ══════════════════════════════════════════════════════════════
+function renderInspector(node) {
+  const empty   = $inspEmpty();
+  const content = $inspector();
+  if (!node) { empty.classList.remove('d-none'); content.classList.add('d-none'); return; }
+  empty.classList.add('d-none');
+  content.classList.remove('d-none');
+
+  const meta   = _nodeMeta(node.type, node.group);
+  const fields = NODE_FIELDS[node.type] || [];
+  const inConns  = _edges.filter(e => e.toNode === node.id);
+  const outConns = _edges.filter(e => e.fromNode === node.id);
+
+  content.innerHTML = `
+    <div class="d-flex align-items-center gap-2 mb-2">
+      <span style="font-size:1.2rem">${meta.icon}</span>
+      <div>
+        <div class="fw-semibold small">${meta.label}</div>
+        <div class="text-muted" style="font-size:.68rem">${node.group} · ${node.type}</div>
+      </div>
+    </div>
+    <div class="mb-2">
+      <label class="form-label mb-1 small fw-semibold">Label</label>
+      <input class="form-control form-control-sm" id="ins-label" value="${_esc(node.label||'')}">
+    </div>
+    ${fields.map(f => `
+      <div class="mb-2">
+        <label class="form-label mb-1">${f.label}</label>
+        ${f.type === 'select'
+          ? `<select class="form-select" data-cfg="${f.key}">${(f.options||[]).map(o=>`<option value="${o}" ${(node.config[f.key]||'')==o?'selected':''}>${o}</option>`).join('')}</select>`
+          : `<input class="form-control" type="${f.type||'text'}" data-cfg="${f.key}" value="${_esc(String(node.config[f.key]||''))}" placeholder="${f.ph||''}">`}
+      </div>`).join('')}
+    ${fields.length===0 ? '<p class="text-muted small">No config fields for this node type.</p>' : ''}
+    <hr class="my-2">
+    <h6>Connections</h6>
+    <div class="mb-1 small text-muted">In (${inConns.length})</div>
+    <div class="d-flex flex-wrap gap-1 mb-2">
+      ${inConns.length ? inConns.map(e => {
+        const src = _nodes.find(n=>n.id===e.fromNode);
+        return `<span class="conn-badge" onclick="removeEdge('${e.id}')" title="Click to remove">↩ ${src?src.label:e.fromNode}</span>`;
+      }).join('') : '<span class="text-muted" style="font-size:.68rem">none</span>'}
+    </div>
+    <div class="mb-1 small text-muted">Out (${outConns.length})</div>
+    <div class="d-flex flex-wrap gap-1 mb-2">
+      ${outConns.length ? outConns.map(e => {
+        const dst = _nodes.find(n=>n.id===e.toNode);
+        return `<span class="conn-badge" onclick="removeEdge('${e.id}')" title="Click to remove">${dst?dst.label:e.toNode} ↪</span>`;
+      }).join('') : '<span class="text-muted" style="font-size:.68rem">none</span>'}
+    </div>
+    <hr class="my-2">
+    <div class="small text-muted mb-1">Context variables available:</div>
+    <code style="font-size:.65rem;word-break:break-all">{{trigger.*}} {{system.*}} {{context.*}}</code>
+    <button class="btn btn-sm btn-outline-danger w-100 mt-3" onclick="removeNode('${node.id}')"><i class="bi bi-trash3 me-1"></i>Remove node</button>
+  `;
+
+  // Live bind config field changes
+  content.querySelectorAll('[data-cfg]').forEach(el => {
+    el.addEventListener('input', () => {
+      node.config[el.dataset.cfg] = el.value;
+      // Refresh node body summary on canvas
+      const nodeEl = $canvas().querySelector(`.fe-node[data-id="${node.id}"] .fe-node-body`);
+      if (nodeEl) {
+        const cfgKeys = Object.keys(node.config).filter(k => node.config[k]);
+        nodeEl.textContent = cfgKeys.slice(0,2).map(k => `${k}: ${String(node.config[k]).slice(0,16)}`).join(' · ');
+      }
+      _setDirty();
+    });
+  });
+  content.querySelector('#ins-label')?.addEventListener('input', e => {
+    node.label = e.target.value;
+    const nodeEl = $canvas().querySelector(`.fe-node[data-id="${node.id}"] .fe-node-label`);
+    if (nodeEl) nodeEl.textContent = node.label;
+    _setDirty();
+  });
+}
+
+function removeEdge(id) {
+  _edges = _edges.filter(e => e.id !== id);
+  renderEdges();
+  // re-render inspector to update counts
+  if (_selectedNodeId) renderInspector(_nodes.find(n=>n.id===_selectedNodeId));
+  _setDirty();
+}
+
+// ══════════════════════════════════════════════════════════════
+// SAVE / LOAD
+// ══════════════════════════════════════════════════════════════
+async function saveFlow() {
+  const name    = document.getElementById('feFlowName').value.trim() || 'Untitled';
+  const enabled = document.getElementById('feEnabled').checked ? 1 : 0;
+  const body    = JSON.stringify({ name, enabled, nodes: JSON.stringify(_nodes), edges: JSON.stringify(_edges) });
+
+  document.getElementById('feSaveBtn').disabled = true;
+  document.getElementById('feSaveStatus').textContent = 'Saving…';
+  try {
+    let r;
+    if (_currentFlowId) {
+      r = await fetch(`/api/automation/flows/${_currentFlowId}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body });
+    } else {
+      r = await fetch('/api/automation/flows', { method:'POST', headers:{'Content-Type':'application/json'}, body });
+      const created = await r.json();
+      _currentFlowId = created.id;
+    }
+    _dirty = false;
+    document.getElementById('feSaveStatus').textContent = '✓ Saved';
+    setTimeout(() => { document.getElementById('feSaveStatus').textContent = ''; }, 2500);
+  } catch(e) {
+    document.getElementById('feSaveStatus').textContent = '✗ Save failed';
+  } finally {
+    document.getElementById('feSaveBtn').disabled = false;
+  }
+}
+
+async function testRunFlow() {
+  if (!_currentFlowId) { alert('Save the flow first.'); return; }
+  const btn = document.getElementById('feTestBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Running…';
+  try {
+    const r = await fetch(`/api/automation/flows/${_currentFlowId}/run`, { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+    const result = await r.json();
+    showLogsPanel();
+  } catch(e) {
+    alert('Test run failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Test';
+  }
+}
+
+async function showLogsPanel() {
+  if (!_currentFlowId) return;
+  const r = await fetch(`/api/automation/flows/${_currentFlowId}/logs`);
+  const logs = await r.json();
+  const content = document.getElementById('logsContent');
+  if (!logs.length) { content.innerHTML = '<p class="text-muted small">No logs yet.</p>'; }
+  else {
+    content.innerHTML = logs.slice(0,50).map(l => `
+      <div class="border rounded mb-2 p-2" style="font-size:.75rem">
+        <div class="d-flex justify-content-between">
+          <span class="badge bg-${l.status==='success'?'success':l.status==='error'?'danger':'secondary'}">${l.status}</span>
+          <span class="text-muted">${_relTime(l.created_at)}</span>
+        </div>
+        ${l.trigger ? `<div class="text-muted mt-1">Trigger: <code>${_esc(l.trigger)}</code></div>` : ''}
+        ${l.log ? `<pre class="mt-1 mb-0" style="font-size:.68rem;max-height:80px;overflow:auto">${_esc(l.log)}</pre>` : ''}
+      </div>`).join('');
+  }
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('logsModal')).show();
+}
+
+// ── Dirty tracking ────────────────────────────────────────────
+function _setDirty() { _dirty = true; document.getElementById('feSaveStatus').textContent = '● unsaved'; }
+
+// ── Utilities ─────────────────────────────────────────────────
+function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function _relTime(iso) {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return Math.floor(diff/60000) + ' min ago';
+  if (diff < 86400000) return Math.floor(diff/3600000) + ' hr ago';
+  return Math.floor(diff/86400000) + ' d ago';
+}
+
+// ── Boot ──────────────────────────────────────────────────────
+loadFlows();
+</script>

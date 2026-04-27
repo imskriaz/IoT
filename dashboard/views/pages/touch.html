@@ -1,0 +1,93 @@
+<div class="container-fluid py-4">
+    <%- include('../partials/cap-banner.html', { cap: 'touch', label: 'capacitive touch pins (built-in ESP32-S3)' }) %>
+    <div class="row mb-3">
+        <div class="col">
+            <h4 class="mb-0"><i class="bi bi-hand-index me-2 text-primary"></i>Touch Input</h4>
+            <small class="text-muted">Monitor capacitive touch pins and gestures from device</small>
+        </div>
+        <div class="col-auto">
+            <span class="badge bg-secondary" id="touchStatus">Idle</span>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <!-- Touch pins -->
+        <div class="col-md-5">
+            <div class="card">
+                <div class="card-header fw-semibold"><i class="bi bi-cpu me-2"></i>Touch Pins</div>
+                <div class="card-body">
+                    <div id="touchPins" class="d-flex flex-wrap gap-2">
+                        <!-- Populated by JS -->
+                    </div>
+                    <hr>
+                    <button class="btn btn-primary w-100" onclick="startTouchMonitor()">
+                        <i class="bi bi-play-circle me-1"></i>Start Monitor
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Events -->
+        <div class="col-md-7">
+            <div class="card h-100">
+                <div class="card-header fw-semibold d-flex justify-content-between">
+                    <span><i class="bi bi-activity me-2"></i>Touch Events</span>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('touchLog').innerHTML=''">Clear</button>
+                </div>
+                <div id="touchLog" class="card-body font-monospace small" style="max-height:300px;overflow-y:auto;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const DEVICE_ID = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
+
+// ESP32-S3 capacitive touch-capable pins
+const TOUCH_PINS = [1,2,3,4,5,6,7,8,9,10,11,12,13,14];
+
+(function renderPins() {
+    const container = document.getElementById('touchPins');
+    TOUCH_PINS.forEach(pin => {
+        const btn = document.createElement('div');
+        btn.id = 'touchPin' + pin;
+        btn.className = 'badge bg-secondary rounded-pill p-2 fs-6';
+        btn.textContent = 'T' + pin;
+        btn.title = 'GPIO' + pin;
+        container.appendChild(btn);
+    });
+})();
+
+function startTouchMonitor() {
+    document.getElementById('touchStatus').textContent = 'Monitoring';
+    document.getElementById('touchStatus').className = 'badge bg-success';
+    fetch('/api/gpio/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId: DEVICE_ID, command: 'touch-monitor', params: { pins: TOUCH_PINS } })
+    }).then(r => r.json()).then(d => {
+        if (!d.success) showToast(d.error || 'Failed', 'danger');
+    }).catch(() => showToast('Request failed', 'danger'));
+}
+
+function logTouch(pin, value, type) {
+    const log = document.getElementById('touchLog');
+    const div = document.createElement('div');
+    div.className = 'mb-1';
+    div.textContent = `[${new Date().toLocaleTimeString()}] T${pin} ${type || 'value'}: ${value}`;
+    log.prepend(div);
+}
+
+if (window.socket) {
+    socket.on('touch:event', data => {
+        if (data.deviceId !== DEVICE_ID) return;
+        const pinEl = document.getElementById('touchPin' + data.pin);
+        if (pinEl) {
+            pinEl.className = data.touched
+                ? 'badge bg-success rounded-pill p-2 fs-6'
+                : 'badge bg-secondary rounded-pill p-2 fs-6';
+        }
+        logTouch(data.pin, data.value, data.touched ? 'TOUCHED' : 'released');
+    });
+}
+</script>

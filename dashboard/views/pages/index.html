@@ -1,0 +1,1891 @@
+<!-- Dashboard Overview -->
+<div class="d-flex flex-column flex-sm-row justify-content-between align-items-start align-items-sm-center mb-3 gap-2">
+    <h2 class="mb-0">
+        <i class="bi bi-speedometer2 me-2"></i>Dashboard
+    </h2>
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+
+        <span id="dashboardLastSeen" class="dashboard-last-seen text-muted small">
+            <i class="bi bi-clock-history me-1"></i>Last seen: <%= deviceStatus.lastSeen ? moment(deviceStatus.lastSeen).format('YYYY-MM-DD HH:mm:ss') : '-' %>
+        </span>
+        <a class="btn btn-sm btn-primary" href="/onboard">
+            <i class="bi bi-phone me-1"></i>Onboard Device
+        </a>
+        <button class="btn btn-sm btn-outline-primary" onclick="refreshDashboard()">
+            <i class="bi bi-arrow-repeat"></i>
+        </button>
+    </div>
+</div>
+
+<!-- Device Grid -->
+<% if (allDevices && allDevices.length > 0) { %>
+<div class="row g-3 mb-4">
+    <% allDevices.forEach(function(d) { %>
+    <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+        <div class="card h-100 border-<%= d.online ? 'success' : 'secondary' %> hover-effect" <%= d.id === (deviceId || '') ? 'id="activeDeviceCard"' : '' %>>
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <div class="flex-grow-1">
+                        <h6 class="mb-0 fw-semibold text-truncate" title="<%= d.name %>"><%= d.name %></h6>
+                        <small class="text-muted font-monospace"><%= d.id %></small>
+                    </div>
+                    <span class="badge bg-<%= d.online ? 'success' : 'secondary' %> ms-2"><%= d.online ? 'Online' : 'Offline' %></span>
+                </div>
+                <% if (d.online) { %>
+                <div class="row g-1 small mb-2">
+                    <div class="col-4">
+                        <div class="text-muted">Active</div>
+                        <div class="fw-semibold active-card-primary"><%= d.activePathLabel || (d.activePath === 'wifi' ? 'Wi-Fi' : (d.activePath === 'modem' ? 'Modem' : (d.network || 'Not reported'))) %></div>
+                    </div>
+                    <div class="col-4">
+                        <div class="text-muted">Current</div>
+                        <div class="fw-semibold text-truncate active-card-current" title="<%= d.activePath === 'wifi' ? (d.wifiSsid || d.currentNetworkName || 'Not reported') : (d.operator || d.currentNetworkName || d.displayName || 'Not reported') %>"><%= d.activePath === 'wifi' ? (d.wifiSsid || d.currentNetworkName || 'Not reported') : (d.operator || d.currentNetworkName || d.displayName || 'Not reported') %></div>
+                    </div>
+                    <div class="col-4">
+                        <div class="text-muted">Signal</div>
+                        <div class="fw-semibold active-card-signal"><%= d.activePath === 'wifi' ? (d.wifiSignal !== null ? d.wifiSignal + '%' : 'N/A') : (d.cellularSignal !== null ? d.cellularSignal + '%' : (d.signal !== null ? d.signal + '%' : 'N/A')) %></div>
+                    </div>
+                    <% if (d.ip) { %>
+                    <div class="col-12">
+                        <div class="text-muted">IP</div>
+                        <div class="fw-semibold font-monospace active-card-ip"><%= d.ip %></div>
+                    </div>
+                    <% } %>
+                </div>
+                <% } %>
+                <button class="btn btn-sm w-100 btn-<%= d.id === (deviceId || '') ? 'primary' : 'outline-primary' %>"
+                        onclick="switchDeviceAndReload('<%= d.id %>')">
+                    <i class="bi bi-<%= d.id === (deviceId || '') ? 'check2-circle' : 'arrow-right-circle' %> me-1"></i>
+                    <%= d.id === (deviceId || '') ? 'Active' : 'Switch' %>
+                </button>
+            </div>
+        </div>
+    </div>
+    <% }); %>
+    <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+        <a class="dashboard-add-card card h-100 border-dashed text-decoration-none hover-effect w-100 bg-white" href="/onboard">
+            <div class="card-body d-flex flex-column align-items-center justify-content-center text-muted py-4">
+                <i class="bi bi-plus-circle fs-2 mb-2"></i>
+                <span class="small">Onboard Device</span>
+                <span class="x-small text-muted mt-1">Open wizard</span>
+            </div>
+        </a>
+    </div>
+</div>
+<% } else if (mqttConnected) { %>
+<div class="alert alert-info d-flex align-items-center gap-3 mb-3">
+    <i class="bi bi-cpu fs-4"></i>
+    <div>No devices registered yet. Use the <a href="/onboard" class="alert-link">onboarding wizard</a> to add an Android phone or ESP32 device.</div>
+</div>
+<% } %>
+<% if (!hasRegisteredDevices) { %>
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body py-4 text-center">
+        <div class="display-6 mb-3 text-primary">
+            <i class="bi bi-router"></i>
+        </div>
+        <h5 class="fw-semibold mb-2">No device is onboarded yet</h5>
+        <p class="text-muted mb-4">Use the device selector or onboarding flow first. Device-only services stay hidden until a real device is available.</p>
+        <div class="d-flex flex-wrap justify-content-center gap-2">
+            <a href="/onboard" class="btn btn-primary">
+                <i class="bi bi-phone me-2"></i>Onboard Device
+            </a>
+            <a href="/devices" class="btn btn-outline-secondary">
+                <i class="bi bi-cpu me-2"></i>Open Device Manager
+            </a>
+        </div>
+    </div>
+</div>
+<% } else if (!hasActiveDevice) { %>
+<div class="alert alert-secondary d-flex align-items-center gap-3 mb-4">
+    <i class="bi bi-arrow-up-right-circle fs-4"></i>
+    <div>Select a device from the cards above or the sidebar selector to unlock device services.</div>
+</div>
+<% } %>
+
+<% let homeDeviceLane = 'esp32'; %>
+<% if (hasActiveDevice) { %>
+<%
+    const activeHomeDevice = Array.isArray(allDevices)
+        ? (allDevices.find(d => String(d.id || '') === String(deviceId || '')) || {})
+        : {};
+    const activeHomeTypeText = String(activeHomeDevice.type || deviceStatus.type || activeHomeDevice.board || deviceId || '').toLowerCase();
+    homeDeviceLane = activeHomeTypeText.includes('android') || (activeHomeTypeText.includes('http') && activeHomeTypeText.includes('sms'))
+        ? 'android'
+        : 'esp32';
+    const homeLaneLabel = homeDeviceLane === 'android' ? 'Android Bridge device' : 'ESP32 device';
+    const homeReportedModelLabel = deviceStatus.model
+        ? [deviceStatus.manufacturer, deviceStatus.model].filter(Boolean).join(' ').trim()
+        : '';
+    const homeModelLabel = homeReportedModelLabel
+        || (homeDeviceLane === 'esp32' ? 'ESP32' : null)
+        || deviceStatus.deviceName
+        || 'Not reported by device';
+    const homeShowModelDetail = Boolean(homeReportedModelLabel) || homeDeviceLane !== 'esp32';
+    const homeDetailColumnClass = homeShowModelDetail ? 'col-6 col-md-2' : 'col-6 col-md-3';
+    const homeOfflineAlertText = {
+        esp32: 'Check power, MQTT broker, Wi-Fi/APN, SIM/modem path, and device firmware heartbeat.',
+        android: 'Open the Android Bridge app and check transport mode, background service, SMS permissions, and battery restrictions.'
+    }[homeDeviceLane];
+    const homeTroubleshooting = {
+        esp32: {
+            device: [
+                'Confirm the ESP32 is powered and booted',
+                'Check Wi-Fi/APN settings in Device Settings',
+                'Verify SIM/modem antenna only if this device uses cellular',
+                'Confirm firmware is publishing heartbeat/status'
+            ],
+            server: [
+                `MQTT broker: ${mqttHost}:${mqttPort}`,
+                `Firewall allows MQTT port ${mqttPort}`,
+                'Review Device Settings for this selected ESP32',
+                'View System Settings for broker defaults'
+            ]
+        },
+        android: {
+            device: [
+                'Open Android Bridge on the phone',
+                'Scan the recovery QR if onboarding details were missed',
+                'Confirm the selected transport mode is correct for this device',
+                'Allow SMS/phone permissions and background service',
+                'Disable battery optimization for the bridge app'
+            ],
+            server: [
+                'If using MQTT, confirm the broker override in Device Settings',
+                'If using HTTP API, confirm the server URL and device API key were provisioned',
+                'Check dashboard connection status and recent device activity',
+                'Use the Android recovery QR from Device Settings when needed'
+            ]
+        }
+    }[homeDeviceLane];
+%>
+<% if (!isDeviceConnected) { %>
+    <div class="alert alert-warning alert-dismissible fade show d-flex align-items-center py-2 mb-3" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+        <div class="flex-grow-1">
+            <strong><%= homeLaneLabel %> is offline.</strong> <%= homeOfflineAlertText %>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<% } %>
+<%
+    const homeCaps = caps || {};
+    const showSmsUi = Boolean(homeCaps.sms);
+    const showCallsUi = Boolean(homeCaps.calls);
+    const showUssdUi = Boolean(homeCaps.ussd);
+    const showModemUi = Boolean(homeCaps.modem || homeCaps.internet);
+    const showQuickActions = showSmsUi || showUssdUi || showModemUi;
+    const activityColumnClass = showSmsUi && showCallsUi ? 'col-12 col-lg-4' : ((showSmsUi || showCallsUi) ? 'col-12 col-lg-6' : 'col-12');
+    const communicationColumnClass = showSmsUi && showCallsUi ? 'col-12 col-lg-4' : 'col-12 col-lg-6';
+    const homeQueueState = queueState || {};
+    const homeDashboardQueue = homeQueueState.dashboard || {};
+    const homeDashboardSummary = homeDashboardQueue.summary || {};
+    const homeDashboardRecent = Array.isArray(homeDashboardQueue.recent) ? homeDashboardQueue.recent : [];
+    const homeDeviceQueue = homeQueueState.device || {};
+    const homeDashboardQueueText = Number(homeDashboardSummary.totalOpen || 0) > 0
+        ? `${Number(homeDashboardSummary.pending || 0)} pending, ${Number(homeDashboardSummary.active || 0)} active${Number(homeDashboardSummary.failed || 0) > 0 ? `, ${Number(homeDashboardSummary.failed || 0)} failed` : ''}${Number(homeDashboardSummary.ambiguous || 0) > 0 ? `, ${Number(homeDashboardSummary.ambiguous || 0)} review` : ''}`
+        : 'Idle';
+    const homeDeviceQueueText = Number(homeDeviceQueue.total || 0) > 0
+        ? `${Number(homeDeviceQueue.total || 0)} pending`
+        : 'Idle';
+    const homeStorageQueueText = Number(homeDeviceQueue.storagePending || 0) > 0
+        ? `${Number(homeDeviceQueue.storagePending || 0)} pending`
+        : 'Idle';
+    const homeRecentQueueText = homeDashboardRecent.length > 0
+        ? `${homeDashboardRecent[0].command || 'command'}: ${homeDashboardRecent[0].status || 'unknown'}`
+        : 'No recent actions';
+    const initialWifiRoleLabel = deviceStatus.wifiRoleLabel || (isDeviceConnected ? 'Primary' : 'Offline');
+    const initialModemRoleLabel = deviceStatus.modemRoleLabel || (isDeviceConnected ? 'Connected' : 'Offline');
+    const initialWifiStatusLabel = deviceStatus.wifiStatusLabel || (!isDeviceConnected
+        ? 'Disconnected'
+        : (((deviceStatus.wifi && deviceStatus.wifi.connected) || deviceStatus.activePath === 'wifi')
+            ? 'Connected'
+            : 'Not connected'));
+    const initialWifiSsid = isDeviceConnected ? (deviceStatus.wifiSsidDisplay || deviceStatus.wifiSsid || 'Not reported') : '-';
+    const initialWifiIp = isDeviceConnected
+        ? (deviceStatus.wifi?.ipAddress || (deviceStatus.activePath === 'wifi' ? deviceStatus.ip : null) || 'N/A')
+        : '-';
+%>
+
+<!-- Status Cards Row -->
+<div class="row g-2 mb-3 dashboard-overview">
+    <!-- Wi-Fi Card -->
+    <div class="col-12 col-md-6 col-xl-3 order-1">
+        <div class="card dashboard-radio-card <%= isDeviceConnected ? 'border-primary' : 'border-secondary' %> h-100">
+            <div class="card-body dashboard-card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="dashboard-kpi-label text-muted x-small fw-semibold">Wi-Fi</div>
+                        <div class="dashboard-hero" id="dashWifiSignalValue">
+                            <%= isDeviceConnected ? (deviceStatus.wifiSignal !== null ? deviceStatus.wifiSignal + '%' : 'N/A') : '-' %>
+                        </div>
+                        <div class="dashboard-subtext" id="dashWifiPrimary">
+                            <%= initialWifiRoleLabel %>
+                        </div>
+                    </div>
+                    <div class="<%= isDeviceConnected ? 'bg-primary' : 'bg-secondary' %> bg-opacity-10 p-2 rounded-circle">
+                        <i class="bi bi-wifi fs-4 <%= isDeviceConnected ? 'text-primary' : 'text-secondary' %>"></i>
+                    </div>
+                </div>
+                <div class="dashboard-radio-row">
+                    <div class="progress thin-progress">
+                        <div class="progress-bar bg-primary" id="dashWifiSignalBar" data-progress-width="<%= isDeviceConnected && deviceStatus.wifiSignal !== null ? deviceStatus.wifiSignal : 0 %>"></div>
+                    </div>
+                </div>
+                <div class="dashboard-card-section">
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">SSID</span>
+                        <span class="fw-semibold text-end" id="dashWifiSsid"><%= initialWifiSsid %></span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Status</span>
+                        <span class="fw-semibold text-end" id="dashWifiSignalMeta"><%= initialWifiStatusLabel %></span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">IP</span>
+                        <span class="fw-semibold text-end font-monospace" id="dashWifiIp"><%= initialWifiIp %></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modem Card -->
+    <div class="col-12 col-md-6 col-xl-3 order-2">
+        <div class="card <%= isDeviceConnected ? 'border-info' : 'border-secondary' %> h-100">
+            <div class="card-body dashboard-card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="dashboard-kpi-label text-muted fw-semibold">Modem</div>
+                        <div class="dashboard-hero" id="dashCellSignalValue">
+                            <%= isDeviceConnected ? (deviceStatus.cellularSignal !== null ? deviceStatus.cellularSignal + '%' : 'N/A') : '-' %>
+                        </div>
+                        <div class="dashboard-subtext" id="dashModemActive">
+                            <%= initialModemRoleLabel %>
+                        </div>
+                    </div>
+                    <div class="<%= isDeviceConnected ? 'bg-info' : 'bg-secondary' %> bg-opacity-10 p-2 rounded-circle">
+                        <i class="bi bi-broadcast fs-4 <%= isDeviceConnected ? 'text-info' : 'text-secondary' %>"></i>
+                    </div>
+                </div>
+                <div class="dashboard-radio-row">
+                    <div class="progress thin-progress">
+                        <div class="progress-bar bg-info" id="dashCellSignalBar" data-progress-width="<%= isDeviceConnected && deviceStatus.cellularSignal !== null ? deviceStatus.cellularSignal : 0 %>"></div>
+                    </div>
+                </div>
+                <div class="dashboard-card-section">
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Operator</span>
+                        <span class="fw-semibold text-end" id="dashOperator"><%= isDeviceConnected ? (deviceStatus.operator || 'Not reported') : '-' %></span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">SIM Number</span>
+                        <span class="fw-semibold text-end" id="dashSimNumber"><%= isDeviceConnected ? (deviceStatus.simNumber || deviceStatus.sim?.number || 'Checking...') : '-' %></span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">IP</span>
+                        <span id="dashCurrentIp" class="fw-semibold font-monospace"><%= isDeviceConnected ? (deviceStatus.ip || 'N/A') : '-' %></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Battery Card -->
+    <div class="col-12 col-md-6 col-xl-3 order-3">
+        <div class="card <%= isDeviceConnected ? 'border-success' : 'border-secondary' %> h-100">
+            <div class="card-body dashboard-card-body">
+                <% const batteryVoltage = Number(deviceStatus.voltageMv || 0);
+                   const batteryHasVoltage = Number.isFinite(batteryVoltage) && batteryVoltage > 0;
+                   const batteryHasCharging = deviceStatus.charging !== null && deviceStatus.charging !== undefined;
+                   const batteryHasTelemetry = deviceStatus.battery !== null || batteryHasVoltage || batteryHasCharging;
+                   const batteryLooksFull = Number(deviceStatus.battery) >= 95 && batteryHasVoltage && batteryVoltage >= 4180;
+                   const batteryVoltageLabel = batteryHasVoltage ? (batteryVoltage / 1000).toFixed(2) + ' V' : (batteryHasTelemetry ? 'Sampling' : 'Not reported by device');
+                   const batteryStateLabel = batteryHasTelemetry ? (deviceStatus.battery !== null ? 'Gauge live' : 'Waiting for gauge sample') : 'Not reported by device';
+                   const chargingLabel = batteryHasCharging ? (deviceStatus.charging ? 'Yes' : 'No') : (batteryLooksFull ? 'Full/idle' : (batteryHasTelemetry ? 'Unknown' : 'Not reported'));
+                   const batteryPowerSourceLabel = batteryHasCharging
+                       ? (deviceStatus.charging ? 'USB power' : 'Battery')
+                       : (batteryLooksFull ? 'USB/idle' : (batteryHasTelemetry ? 'Unknown' : 'Not reported')); %>
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="dashboard-kpi-label text-muted fw-semibold">Battery</div>
+                        <div class="dashboard-hero" id="dashBatteryValue">
+                            <%= isDeviceConnected ? (deviceStatus.battery !== null ? deviceStatus.battery + '%' : 'N/A') : '-' %>
+                        </div>
+                        <div class="dashboard-subtext" id="dashBatteryState">
+                            <%= isDeviceConnected ? batteryStateLabel : 'Offline' %>
+                        </div>
+                    </div>
+                    <div class="<%= isDeviceConnected ? 'bg-success' : 'bg-secondary' %> bg-opacity-10 p-2 rounded-circle">
+                        <i class="bi bi-battery-<%= isDeviceConnected && deviceStatus.battery !== null ? (deviceStatus.battery > 75 ? 'full' : deviceStatus.battery > 50 ? 'half' : deviceStatus.battery > 25 ? 'charging' : 'exclamation') : 'exclamation' %> fs-4 <%= isDeviceConnected ? 'text-success' : 'text-secondary' %>"></i>
+                    </div>
+                </div>
+                <div class="progress thin-progress">
+                    <div class="progress-bar bg-success" id="dashBatteryBar" data-progress-width="<%= isDeviceConnected && deviceStatus.battery !== null ? deviceStatus.battery : 0 %>"></div>
+                </div>
+                <div class="dashboard-card-section">
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Charging</span>
+                        <span class="fw-semibold text-end" id="dashCharging"><%= isDeviceConnected ? chargingLabel : '-' %></span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Voltage</span>
+                        <span class="fw-semibold text-end" id="dashBatteryVoltage"><%= isDeviceConnected ? batteryVoltageLabel : '-' %></span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Power Source</span>
+                        <span class="fw-semibold text-end" id="dashBatteryPowerSource"><%= isDeviceConnected ? batteryPowerSourceLabel : '-' %></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Storage / Uptime Card -->
+    <div class="col-12 col-md-6 col-xl-3 order-4">
+        <div class="card border-warning h-100">
+            <div class="card-body dashboard-card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="dashboard-kpi-label text-muted fw-semibold">Storage</div>
+                        <% let sdTotal=0,sdUsed=0,sdPercent=0,sdDisplay='N/A',sdDetails='',sdStatusLabel='No media',sdQueueLabel='0',sdCapacityLabel='Not reported';
+                           if(storageInfo.sd&&storageInfo.sd.deviceBacked){
+                               sdTotal=Number(storageInfo.sd.total||0);sdUsed=Number(storageInfo.sd.used||0);sdPercent=sdTotal>0?Math.round((sdUsed/sdTotal)*100):0;
+                               sdDisplay=sdTotal>0?(sdPercent+'%'):(storageInfo.sd.mounted?'Ready':'Detected');
+                               sdStatusLabel=storageInfo.sd.bufferedOnly?'Buffered only':(storageInfo.sd.mounted?'Mounted':'Detected');
+                               sdQueueLabel=String(storageInfo.sd.queueDepth||0);
+                               sdCapacityLabel=sdTotal>0
+                                   ? (Math.round((storageInfo.sd.free||0)/1073741824*10)/10+'GB free / '+Math.round(sdTotal/1073741824*10)/10+'GB')
+                                   : 'Capacity not reported';
+                               sdDetails=sdTotal>0
+                                   ? (Math.round((storageInfo.sd.free||0)/1073741824*10)/10+'GB free - '+Math.round(sdUsed/1073741824*10)/10+'GB/'+Math.round(sdTotal/1073741824*10)/10+'GB')
+                                   : ((storageInfo.sd.bufferedOnly?'Buffered only':'Mounted')+' - Queue '+(storageInfo.sd.queueDepth||0));
+                           } else if(storageInfo.sd&&storageInfo.sd.available&&storageInfo.sd.total>0){
+                               sdTotal=storageInfo.sd.total;sdUsed=storageInfo.sd.used;sdPercent=Math.round((sdUsed/sdTotal)*100);sdDisplay=sdPercent+'%';sdStatusLabel='Mounted';sdQueueLabel='0';sdCapacityLabel=Math.round((storageInfo.sd.free||0)/1073741824*10)/10+'GB free / '+Math.round(sdTotal/1073741824*10)/10+'GB';sdDetails=Math.round(sdUsed/1073741824*10)/10+'GB/'+Math.round(sdTotal/1073741824*10)/10+'GB';
+                           } %>
+                        <div id="dashSdValue" class="dashboard-hero">
+                            <%= storageInfo.sd && storageInfo.sd.available ? sdDisplay : 'N/A' %>
+                        </div>
+                        <div class="dashboard-subtext" id="dashSdStatus"><%= sdStatusLabel %></div>
+                    </div>
+                    <div class="bg-warning bg-opacity-10 p-2 rounded-circle">
+                        <i class="bi bi-device-hdd fs-4 text-warning"></i>
+                    </div>
+                </div>
+                <% if(storageInfo.sd&&storageInfo.sd.available){ %>
+                    <% if(sdTotal>0){ %>
+                    <div class="progress thin-progress">
+                        <div class="progress-bar bg-warning" data-progress-width="<%= sdPercent %>"></div>
+                    </div>
+                    <% } %>
+                    <small id="dashSdMeta" class="dashboard-kpi-meta text-muted d-block mt-1"><%= sdDetails %></small>
+                    <div class="dashboard-card-section">
+                        <div class="dashboard-meta-row">
+                            <span class="text-muted">Queue</span>
+                            <span class="fw-semibold text-end" id="dashSdQueue"><%= sdQueueLabel %></span>
+                        </div>
+                        <div class="dashboard-meta-row">
+                            <span class="text-muted">Space</span>
+                            <span class="fw-semibold text-end" id="dashSdSpace"><%= sdCapacityLabel %></span>
+                        </div>
+                    </div>
+                <% } else { %>
+                    <small id="dashSdMeta" class="dashboard-kpi-meta text-muted d-block mt-2">
+                        <span class="badge bg-warning text-dark">No SSD</span> Attach storage
+                    </small>
+                    <div class="dashboard-card-section">
+                        <div class="dashboard-meta-row">
+                            <span class="text-muted">Queue</span>
+                            <span class="fw-semibold text-end" id="dashSdQueue">0</span>
+                        </div>
+                        <div class="dashboard-meta-row">
+                            <span class="text-muted">Space</span>
+                            <span class="fw-semibold text-end" id="dashSdSpace">Not reported</span>
+                        </div>
+                    </div>
+                <% } %>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="dashboardTelemetryNotice"
+     class="alert alert-secondary py-2 px-3 mb-3 small <%= hasActiveDevice && isDeviceConnected && deviceStatus.activePath === 'modem' && (deviceStatus.signal === null || deviceStatus.battery === null || deviceStatus.temperature === null || (!deviceStatus.imei && !deviceStatus.androidId)) ? '' : 'd-none' %>">
+    <i class="bi bi-info-circle me-2"></i>
+    <span id="dashboardTelemetryNoticeText">
+        Limited device telemetry on this link. Some fields may show N/A because the active modem profile is not reporting signal, battery, temperature, or a hardware ID.
+    </span>
+</div>
+
+<!-- Device Details Card - Only show when connected -->
+<% if (isDeviceConnected) { %>
+    <div class="card mb-3 dashboard-actions">
+        <div class="card-body py-2">
+            <div class="row g-2 align-items-center">
+                <div class="<%= homeDetailColumnClass %>">
+                    <div class="dashboard-detail-label text-muted">Temp</div>
+                    <div class="fw-semibold"><%= deviceStatus.temperature !== null ? (deviceStatus.temperature + ' C') : 'N/A' %></div>
+                </div>
+                <div class="<%= homeDetailColumnClass %>">
+                    <div class="dashboard-detail-label text-muted">Uptime</div>
+                    <div class="fw-semibold"><%= deviceStatus.uptime || 'Not reported' %></div>
+                </div>
+                <% if (homeShowModelDetail) { %>
+                <div class="<%= homeDetailColumnClass %>">
+                    <div class="dashboard-detail-label text-muted">Model</div>
+                    <div id="deviceModel" class="dashboard-detail-value fw-semibold text-truncate" title="<%= homeModelLabel %>"><%= homeModelLabel %></div>
+                </div>
+                <% } %>
+                <div class="<%= homeDetailColumnClass %>">
+                    <div id="deviceHardwareIdLabel" class="dashboard-detail-label text-muted"><%= deviceStatus.androidId ? 'Android ID' : (deviceStatus.imei ? 'IMEI' : 'Android ID / IMEI') %></div>
+                    <div id="deviceHardwareId" class="dashboard-detail-value fw-semibold text-truncate" title="<%= deviceStatus.androidId || deviceStatus.imei || 'Not reported by device' %>"><%= deviceStatus.androidId || deviceStatus.imei || 'Not reported by device' %></div>
+                </div>
+                <div class="<%= homeDetailColumnClass %>">
+                    <div class="dashboard-detail-label text-muted">Health</div>
+                    <div id="deviceHealth" class="fw-semibold <%= typeof healthScore === 'number' ? (healthScore >= 70 ? 'text-success' : healthScore >= 40 ? 'text-warning' : 'text-danger') : '' %>">
+                        <% if (typeof healthScore === 'number') { %>
+                        <%= healthScore %>%
+                        <i class="dashboard-heart-icon bi bi-heart-pulse ms-1"></i>
+                        <% } else { %>
+                        N/A
+                        <% } %>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+<% } %>
+
+<!-- Quick Actions - Only show when connected -->
+<% if (isDeviceConnected) { %>
+    <% if (showQuickActions) { %>
+    <div class="card mb-4">
+        <div class="card-header bg-white py-3">
+            <h5 class="mb-0 fs-6 fw-semibold">
+                <i class="bi bi-lightning-charge me-2"></i>Quick Actions
+            </h5>
+        </div>
+        <div class="card-body">
+            <div class="d-flex flex-wrap gap-2">
+                <% if (showSmsUi) { %>
+                <button type="button" class="btn btn-outline-primary flex-fill" data-bs-toggle="modal"
+                    data-bs-target="#sendSmsModal" data-cap="sms">
+                    <i class="bi bi-chat-dots me-2"></i>
+                    <span class="d-none d-sm-inline">Send</span> SMS
+                </button>
+                <% } %>
+                <% if (showUssdUi) { %>
+                <button type="button" class="btn btn-outline-success flex-fill" onclick="quickBalance()" data-cap="ussd">
+                    <i class="bi bi-cash-stack me-2"></i>
+                    <span class="d-none d-sm-inline">Check</span> Balance
+                </button>
+                <button type="button" class="btn btn-outline-info flex-fill" onclick="quickSimNumber()" data-cap="ussd">
+                    <i class="bi bi-sim me-2"></i>
+                    <span class="d-none d-sm-inline">Detect</span> SIM Number
+                </button>
+                <% } %>
+                <% if (showModemUi) { %>
+                <button type="button" class="btn btn-outline-warning flex-fill" onclick="restartModem()" data-cap="modem">
+                    <i class="bi bi-arrow-repeat me-2"></i>
+                    <span class="d-none d-sm-inline">Restart</span> Modem
+                </button>
+                <% } %>
+            </div>
+        </div>
+    </div>
+    <% } %>
+<% } else { %>
+    <!-- Offline Actions - Show reconnect options -->
+    <div class="card mb-4 border-warning">
+        <div class="card-header bg-warning bg-opacity-10 py-3">
+            <h5 class="mb-0 fs-6 fw-semibold">
+                <i class="bi bi-exclamation-triangle me-2 text-warning"></i>Troubleshooting
+            </h5>
+        </div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <h6 class="fw-bold">Check Device:</h6>
+                    <ul class="small">
+                        <% homeTroubleshooting.device.forEach(function(item) { %>
+                            <li><%= item %></li>
+                        <% }); %>
+                    </ul>
+                </div>
+                <div class="col-md-6">
+                    <h6 class="fw-bold">Check Server:</h6>
+                    <ul class="small">
+                        <% homeTroubleshooting.server.forEach(function(item) { %>
+                            <li><%= item %></li>
+                        <% }); %>
+                    </ul>
+                </div>
+                <div class="col-12">
+                    <button class="btn btn-warning" onclick="refreshConnectionStatus()">
+                        <i class="bi bi-arrow-repeat me-2"></i>Retry Connection
+                    </button>
+                    <a href="/settings" class="btn btn-outline-secondary ms-2">
+                        <i class="bi bi-gear me-2"></i>System Settings
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+<% } %>
+
+<!-- Recent Activity Row - Always show (cached data) -->
+<div class="row g-3">
+    <!-- Recent SMS Conversations -->
+    <% if (showSmsUi) { %>
+    <div class="<%= communicationColumnClass %>" data-cap="sms">
+        <div class="card h-100 dashboard-list">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 fs-6 fw-semibold">
+                    <i class="bi bi-chat-dots me-2"></i>Conversations
+                </h5>
+                <a href="/sms" data-device-aware-href="/sms" class="btn btn-sm btn-primary">
+                    <span class="d-none d-sm-inline">View All</span>
+                    <i class="bi bi-arrow-right d-sm-none"></i>
+                </a>
+            </div>
+            <div class="card-body p-0">
+                <div id="dashboardRecentSmsBody">
+                    <% if (recentConversations && recentConversations.length > 0) { %>
+                        <div class="list-group list-group-flush">
+                            <% recentConversations.slice(0, 3).forEach(thread => { %>
+                                <% const threadUrl = `/sms?device=${encodeURIComponent(deviceId || '')}&thread=${encodeURIComponent(thread.primary_number || '')}&conversation=${encodeURIComponent(thread.conversation_id || '')}&title=${encodeURIComponent(thread.title || thread.primary_number || 'Conversation')}`; %>
+                                <a href="<%= threadUrl %>" data-device-aware-href="<%= threadUrl %>" class="list-group-item list-group-item-action p-3 text-decoration-none text-reset">
+                                    <div class="d-flex gap-3">
+                                        <div class="flex-shrink-0">
+                                            <div class="bg-light rounded-circle p-2">
+                                                <i class="bi bi-chat-square-text fs-5"></i>
+                                            </div>
+                                        </div>
+                                        <div class="flex-grow-1">
+                                            <div class="d-flex flex-column flex-sm-row justify-content-between align-items-start gap-2">
+                                                <h6 class="mb-0">
+                                                    <%= thread.title || thread.primary_number || 'Conversation' %>
+                                                    <% if (thread.unread_count > 0) { %>
+                                                        <span class="badge bg-danger ms-2"><%= thread.unread_count %> new</span>
+                                                    <% } else if ((thread.last_message_direction || '') === 'outgoing') { %>
+                                                        <span class="badge bg-secondary ms-2">Sent</span>
+                                                    <% } %>
+                                                </h6>
+                                                <small class="text-muted">
+                                                    <%= thread.last_message_at ? moment(thread.last_message_at).fromNow() : 'No activity' %>
+                                                </small>
+                                            </div>
+                                            <p class="mb-0 mt-1 text-truncate">
+                                                <%= thread.last_message_preview || 'No messages yet' %>
+                                            </p>
+                                            <div class="small text-muted mt-1">
+                                                <%= thread.message_count || 0 %> messages
+                                                <% if (thread.primary_number) { %>
+                                                    · <%= thread.primary_number %>
+                                                <% } %>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </a>
+                            <% }); %>
+                        </div>
+                    <% } else { %>
+                        <div class="text-center py-5">
+                            <i class="bi bi-inbox fs-1 text-muted"></i>
+                            <p class="text-muted mt-3 mb-0">No recent conversations</p>
+                        </div>
+                    <% } %>
+                </div>
+            </div>
+        </div>
+    </div>
+    <% } %>
+
+    <!-- Recent Calls -->
+    <% if (showCallsUi) { %>
+    <div class="<%= communicationColumnClass %>" data-cap="calls">
+        <div class="card h-100 dashboard-list">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 fs-6 fw-semibold">
+                    <i class="bi bi-telephone me-2"></i>Recent Calls
+                </h5>
+                <a href="/calls" data-device-aware-href="/calls" class="btn btn-sm btn-primary">
+                    <span class="d-none d-sm-inline">View All</span>
+                    <i class="bi bi-arrow-right d-sm-none"></i>
+                </a>
+            </div>
+            <div class="card-body p-0">
+                <% if (recentCalls && recentCalls.length > 0) { %>
+                    <div class="list-group list-group-flush">
+                        <% recentCalls.slice(0, 3).forEach(call => { %>
+                            <div class="list-group-item p-3">
+                                <div class="d-flex align-items-center gap-3">
+                                    <div class="flex-shrink-0">
+                                        <div class="bg-light rounded-circle p-2">
+                                            <i class="bi bi-telephone fs-5 
+                                            <%= call.type === 'incoming' ? 'text-success' : 'text-primary' %>"></i>
+                                        </div>
+                                    </div>
+                                    <div class="flex-grow-1">
+                                        <div class="d-flex justify-content-between">
+                                            <h6 class="mb-0">
+                                                <%= call.phone_number %>
+                                            </h6>
+                                            <small class="text-muted">
+                                                <%= moment(call.start_time).fromNow() %>
+                                            </small>
+                                        </div>
+                                        <small class="text-muted">
+                                            <%= call.type === 'incoming' ? 'Incoming' : 'Outgoing' %> -
+                                            <%= call.duration > 0 ? Math.floor(call.duration / 60) + ':' + ('0' + (call.duration % 60)).slice(-2) : 'No answer' %>
+                                        </small>
+                                    </div>
+                                </div>
+                            </div>
+                        <% }); %>
+                    </div>
+                <% } else { %>
+                    <div class="text-center py-5">
+                        <i class="bi bi-telephone-x fs-1 text-muted"></i>
+                        <p class="text-muted mt-3 mb-0">No recent calls</p>
+                    </div>
+                <% } %>
+            </div>
+        </div>
+    </div>
+    <% } %>
+
+    <!-- System Activity -->
+    <div class="<%= activityColumnClass %>">
+        <div class="card h-100">
+            <div class="card-header bg-white py-3">
+                <h5 class="mb-0 fs-6 fw-semibold">
+                    <i class="bi bi-activity me-2"></i>System Activity
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="list-group list-group-flush">
+                    <% if (showSmsUi) { %>
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0">
+                        <div>
+                            <i class="bi bi-envelope text-warning me-2"></i>
+                            SMS Sent
+                        </div>
+                        <span class="badge bg-light text-dark">
+                            <%= dataUsage.smsSent %>
+                        </span>
+                    </div>
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0">
+                        <div>
+                            <i class="bi bi-inbox text-primary me-2"></i>
+                            SMS Received
+                        </div>
+                        <span class="badge bg-light text-dark">
+                            <%= dataUsage.smsReceived || 0 %>
+                        </span>
+                    </div>
+                    <% } %>
+                    <% if (showCallsUi) { %>
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0">
+                        <div>
+                            <i class="bi bi-telephone text-info me-2"></i>
+                            Call Duration
+                        </div>
+                        <span class="badge bg-light text-dark">
+                            <%= dataUsage.callDuration %> min
+                        </span>
+                    </div>
+                    <% } %>
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0">
+                        <div>
+                            <i class="bi bi-person-lines-fill text-secondary me-2"></i>
+                            Contacts
+                        </div>
+                        <span class="badge bg-light text-dark">
+                            <%= contactCount %>
+                        </span>
+                    </div>
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0">
+                        <div>
+                            <i class="bi bi-list-task text-primary me-2"></i>
+                            Dashboard Queue
+                        </div>
+                        <span class="badge bg-light text-dark" id="dashQueueSummary">
+                            <%= homeDashboardQueueText %>
+                        </span>
+                    </div>
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0">
+                        <div>
+                            <i class="bi bi-arrow-down-up text-info me-2"></i>
+                            Device Queue
+                        </div>
+                        <span class="badge bg-light text-dark" id="dashDeviceQueue">
+                            <%= homeDeviceQueueText %>
+                        </span>
+                    </div>
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0">
+                        <div>
+                            <i class="bi bi-device-hdd text-warning me-2"></i>
+                            Storage Queue
+                        </div>
+                        <span class="badge bg-light text-dark" id="dashStorageQueue">
+                            <%= homeStorageQueueText %>
+                        </span>
+                    </div>
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0">
+                        <div>
+                            <i class="bi bi-clock-history text-secondary me-2"></i>
+                            Recent Queue
+                        </div>
+                        <span class="badge bg-light text-dark text-wrap text-end" id="dashRecentQueue">
+                            <%= homeRecentQueueText %>
+                        </span>
+                    </div>
+                    <% if (showUssdUi) { %>
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0">
+                        <div>
+                            <i class="bi bi-telephone-forward text-secondary me-2"></i>
+                            USSD Queries
+                        </div>
+                        <span class="badge bg-light text-dark">
+                            <%= ussdCount %>
+                        </span>
+                    </div>
+                    <% } %>
+                </div>
+            </div>
+            <div class="card-footer bg-white py-2">
+                <small class="text-muted">
+                    <i class="bi bi-clock me-1"></i>Updated just now
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Send SMS Modal -->
+<% if (showSmsUi) { %>
+<div class="modal fade" id="sendSmsModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-chat-dots me-2"></i>Send SMS
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="quickSmsForm">
+                    <div class="mb-3">
+                        <label class="form-label">Phone Number</label>
+                        <div class="input-group">
+                            <span class="input-group-text">+88</span>
+                            <input type="tel" class="form-control" name="to" placeholder="1712345678"
+                                pattern="[0-9]{10}" title="Please enter a 10-digit number" required>
+                        </div>
+                        <small class="text-muted">Enter 10-digit number without country code</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Message</label>
+                        <textarea class="form-control" name="message" rows="4"
+                            placeholder="Type your message..." required></textarea>
+                        <div class="d-flex justify-content-between mt-1">
+                            <small class="text-muted">
+                                <i class="bi bi-info-circle me-1"></i>
+                                Multipart SMS up to 1023 UTF-8 bytes and 15 parts
+                            </small>
+                            <small class="text-muted">
+                                <span id="charCount">0</span> chars
+                                <span class="ms-2"><span id="charBytes">0</span>/1023 bytes</span>
+                                <span class="ms-2" id="charParts">(1 part, GSM-7)</span>
+                            </small>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="quickSendSms">
+                    <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                    Send SMS
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+<% } %>
+<% } %>
+
+<script>
+    window.__dashboardRenderedOnline = <%= isDeviceConnected ? 'true' : 'false' %>;
+    window.ACTIVE_DEVICE_TYPE = window.ACTIVE_DEVICE_TYPE || '<%= homeDeviceLane %>';
+
+    function refreshDashboard() {
+        location.reload();
+    }
+
+    async function switchDeviceAndReload(deviceId) {
+        if (!deviceId) return;
+        const previousDeviceId = localStorage.getItem('activeDeviceId') || window.DEVICE_ID || '';
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.set('device', deviceId);
+        if (window.setActiveDeviceContext) {
+            window.setActiveDeviceContext(deviceId);
+        } else {
+            localStorage.setItem('activeDeviceId', deviceId);
+            window.DEVICE_ID = deviceId;
+            const sel = document.getElementById('sidebarDeviceSelector');
+            if (sel) sel.value = deviceId;
+        }
+        try {
+            if (window.persistActiveDeviceSelection) {
+                await window.persistActiveDeviceSelection(deviceId);
+            } else {
+                const response = await fetch('/api/devices/active', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+                    },
+                    body: JSON.stringify({ deviceId })
+                });
+                if (!response.ok) {
+                    throw new Error('Failed to switch device');
+                }
+            }
+        } catch (error) {
+            if (window.setActiveDeviceContext) {
+                window.setActiveDeviceContext(previousDeviceId);
+            } else {
+                localStorage.setItem('activeDeviceId', previousDeviceId);
+                window.DEVICE_ID = previousDeviceId;
+            }
+            if (window.showToast) {
+                window.showToast(error.message || 'Failed to switch device', 'danger');
+            } else {
+                alert(error.message || 'Failed to switch device');
+            }
+            return;
+        }
+        if (window.socket) window.socket.emit('subscribe:device', { deviceId });
+        window.location.assign(`${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+    }
+
+    function quickBalance() {
+        if (!<%= isDeviceConnected %>) {
+            alert('Device is offline. Cannot check balance.');
+            return;
+        }
+        const simContext = window.getActiveDeviceSimContext ? window.getActiveDeviceSimContext() : {};
+        fetch('/api/quick/balance', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(simContext)
+        })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Balance check initiated. Check USSD history for response.');
+                } else {
+                    alert('Failed to check balance: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error checking balance');
+            });
+    }
+
+    function quickSimNumber() {
+        if (!<%= isDeviceConnected %>) {
+            alert('Device is offline. Cannot detect SIM number.');
+            return;
+        }
+        const simContext = window.getActiveDeviceSimContext ? window.getActiveDeviceSimContext() : {};
+        fetch('/api/quick/sim-number', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(simContext)
+        })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message + '. Check USSD history if it takes a moment.');
+                } else {
+                    alert('Failed to detect SIM number: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error detecting SIM number');
+            });
+    }
+
+    function restartModem() {
+        if (!<%= isDeviceConnected %>) {
+            alert('Device is offline. Cannot restart modem.');
+            return;
+        }
+        if (confirm('Restart modem? This will disconnect your internet connection temporarily.')) {
+            fetch('/api/quick/restart-modem', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('Modem restart command sent');
+                    } else {
+                        alert('Failed to restart modem: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Error restarting modem');
+                });
+        }
+    }
+
+    // Character counter
+    document.addEventListener('DOMContentLoaded', function () {
+        const textarea = document.querySelector('#quickSmsForm textarea');
+        const charCount = document.getElementById('charCount');
+        const charBytes = document.getElementById('charBytes');
+        const charParts = document.getElementById('charParts');
+
+        if (textarea && charCount && window.smsComposeLimits) {
+            const updateCounter = function () {
+                const clamped = window.smsComposeLimits.clamp(textarea.value);
+                if (clamped !== textarea.value) {
+                    textarea.value = clamped;
+                }
+                const analysis = window.smsComposeLimits.analyze(textarea.value);
+                charCount.textContent = String(analysis.characters);
+                if (charBytes) charBytes.textContent = String(analysis.utf8Bytes);
+                if (charParts) {
+                    charParts.textContent = `(${analysis.parts} part${analysis.parts === 1 ? '' : 's'}, ${analysis.encoding === 'gsm7' ? 'GSM-7' : 'Unicode'})`;
+                }
+            };
+
+            textarea.addEventListener('input', updateCounter);
+            updateCounter();
+        }
+    });
+
+    // Offline: show last-known device state from localStorage
+    (function () {
+        // Only runs on the dashboard (index) page
+        if (!document.getElementById('dashWifiPrimary')) return;
+
+        function activeDashboardDeviceId() {
+            const value = (window.getActiveDeviceId ? window.getActiveDeviceId() : '')
+                || window.DEVICE_ID
+                || localStorage.getItem('activeDeviceId')
+                || '';
+            return String(value || '').trim();
+        }
+
+        function isActiveDashboardDeviceStatus(status) {
+            const activeDeviceId = activeDashboardDeviceId();
+            const statusDeviceId = String(status?.deviceId || status?.device_id || '').trim();
+            return !activeDeviceId || !statusDeviceId || statusDeviceId === activeDeviceId;
+        }
+        window.isActiveDashboardDeviceStatus = isActiveDashboardDeviceStatus;
+
+        function lastDashboardStatusCacheKey() {
+            if (typeof window.getLastDeviceStatusCacheKey === 'function') {
+                return window.getLastDeviceStatusCacheKey(activeDashboardDeviceId());
+            }
+            const deviceId = activeDashboardDeviceId();
+            return deviceId ? `lastDeviceStatus:${deviceId}` : 'lastDeviceStatus';
+        }
+
+        function normalizeDashboardStatus(status) {
+            if (!status) return null;
+
+            const freshnessCutoffMs = 2 * 60 * 1000;
+            const freshnessSource = status.lastSeen || status.last_seen || status._cachedAt || null;
+            const freshnessMs = freshnessSource ? Date.parse(String(freshnessSource)) : NaN;
+            const hasFreshness = Number.isFinite(freshnessMs);
+            const stale = status.online === false
+                || (hasFreshness && (Date.now() - freshnessMs) > freshnessCutoffMs);
+
+            const describeBatteryTelemetry = function (nextStatus) {
+                const battery = nextStatus?.battery;
+                const voltage = Number(nextStatus?.voltageMv);
+                const hasVoltage = Number.isFinite(voltage) && voltage > 0;
+                const hasCharging = nextStatus?.charging !== null && nextStatus?.charging !== undefined;
+                const hasTelemetry = battery !== null && battery !== undefined || hasVoltage || hasCharging;
+                const batteryLooksFull = Number(battery) >= 95 && hasVoltage && voltage >= 4180;
+
+                return {
+                    hasTelemetry,
+                    chargeLabel: hasCharging ? (nextStatus.charging ? 'Yes' : 'No') : (batteryLooksFull ? 'Full/idle' : (hasTelemetry ? 'Unknown' : 'Not reported')),
+                    stateLabel: hasTelemetry ? (battery !== null && battery !== undefined ? 'Gauge live' : 'Waiting for gauge sample') : 'Not reported by device',
+                    voltageLabel: hasVoltage ? (voltage / 1000).toFixed(2) + ' V' : (hasTelemetry ? 'Sampling' : 'Not reported by device'),
+                    valueLabel: battery !== null && battery !== undefined ? `${battery}%` : 'N/A',
+                    powerSourceLabel: hasCharging ? (nextStatus.charging ? 'USB power' : 'Battery') : (batteryLooksFull ? 'USB/idle' : (hasTelemetry ? 'Unknown' : 'Not reported'))
+                };
+            };
+
+            const describeTelemetryNotice = function (nextStatus) {
+                const issues = [];
+                const activePathValue = String(nextStatus?.activePath || nextStatus?.active_path || '').trim().toLowerCase();
+                if (!nextStatus?.online || activePathValue !== 'modem') {
+                    return null;
+                }
+
+                if (nextStatus.signal === null || nextStatus.signal === undefined) {
+                    issues.push('signal');
+                }
+                if (nextStatus.battery === null || nextStatus.battery === undefined) {
+                    issues.push('battery');
+                }
+                if (nextStatus.temperature === null || nextStatus.temperature === undefined) {
+                    issues.push('temperature');
+                }
+                if (!nextStatus.imei && !nextStatus.androidId && !nextStatus.android_id) {
+                    issues.push('hardware ID');
+                }
+
+                if (!issues.length) {
+                    return null;
+                }
+
+                return `Limited device telemetry on this link. The active modem profile is not reporting ${issues.join(', ')}.`;
+            };
+
+            const getSimNumberStorageKey = function (nextStatus) {
+                const deviceId = String(
+                    nextStatus?.deviceId
+                    || nextStatus?.device_id
+                    || (window.getActiveDeviceId ? window.getActiveDeviceId() : '')
+                    || ''
+                ).trim();
+                return deviceId ? `sim-number:last:${deviceId}` : '';
+            };
+
+            const resolveSimNumberValue = function (nextStatus) {
+                return nextStatus?.simNumber
+                    || nextStatus?.sim_number
+                    || nextStatus?.subscriberNumber
+                    || nextStatus?.subscriber_number
+                    || nextStatus?.modem_subscriber_number
+                    || nextStatus?.sim?.number
+                    || nextStatus?.sim?.subscriberNumber
+                    || nextStatus?.sim?.msisdn
+                    || nextStatus?.mobile?.simNumber
+                    || nextStatus?.mobile?.subscriberNumber
+                    || nextStatus?.mobile?.number
+                    || nextStatus?.modem?.subscriberNumber
+                    || nextStatus?.status?.modem_subscriber_number
+                    || '';
+            };
+
+            const getSimNumberDisplayValue = function (nextStatus, fallback = 'Checking...') {
+                const liveValue = String(resolveSimNumberValue(nextStatus) || '').trim();
+                const storageKey = getSimNumberStorageKey(nextStatus);
+                if (liveValue && storageKey) {
+                    sessionStorage.setItem(storageKey, liveValue);
+                    return liveValue;
+                }
+
+                const cachedValue = storageKey ? String(sessionStorage.getItem(storageKey) || '').trim() : '';
+                return cachedValue || fallback;
+            };
+
+            const maybeAutoDetectSimNumber = function (nextStatus) {
+                if (!nextStatus?.online || getSimNumberDisplayValue(nextStatus, '') !== '') return;
+                const deviceId = String(nextStatus?.deviceId || nextStatus?.device_id || (window.getActiveDeviceId ? window.getActiveDeviceId() : '') || '').trim();
+                const operator = String(nextStatus?.operator || nextStatus?.sim?.operatorName || nextStatus?.sim?.operator || nextStatus?.mobile?.operatorName || nextStatus?.mobile?.operator || '').trim();
+                if (!deviceId || !operator) return;
+                const key = `sim-auto-detect:${deviceId}`;
+                const lastAttempt = Number(sessionStorage.getItem(key) || 0);
+                if (Number.isFinite(lastAttempt) && Date.now() - lastAttempt < 10 * 60 * 1000) return;
+                sessionStorage.setItem(key, String(Date.now()));
+                const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+                fetch(`/api/quick/sim-number?deviceId=${encodeURIComponent(deviceId)}`, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {}
+                }).catch(() => {});
+            };
+
+            const formatVoltage = function (value) {
+                const numeric = Number(value);
+                if (!Number.isFinite(numeric) || numeric <= 0) return 'Not reported';
+                return (numeric / 1000).toFixed(2) + ' V';
+            };
+
+            const formatStorageSummary = function (storage) {
+                const total = Number(storage?.totalBytes || 0);
+                const used = Number(storage?.usedBytes || 0);
+                const free = Number(storage?.freeBytes || 0);
+                const mounted = Boolean(storage?.mediaAvailable || storage?.mounted);
+                const bufferedOnly = Boolean(storage?.bufferedOnly);
+                const queueDepth = Number(storage?.queueDepth || 0);
+
+                if (!mounted) {
+                    return {
+                        value: 'N/A',
+                        meta: '<span class="badge bg-warning text-dark">No SSD</span> Attach storage',
+                        status: 'Not detected',
+                        queue: '0',
+                        space: 'Not reported'
+                    };
+                }
+
+                if (total > 0) {
+                    const percent = Math.round((used / total) * 100);
+                    return {
+                        value: `${percent}%`,
+                        meta: `${(free / 1073741824).toFixed(1)}GB free - ${(used / 1073741824).toFixed(1)}GB/${(total / 1073741824).toFixed(1)}GB`,
+                        status: bufferedOnly ? 'Buffered only' : 'Mounted',
+                        queue: String(queueDepth),
+                        space: `${(free / 1073741824).toFixed(1)}GB free / ${(total / 1073741824).toFixed(1)}GB`
+                    };
+                }
+
+                return {
+                    value: 'Ready',
+                    meta: `${bufferedOnly ? 'Buffered only' : 'Mounted'} - Queue ${queueDepth}`,
+                    status: bufferedOnly ? 'Buffered only' : 'Mounted',
+                    queue: String(queueDepth),
+                    space: 'Capacity not reported'
+                };
+            };
+
+            if (stale) {
+                return {
+                    ...status,
+                    online: false,
+                    signal: null,
+                    signalDbm: null,
+                    wifiSignal: null,
+                    cellularSignal: null,
+                    battery: null,
+                    voltageMv: null,
+                    charging: null,
+                    network: 'Offline',
+                    operator: null,
+                    simNumber: null,
+                    currentNetworkName: 'Offline',
+                    currentNetworkDetails: hasFreshness ? 'No recent heartbeat' : 'Waiting for live data',
+                    wifiStatus: hasFreshness ? 'No recent heartbeat' : 'Waiting for live data',
+                    wifiStatusLabel: 'Disconnected',
+                    cellularStatus: hasFreshness ? 'No recent heartbeat' : 'Waiting for live data',
+                    ip: 'N/A',
+                    displayName: 'Offline',
+                    temperature: null,
+                    uptime: null,
+                    activePath: 'offline',
+                    healthScore: null,
+                    batteryLabel: 'N/A',
+                    voltageLabel: 'Not reported by device',
+                    chargingLabel: 'Unknown',
+                    batteryStateLabel: 'Not reported by device',
+                    telemetryNotice: null,
+                    sdSummary: formatStorageSummary(status.storage),
+                    wifi: status.wifi
+                        ? {
+                            ...status.wifi,
+                            connected: false,
+                            ipAddress: '',
+                            rssi: null
+                        }
+                        : null,
+                    mqtt: status.mqtt
+                        ? {
+                            ...status.mqtt,
+                            connected: false,
+                            subscribed: false
+                        }
+                        : null
+                };
+            }
+
+            function formatWifiSecurity(value) {
+                const text = String(value || '').trim();
+                if (!text) return null;
+                const normalized = text.toLowerCase().replace(/[\s-]+/g, '_');
+                if (normalized === 'open') return 'Open';
+                if (normalized.includes('wpa2') && normalized.includes('wpa3')) return 'WPA2/WPA3';
+                if (normalized.includes('wpa') && normalized.includes('wpa2')) return 'WPA/WPA2';
+                if (normalized.includes('wpa3')) return 'WPA3';
+                if (normalized.includes('wpa2')) return 'WPA2';
+                if (normalized.includes('wep')) return 'WEP';
+                if (normalized.includes('wpa')) return 'WPA';
+                return text.toUpperCase();
+            }
+
+            function formatCellularNetworkType(value) {
+                const text = String(value || '').trim();
+                if (!text) return null;
+                const normalized = text.toLowerCase();
+                if (normalized === 'cellular' || normalized === 'unknown' || normalized === 'offline' || normalized === 'no service') {
+                    return null;
+                }
+                if (normalized.includes('5g') || normalized.includes('nr')) return '5G';
+                if (normalized.includes('lte') || normalized.includes('4g') || normalized.includes('cat-1') || normalized.includes('cat1')) return '4G/LTE';
+                if (normalized.includes('wcdma') || normalized.includes('umts') || normalized.includes('hspa') || normalized.includes('hsdpa') || normalized.includes('hsupa') || normalized.includes('3g')) return '3G';
+                if (normalized.includes('edge') || normalized.includes('gprs') || normalized.includes('gsm') || normalized.includes('2g')) return '2G';
+                return text.toUpperCase();
+            }
+
+            const activePath = String(status.activePath || status.active_path || '').trim().toLowerCase();
+            const wifi = status.wifi || {};
+            const wifiIp = wifi.ipAddress || (activePath === 'wifi' ? status.ip : null) || '';
+            const wifiConnected = Boolean(
+                wifi.connected
+                || activePath === 'wifi'
+                || wifi.ipAssigned === true
+                || wifiIp
+            );
+            const wifiSignal = (wifiConnected || activePath === 'wifi')
+                ? (status.wifiSignal ?? (
+                    Number.isFinite(Number(wifi.rssi))
+                        ? Math.max(0, Math.min(100, Math.round((Number(wifi.rssi) + 100) * 2)))
+                        : null
+                ))
+                : null;
+            const cellularSignal = status.cellularSignal ?? status.signal ?? null;
+            const operator = status.operator || status.mobile?.operatorName || status.mobile?.operator || status.sim?.operatorName || status.sim?.operator || null;
+            const simNumber = getSimNumberDisplayValue(status, null);
+            const wifiSsid = status.wifiSsid || wifi.ssid || null;
+            const wifiSsidDisplay = status.wifiSsidDisplay || wifiSsid || (wifiConnected ? 'SSID unavailable' : null);
+            const pppPending = String(status?.mqtt?.lastErrorText || '') === 'modem_data_ready_ppp_missing';
+            const wifiSecurity = status.wifiSecurity || formatWifiSecurity(status?.wifi?.security || status?.wifi_security || status?.wifiSecurity);
+            const cellularNetworkType = status.cellularNetworkType || formatCellularNetworkType(
+                status?.mobile?.networkType || status?.networkType || status?.status?.mobile?.networkType || status?.status?.networkType
+            );
+            const batteryTelemetry = describeBatteryTelemetry(status);
+            const wifiDisplayName = wifiSecurity && wifiSsid ? `${wifiSsid} (${wifiSecurity})` : (wifiSsidDisplay || 'Wi-Fi');
+            const cellularDisplayName = cellularNetworkType
+                ? `${operator || status.network || 'Cellular'} (${cellularNetworkType})`
+                : (operator || status.network || 'Cellular');
+
+            const wifiStatus = status.wifiStatus || (
+                wifiConnected
+                    ? `${wifiDisplayName}${wifiSignal !== null ? ` - ${wifiSignal}%` : ''}${wifiIp ? ` - IP ${wifiIp}` : ''}`
+                    : (wifiSsid
+                        ? `${wifiDisplayName}${wifi.lastDisconnectReasonText ? (wifi.lastDisconnectReasonText === 'no_ap_found' ? ' - (no_ap_found)' : ` - disconnected (${wifi.lastDisconnectReasonText})`) : ' - disconnected'}`
+                        : 'Not connected')
+            );
+            const wifiStatusLabel = status.wifiStatusLabel || (
+                (wifiConnected || activePath === 'wifi')
+                    ? 'Connected'
+                    : 'Not connected'
+            );
+            const wifiRoleLabel = status.wifiRoleLabel || (
+                !status.online
+                    ? 'Offline'
+                    : (activePath === 'wifi'
+                        ? 'Primary'
+                        : (wifiConnected
+                            ? 'Connected'
+                            : (wifiSsid ? 'Not connected' : 'Offline')))
+            );
+
+            let cellularStatus = status.cellularStatus || 'Unavailable';
+            if (!status.cellularStatus && (operator || cellularSignal !== null || status.ip || status.sim?.registered)) {
+                const suffixParts = [];
+                if (cellularSignal === null) {
+                    suffixParts.push('signal unavailable');
+                }
+                if (pppPending) {
+                    suffixParts.push('PPP pending');
+                } else if (activePath === 'modem') {
+                    suffixParts.push('active');
+                }
+                cellularStatus = `${cellularDisplayName}${cellularSignal !== null ? ` - ${cellularSignal}%` : ''}${suffixParts.length ? ` - ${suffixParts.join(' - ')}` : ''}`;
+            }
+
+            let networkValue = status.network || 'No Service';
+            let currentNetworkName = status.currentNetworkName || '-';
+            let currentNetworkDetails = status.currentNetworkDetails || '-';
+            let resolvedIp = status.ip || wifiIp || '-';
+            let modemRoleLabel = status.modemRoleLabel || (!status.online ? 'Offline' : 'Connected');
+            if (wifiConnected || activePath === 'wifi') {
+                networkValue = 'Wi-Fi';
+                currentNetworkName = status.currentNetworkName || wifiSsidDisplay || 'Wi-Fi';
+                currentNetworkDetails = status.currentNetworkDetails || wifiStatus;
+                resolvedIp = wifiIp || status.ip || '-';
+            } else if (activePath === 'modem' || operator || status.ip) {
+                networkValue = pppPending ? 'Cellular standby' : 'Cellular';
+                currentNetworkName = status.currentNetworkName || operator || status.network || 'Cellular';
+                currentNetworkDetails = status.currentNetworkDetails || cellularStatus;
+                resolvedIp = status.ip || '-';
+                modemRoleLabel = status.modemRoleLabel || (activePath === 'modem' ? 'Fallback' : 'Connected');
+            } else if (!status.online) {
+                modemRoleLabel = 'Offline';
+            }
+
+            const healthScore = typeof status.healthScore === 'number'
+                ? status.healthScore
+                : (() => {
+                    let score = 0;
+                    let factors = 0;
+                    if (status.signal !== null && status.signal !== undefined) {
+                        score += Number(status.signal) * 0.4;
+                        factors += 0.4;
+                    }
+                    if (status.battery !== null && status.battery !== undefined) {
+                        score += Number(status.battery) * 0.4;
+                        factors += 0.4;
+                    }
+                    return factors > 0 ? Math.round(score / factors) : null;
+                })();
+
+            return {
+                ...status,
+                wifiSignal,
+                wifiSignalLabel: wifiSignal !== null && wifiSignal !== undefined ? `${wifiSignal}%` : 'N/A',
+                cellularSignal,
+                cellularSignalLabel: cellularSignal !== null && cellularSignal !== undefined ? `${cellularSignal}%` : 'N/A',
+                wifi: {
+                    ...wifi,
+                    connected: wifiConnected,
+                    ipAddress: wifiIp
+                },
+                wifiSsidDisplay,
+                wifiSecurity,
+                cellularNetworkType,
+                wifiStatus,
+                wifiStatusLabel,
+                wifiRoleLabel,
+                cellularStatus,
+                modemRoleLabel,
+                network: networkValue,
+                simNumber,
+                activePathLabel: status.activePathLabel || (activePath === 'wifi'
+                    ? (wifiSecurity ? `Wi-Fi (${wifiSecurity})` : 'Wi-Fi')
+                    : (activePath === 'modem'
+                        ? (cellularNetworkType ? `Modem (${cellularNetworkType})` : 'Modem')
+                        : networkValue)),
+                currentNetworkName,
+                currentNetworkDetails,
+                ip: resolvedIp,
+                displayName: status.displayName || (wifiConnected || activePath === 'wifi'
+                    ? (wifiSsidDisplay || operator || 'Wi-Fi')
+                    : (operator || networkValue || 'Cellular')),
+                healthScore,
+                batteryLabel: batteryTelemetry.valueLabel,
+                voltageLabel: batteryTelemetry.voltageLabel || formatVoltage(status.voltageMv),
+                chargingLabel: batteryTelemetry.chargeLabel,
+                batteryStateLabel: batteryTelemetry.stateLabel,
+                batteryPowerSourceLabel: batteryTelemetry.powerSourceLabel,
+                telemetryNotice: describeTelemetryNotice(status),
+                sdSummary: formatStorageSummary(status.storage)
+            };
+        }
+
+        function updateDashboardSummary(status) {
+            if (!status) return;
+
+            const wifiPrimaryEl = document.getElementById('dashWifiPrimary');
+            const modemActiveEl = document.getElementById('dashModemActive');
+            const batEl  = document.getElementById('dashBatteryValue');
+            const wifiSigValueEl = document.getElementById('dashWifiSignalValue');
+            const wifiSigBar = document.getElementById('dashWifiSignalBar');
+            const cellSigValueEl = document.getElementById('dashCellSignalValue');
+            const cellSigBar = document.getElementById('dashCellSignalBar');
+            const batBar = document.getElementById('dashBatteryBar');
+            const opEl   = document.getElementById('dashOperator');
+            const simNumberEl = document.getElementById('dashSimNumber');
+            const chEl   = document.getElementById('dashCharging');
+            const voltageEl = document.getElementById('dashBatteryVoltage');
+            const batteryStateEl = document.getElementById('dashBatteryState');
+            const batteryPowerSourceEl = document.getElementById('dashBatteryPowerSource');
+            const wifiSsidEl = document.getElementById('dashWifiSsid');
+            const wifiIpEl = document.getElementById('dashWifiIp');
+            const wifiSigMetaEl = document.getElementById('dashWifiSignalMeta');
+            const cellSigMetaEl = document.getElementById('dashCellSignalMeta');
+            const currentIpEl = document.getElementById('dashCurrentIp');
+            const sdValueEl = document.getElementById('dashSdValue');
+            const sdMetaEl = document.getElementById('dashSdMeta');
+            const sdStatusEl = document.getElementById('dashSdStatus');
+            const sdQueueEl = document.getElementById('dashSdQueue');
+            const sdSpaceEl = document.getElementById('dashSdSpace');
+            const lastSeenEl = document.getElementById('dashboardLastSeen');
+            const hardwareIdEl = document.getElementById('deviceHardwareId');
+            const hardwareIdLabelEl = document.getElementById('deviceHardwareIdLabel');
+            const healthEl = document.getElementById('deviceHealth');
+            const telemetryNoticeEl = document.getElementById('dashboardTelemetryNotice');
+            const telemetryNoticeTextEl = document.getElementById('dashboardTelemetryNoticeText');
+
+            if (wifiPrimaryEl) wifiPrimaryEl.textContent = status.wifiRoleLabel || (status.online ? 'Primary' : 'Offline');
+            if (modemActiveEl) modemActiveEl.textContent = status.modemRoleLabel || (status.online ? 'Connected' : 'Offline');
+            if (batEl) batEl.textContent = status.batteryLabel || (status.battery !== null && status.battery !== undefined ? status.battery + '%' : 'N/A');
+            if (wifiSigValueEl) wifiSigValueEl.textContent = status.wifiSignalLabel || (status.wifiSignal !== null && status.wifiSignal !== undefined ? status.wifiSignal + '%' : 'N/A');
+            if (wifiSigBar) wifiSigBar.style.width = (status.wifiSignal ?? 0) + '%';
+            if (cellSigValueEl) cellSigValueEl.textContent = status.cellularSignalLabel || (status.cellularSignal !== null && status.cellularSignal !== undefined ? status.cellularSignal + '%' : 'N/A');
+            if (cellSigBar) cellSigBar.style.width = (status.cellularSignal ?? 0) + '%';
+            if (batBar) batBar.style.width = (status.battery ?? 0) + '%';
+            if (opEl) opEl.textContent = status.operator || 'Not reported';
+            if (simNumberEl) simNumberEl.textContent = getSimNumberDisplayValue(status);
+            if (chEl) chEl.textContent = status.chargingLabel || (status.charging !== null && status.charging !== undefined ? (status.charging ? 'Yes' : 'No') : 'Unknown');
+            if (voltageEl) voltageEl.textContent = status.voltageLabel || 'Not reported';
+            if (batteryStateEl) batteryStateEl.textContent = status.batteryStateLabel || 'Telemetry pending';
+            if (batteryPowerSourceEl) batteryPowerSourceEl.textContent = status.batteryPowerSourceLabel || 'Not reported';
+            if (wifiSsidEl) wifiSsidEl.textContent = status.wifiSsidDisplay || status.wifiSsid || 'Not reported';
+            if (wifiIpEl) {
+                const wifiIp = status.wifi?.ipAddress || (status.activePath === 'wifi' ? status.ip : null) || 'N/A';
+                wifiIpEl.textContent = wifiIp;
+            }
+            if (wifiSigMetaEl) wifiSigMetaEl.textContent = status.wifiStatusLabel || 'Not connected';
+            if (cellSigMetaEl) cellSigMetaEl.textContent = status.cellularStatus || 'Unavailable';
+            if (currentIpEl) currentIpEl.textContent = status.ip || 'N/A';
+            maybeAutoDetectSimNumber(status);
+            if (hardwareIdEl) {
+                const imei = status.imei || status?.modem?.imei || status?.device?.imei || null;
+                const androidId = status.androidId
+                    || status.android_id
+                    || status?.device?.androidId
+                    || status?.device?.android_id
+                    || null;
+                const installId = status.installId || status?.device?.installId || null;
+                const hardwareLabel = imei
+                    ? `IMEI • ${imei}`
+                    : (androidId
+                        ? `Android ID • ${androidId}`
+                        : (installId ? `Install ID • ${installId}` : 'Not reported by device'));
+                hardwareIdEl.textContent = hardwareLabel;
+                hardwareIdEl.setAttribute('title', hardwareLabel);
+            }
+            if (hardwareIdEl || hardwareIdLabelEl) {
+                const hardwareIdentity = typeof window.getDeviceHardwareIdentity === 'function'
+                    ? window.getDeviceHardwareIdentity(status)
+                    : {
+                        label: status.androidId || status.android_id || status?.device?.androidId || status?.device?.android_id
+                            ? 'Android ID'
+                            : ((status.imei || status?.modem?.imei || status?.device?.imei) ? 'IMEI' : 'Android ID / IMEI'),
+                        value: status.androidId
+                            || status.android_id
+                            || status?.device?.androidId
+                            || status?.device?.android_id
+                            || status.imei
+                            || status?.modem?.imei
+                            || status?.device?.imei
+                            || status.installId
+                            || status?.device?.installId
+                            || 'Not reported by device'
+                    };
+                if (hardwareIdEl) {
+                    hardwareIdEl.textContent = hardwareIdentity.value;
+                    hardwareIdEl.setAttribute('title', hardwareIdentity.value);
+                }
+                if (hardwareIdLabelEl) {
+                    hardwareIdLabelEl.textContent = hardwareIdentity.label;
+                }
+            }
+
+            const activeCard = document.getElementById('activeDeviceCard');
+            if (activeCard) {
+                const primaryEl = activeCard.querySelector('.active-card-primary');
+                const currentEl = activeCard.querySelector('.active-card-current');
+                const signalEl = activeCard.querySelector('.active-card-signal');
+                const ipEl = activeCard.querySelector('.active-card-ip');
+
+                if (primaryEl) {
+                    primaryEl.textContent = status.activePathLabel
+                        || (status.activePath === 'wifi'
+                            ? 'Wi-Fi'
+                            : (status.activePath === 'modem' ? 'Modem' : (status.network || 'Not reported')));
+                }
+                if (currentEl) {
+                    const currentValue = status.activePath === 'wifi'
+                        ? (status.wifiSsid || status.currentNetworkName || 'Not reported')
+                        : (status.operator || status.currentNetworkName || status.displayName || 'Not reported');
+                    currentEl.textContent = currentValue;
+                    currentEl.setAttribute('title', currentValue);
+                }
+                if (signalEl) {
+                    const activeSignal = status.activePath === 'wifi'
+                        ? status.wifiSignal
+                        : (status.cellularSignal ?? status.signal);
+                    signalEl.textContent = activeSignal !== null && activeSignal !== undefined ? `${activeSignal}%` : 'N/A';
+                }
+                if (ipEl) ipEl.textContent = status.ip || 'N/A';
+            }
+
+            document.querySelectorAll('.dashboard-detail-label').forEach((labelEl) => {
+                const label = String(labelEl.textContent || '').trim();
+                const valueEl = labelEl.nextElementSibling;
+                if (!valueEl) return;
+
+                if (label === 'Uptime') {
+                    valueEl.textContent = status.uptime || 'Not reported';
+                } else if (label === 'IP Address') {
+                    valueEl.textContent = status.ip || 'N/A';
+                } else if (label === 'Health') {
+                    if (typeof status.healthScore === 'number') {
+                        valueEl.classList.remove('text-success', 'text-warning', 'text-danger');
+                        valueEl.classList.add(status.healthScore >= 70 ? 'text-success' : status.healthScore >= 40 ? 'text-warning' : 'text-danger');
+                        valueEl.innerHTML = `${status.healthScore}% <i class="dashboard-heart-icon bi bi-heart-pulse ms-1"></i>`;
+                    } else {
+                        valueEl.classList.remove('text-success', 'text-warning', 'text-danger');
+                        valueEl.textContent = 'N/A';
+                    }
+                } else if (label === 'Temp') {
+                    valueEl.textContent = status.temperature !== null && status.temperature !== undefined
+                        ? `${status.temperature} C`
+                        : 'N/A';
+                }
+            });
+
+            if (sdValueEl && sdMetaEl) {
+                const sd = status.sdSummary || {
+                    value: 'N/A',
+                    meta: '<span class="badge bg-warning text-dark">No SSD</span> Attach storage',
+                    status: 'Not detected',
+                    queue: '0',
+                    space: 'Not reported'
+                };
+                sdValueEl.textContent = sd.value;
+                sdMetaEl.innerHTML = sd.meta;
+                if (sdStatusEl) sdStatusEl.textContent = sd.status;
+                if (sdQueueEl) sdQueueEl.textContent = sd.queue;
+                if (sdSpaceEl) sdSpaceEl.textContent = sd.space;
+            }
+
+            if (lastSeenEl && status.lastSeen) {
+                const timestamp = new Date(status.lastSeen);
+                const label = Number.isNaN(timestamp.getTime())
+                    ? status.lastSeen
+                    : timestamp.toLocaleString('sv-SE').replace(',', '');
+                lastSeenEl.innerHTML = `<i class="bi bi-clock-history me-1"></i>Last seen: ${label}`;
+            } else if (lastSeenEl) {
+                lastSeenEl.innerHTML = '<i class="bi bi-clock-history me-1"></i>Last seen: -';
+            }
+
+            if (healthEl) {
+                if (typeof status.healthScore === 'number') {
+                    healthEl.classList.remove('text-success', 'text-warning', 'text-danger');
+                    healthEl.classList.add(status.healthScore >= 70 ? 'text-success' : status.healthScore >= 40 ? 'text-warning' : 'text-danger');
+                    healthEl.innerHTML = `${status.healthScore}% <i class="dashboard-heart-icon bi bi-heart-pulse ms-1"></i>`;
+                } else {
+                    healthEl.classList.remove('text-success', 'text-warning', 'text-danger');
+                    healthEl.textContent = 'N/A';
+                }
+            }
+
+            if (telemetryNoticeEl) {
+                if (status.telemetryNotice) {
+                    telemetryNoticeEl.classList.remove('d-none');
+                    if (telemetryNoticeTextEl) telemetryNoticeTextEl.textContent = status.telemetryNotice;
+                } else {
+                    telemetryNoticeEl.classList.add('d-none');
+                }
+            }
+        }
+
+        window.normalizeDashboardStatus = normalizeDashboardStatus;
+        window.updateDashboardSummary = updateDashboardSummary;
+
+        function applycached(status) {
+            if (!status) return;
+            if (!(window.isActiveDashboardDeviceStatus ? window.isActiveDashboardDeviceStatus(status) : true)) return;
+            updateDashboardSummary(normalizeDashboardStatus(status));
+        }
+
+        // Show cached data after 6 s if socket hasn't connected/delivered status
+        let statusReceived = false;
+        let cachedNoticeTimer = null;
+
+        function formatElapsed(ms) {
+            const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+            const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
+            const minutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
+            const seconds = String(totalSeconds % 60).padStart(2, '0');
+            return `${hours}:${minutes}:${seconds}`;
+        }
+
+        function removeCachedNotice() {
+            const notice = document.querySelector('.cached-notice');
+            if (notice) notice.remove();
+            if (cachedNoticeTimer) {
+                clearInterval(cachedNoticeTimer);
+                cachedNoticeTimer = null;
+            }
+        }
+
+        function renderCachedNotice(cachedAt) {
+            const sigCard = document.getElementById('dashWifiPrimary')?.closest('.card');
+            if (!sigCard || !cachedAt) return;
+
+            const cardBody = sigCard.querySelector('.card-body');
+            if (!cardBody) return;
+
+            const cachedDate = new Date(cachedAt);
+            const fallbackLabel = Number.isNaN(cachedDate.getTime())
+                ? String(cachedAt)
+                : cachedDate.toLocaleTimeString();
+
+            const update = function () {
+                const elapsed = Number.isNaN(cachedDate.getTime())
+                    ? '--:--:--'
+                    : formatElapsed(Date.now() - cachedDate.getTime());
+                notice.innerHTML = `<span class="text-muted small" title="Showing last known state from ${fallbackLabel}"><i class="bi bi-clock me-1"></i>${elapsed}</span>`;
+            };
+
+            update();
+            if (cachedNoticeTimer) clearInterval(cachedNoticeTimer);
+            cachedNoticeTimer = setInterval(update, 1000);
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            // If socket delivers a live status we cancel the fallback
+            if (typeof socket !== 'undefined' && socket) {
+                socket.on('device:status', function (status) {
+                    if (!(window.isActiveDashboardDeviceStatus ? window.isActiveDashboardDeviceStatus(status) : true)) return;
+                    statusReceived = true;
+                    removeCachedNotice();
+                });
+            }
+
+            setTimeout(function () {
+                if (statusReceived) return;
+                try {
+                    const raw = localStorage.getItem(lastDashboardStatusCacheKey());
+                    if (!raw) return;
+                    const cached = JSON.parse(raw);
+                    applycached(cached);
+
+                    renderCachedNotice(cached._cachedAt);
+                } catch (_) {}
+            }, 6000);
+        });
+    })();
+
+    // Live sparkline charts
+    (function () {
+        const MAX_POINTS = 30;
+        const signalBuf = [];
+        const batteryBuf = [];
+        let onlineReloadTriggered = false;
+
+        function drawSparkline(canvasId, buf, color) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+            const W = canvas.offsetWidth || canvas.parentElement.offsetWidth;
+            if (W <= 0) return;
+            canvas.width = W;
+            const H = canvas.height;
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, W, H);
+            if (buf.length < 2) return;
+
+            const min = 0, max = 100;
+            const pad = 2;
+            const xStep = (W - pad * 2) / (MAX_POINTS - 1);
+
+            // Fill under line
+            ctx.beginPath();
+            ctx.moveTo(pad, H);
+            for (let i = 0; i < buf.length; i++) {
+                const x = pad + (MAX_POINTS - buf.length + i) * xStep;
+                const y = H - pad - ((buf[i] - min) / (max - min)) * (H - pad * 2);
+                i === 0 ? ctx.lineTo(x, y) : ctx.lineTo(x, y);
+            }
+            ctx.lineTo(pad + (MAX_POINTS - 1) * xStep, H);
+            ctx.closePath();
+            ctx.fillStyle = color + '33';
+            ctx.fill();
+
+            // Line
+            ctx.beginPath();
+            for (let i = 0; i < buf.length; i++) {
+                const x = pad + (MAX_POINTS - buf.length + i) * xStep;
+                const y = H - pad - ((buf[i] - min) / (max - min)) * (H - pad * 2);
+                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            }
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.5;
+            ctx.lineJoin = 'round';
+            ctx.stroke();
+
+            // Latest dot
+            const last = buf[buf.length - 1];
+            const lx = pad + (MAX_POINTS - 1) * xStep;
+            const ly = H - pad - ((last - min) / (max - min)) * (H - pad * 2);
+            ctx.beginPath();
+            ctx.arc(lx, ly, 2.5, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+        }
+
+        function pushSample(buf, value) {
+            if (value === null || value === undefined) return;
+            buf.push(value);
+            if (buf.length > MAX_POINTS) buf.shift();
+        }
+
+        function onStatus(data) {
+            if (!data || !data.online) return;
+            if (!(window.isActiveDashboardDeviceStatus ? window.isActiveDashboardDeviceStatus(data) : true)) return;
+
+            if (!window.__dashboardRenderedOnline && !onlineReloadTriggered && window.location.pathname === '/') {
+                onlineReloadTriggered = true;
+                window.__dashboardRenderedOnline = true;
+                setTimeout(function () {
+                    window.location.reload();
+                }, 400);
+                return;
+            }
+
+            const presented = window.normalizeDashboardStatus ? window.normalizeDashboardStatus(data) : data;
+            const signal = presented.signal;
+            const battery = presented.battery;
+
+            if (window.updateDashboardSummary) {
+                window.updateDashboardSummary(presented);
+            }
+
+            pushSample(signalBuf, signal);
+            pushSample(batteryBuf, battery);
+
+            drawSparkline('signalSparkline', signalBuf, '#0d6efd');
+            drawSparkline('batterySparkline', batteryBuf, '#198754');
+        }
+
+        // Hook into the global socket once it's ready
+        function attachSocket() {
+            if (typeof socket !== 'undefined' && socket) {
+                socket.on('device:status', onStatus);
+            } else {
+                setTimeout(attachSocket, 200);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            attachSocket();
+            // Redraw on resize
+            window.addEventListener('resize', function () {
+                drawSparkline('signalSparkline', signalBuf, '#0d6efd');
+                drawSparkline('batterySparkline', batteryBuf, '#198754');
+            });
+        });
+    })();
+
+</script>
+
+<style>
+    .x-small {
+        font-size: 0.72rem;
+    }
+
+    .dashboard-overview .card-body {
+        padding: 0.7rem 0.8rem;
+    }
+
+    .dashboard-card-body {
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+    }
+
+    .dashboard-card-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+
+    .dashboard-overview .rounded-circle {
+        padding: 0.5rem !important;
+    }
+
+    .dashboard-overview .rounded-circle i {
+        font-size: 1.1rem !important;
+    }
+
+    .dashboard-overview .dashboard-kpi-label {
+        font-size: 0.72rem;
+        letter-spacing: 0.04em;
+    }
+
+    .dashboard-hero {
+        font-size: 1.6rem;
+        font-weight: 700;
+        line-height: 1.1;
+        margin-top: 0.2rem;
+    }
+
+    .dashboard-subtext {
+        font-size: 0.75rem;
+        color: var(--bs-secondary-color);
+    }
+
+    .dashboard-signal-grid {
+        display: grid;
+        gap: 0.6rem;
+    }
+
+    .dashboard-meta-grid {
+        display: grid;
+        gap: 0.35rem;
+    }
+
+    .dashboard-meta-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.5rem;
+        font-size: 0.75rem;
+        line-height: 1.2;
+    }
+
+    .dashboard-meta-row .fw-semibold {
+        max-width: 68%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .dashboard-divider {
+        margin: 0.6rem 0;
+        border-top: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .dashboard-detail-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.5rem 0.75rem;
+        font-size: 0.75rem;
+    }
+
+    .dashboard-detail-item .dashboard-detail-label {
+        font-size: 0.68rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+
+    .dashboard-kpi-meta {
+        font-size: 0.72rem;
+        line-height: 1.2;
+    }
+
+    .dashboard-list .list-group-item {
+        padding: 0.6rem 0.75rem;
+    }
+
+    .dashboard-list .list-group-item h6 {
+        font-size: 0.86rem;
+    }
+
+    .dashboard-list .list-group-item p,
+    .dashboard-list .list-group-item small {
+        font-size: 0.78rem;
+    }
+
+    .dashboard-actions .btn {
+        min-width: 0;
+    }
+
+    @media (min-width: 1200px) {
+        .dashboard-hero {
+            font-size: 1.7rem;
+        }
+
+        .dashboard-overview .card-body {
+            padding: 0.75rem 0.9rem;
+        }
+    }
+</style>
+

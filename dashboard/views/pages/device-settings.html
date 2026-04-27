@@ -1,0 +1,1634 @@
+<% const canEditDeviceSecrets = typeof isAdmin !== 'undefined' && isAdmin; %>
+
+<div class="settings-device-page">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-4">
+        <div>
+            <h2 class="mb-1">
+                <i class="bi bi-sliders me-2"></i>Device Settings
+            </h2>
+            <p class="text-muted mb-0">Keep device-facing configuration here: identity, connectivity, and runtime provisioning.</p>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+            <a href="/devices" class="btn btn-outline-secondary">
+                <i class="bi bi-cpu me-2"></i>Device Manager
+            </a>
+            <button class="btn btn-primary" type="button" onclick="saveDeviceSettings()">
+                <i class="bi bi-check-lg me-2"></i>Save Device Settings
+            </button>
+        </div>
+    </div>
+
+    <div class="alert alert-info d-flex align-items-start gap-3 mb-4" role="alert">
+        <i class="bi bi-info-circle fs-5 mt-1"></i>
+        <div>
+            <div class="fw-semibold">This page is device-only now.</div>
+            <div class="small">General dashboard administration, MQTT broker settings, users, backups, logs, and account policy now live in System Settings.</div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-12 col-xl-8">
+            <div class="card h-100">
+                <div class="card-header bg-body py-3 d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-cpu me-2"></i>Active Device</h5>
+                    <span class="badge bg-secondary" id="deviceSettingsStatus">Unknown</span>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Device</label>
+                            <select class="form-select" id="deviceSettingsPicker" onchange="onDeviceSettingsPick()">
+                                <option value="">Loading...</option>
+                            </select>
+                            <div class="form-text">Pick the device you want to configure.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Device Lane</label>
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="badge bg-secondary fs-6" id="deviceSettingsLane">ESP32</span>
+                                <span class="small text-muted" id="deviceSettingsLaneHint">Hardware dashboard device.</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="app-hidden">
+                        <input type="hidden" id="deviceSettingsId">
+                        <input type="hidden" id="deviceSettingsType">
+                        <input type="hidden" id="deviceSettingsTopic">
+                    </div>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Display Name</label>
+                            <input type="text" class="form-control" id="deviceSettingsName" placeholder="Device">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Location</label>
+                            <input type="text" class="form-control" id="deviceSettingsLocation" placeholder="e.g. Office, Rooftop">
+                        </div>
+                    </div>
+
+                    <div class="border rounded-3 p-3 mb-3 bg-body-tertiary" id="deviceConnectivityProfile">
+                        <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2 mb-3">
+                            <div>
+                                <h6 class="fw-semibold mb-1">Connectivity Profile</h6>
+                                <div class="small text-muted" id="deviceConnectivityDescription">Stored in the dashboard profile and used for this selected device only.</div>
+                            </div>
+                            <span class="badge bg-secondary align-self-start" id="deviceConfigTransportStatus">Stored Only</span>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6" data-lane-visible="esp32">
+                                <label class="form-label fw-semibold">Wi-Fi SSID</label>
+                                <input type="text" class="form-control" id="deviceSettingsWifiSsid" placeholder="e.g. RIAZ-GAP">
+                            </div>
+                            <div class="col-md-6" data-lane-visible="esp32">
+                                <label class="form-label fw-semibold">Wi-Fi Password</label>
+                                <div class="input-group">
+                                    <input type="password" class="form-control" id="deviceSettingsWifiPass" placeholder="Not hardcoded in firmware" oninput="onWifiPasswordInput()">
+                                    <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('deviceSettingsWifiPass')">
+                                        <i class="bi bi-eye"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-2">
+                            <div class="col-md-6" data-lane-visible="esp32">
+                                <label class="form-label fw-semibold">Mobile APN</label>
+                                <input type="text" class="form-control" id="deviceSettingsApn" placeholder="e.g. internet">
+                            </div>
+                            <div class="col-md-6" data-lane-visible="esp32">
+                                <label class="form-label fw-semibold">Local IP</label>
+                                <div class="input-group">
+                                    <input type="text" class="form-control font-monospace" id="deviceSettingsLocalIp" maxlength="15" placeholder="192.168.x.x">
+                                    <button class="btn btn-outline-secondary" type="button" onclick="testDeviceDirectConnect(this)" data-action-requires-online="true" data-action-requires-wifi="true" title="Test local HTTP access">
+                                        <i class="bi bi-arrow-repeat"></i>
+                                    </button>
+                                </div>
+                                <div class="form-text" id="deviceDirectConnectStatus">Optional same-network direct access address.</div>
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-2">
+                            <div class="col-12">
+                                <label class="form-label fw-semibold">Per-device MQTT Broker Override</label>
+                                <input type="text" class="form-control font-monospace" id="deviceSettingsMqttHost" maxlength="200" autocomplete="off" placeholder="mqtt://host:1883 or host:1883" <%= canEditDeviceSecrets ? '' : 'disabled' %>>
+                                <div class="form-text">Used only for this device when generating QR/runtime provisioning.</div>
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-2">
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold">Per-device MQTT Username</label>
+                                <input type="text" class="form-control" id="deviceSettingsMqttUser" maxlength="100" autocomplete="off" placeholder="Device MQTT username" <%= canEditDeviceSecrets ? '' : 'disabled' %>>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold">Per-device MQTT Password</label>
+                                <div class="input-group">
+                                    <input type="password" class="form-control" id="deviceSettingsMqttPass" maxlength="200" autocomplete="new-password" placeholder="Leave blank to keep current" <%= canEditDeviceSecrets ? '' : 'disabled' %>>
+                                    <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('deviceSettingsMqttPass')" <%= canEditDeviceSecrets ? '' : 'disabled' %>>
+                                        <i class="bi bi-eye"></i>
+                                    </button>
+                                </div>
+                                <div class="form-text" id="deviceSettingsMqttPassHint">Stored for onboarding/provisioning, not hardcoded in firmware.</div>
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-2">
+                            <div class="col-md-8">
+                                <label class="form-label fw-semibold">Effective MQTT Broker</label>
+                                <input type="text" class="form-control font-monospace" id="deviceSettingsEffectiveMqttUri" readonly>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold">Provisioning Source</label>
+                                <input type="text" class="form-control" id="deviceSettingsEffectiveMqttSource" readonly>
+                            </div>
+                        </div>
+                        <div class="alert alert-secondary mt-3 mb-0 py-2 small" id="deviceSettingsMqttEffectiveHint">
+                            Provisioning falls back to system MQTT defaults when a device-specific override is not stored.
+                        </div>
+                        <div class="alert alert-info mt-3 mb-0 py-2 small" id="deviceConfigApplyHint">
+                            Save updates the dashboard profile. Apply lets the dashboard choose the available provisioning path; serial is used now, and Bluetooth can use the same config contract later.
+                        </div>
+                        <div class="alert alert-warning mt-3 mb-0 py-2 small" id="deviceWifiMismatchHint" style="display:none;"></div>
+                        <div class="alert alert-secondary mt-3 mb-0 py-2 small" id="hostHotspotHint" style="display:none;"></div>
+                    </div>
+
+                    <div class="border rounded-3 p-3 mb-3 bg-body-tertiary" data-lane-visible="esp32">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="fw-semibold mb-0">Firmware Snapshot</h6>
+                            <a class="btn btn-sm btn-outline-secondary" id="deviceEditorLink" href="/devices">
+                                <i class="bi bi-cpu me-1"></i>Device Manager
+                            </a>
+                        </div>
+                        <div class="row g-3">
+                            <div class="col-sm-6 col-lg-3">
+                                <small class="text-muted d-block">Version</small>
+                                <strong id="devFwVersion">-</strong>
+                            </div>
+                            <div class="col-sm-6 col-lg-3">
+                                <small class="text-muted d-block">Build Date</small>
+                                <strong id="devFwBuild">-</strong>
+                            </div>
+                            <div class="col-sm-6 col-lg-3">
+                                <small class="text-muted d-block">Last Seen</small>
+                                <strong id="devLastSeen">-</strong>
+                            </div>
+                            <div class="col-sm-6 col-lg-3">
+                                <small class="text-muted d-block">Uptime</small>
+                                <strong id="devUptime">-</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="d-flex flex-wrap gap-2">
+                        <button type="button" class="btn btn-success" onclick="saveDeviceSettings()">
+                            <i class="bi bi-check-lg me-2"></i>Save Device
+                        </button>
+                        <button type="button" class="btn btn-outline-dark" onclick="readDeviceConnectivity()" data-lane-visible="esp32">
+                            <i class="bi bi-download me-2"></i>Read from Device
+                        </button>
+                        <button type="button" class="btn btn-outline-primary" onclick="applyDeviceConnectivity()" data-lane-visible="esp32">
+                            <i class="bi bi-usb-symbol me-2"></i>Apply to Device
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" onclick="refreshDeviceSettings()">
+                            <i class="bi bi-arrow-repeat me-2"></i>Refresh
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-xl-4">
+            <div class="card mb-4 app-hidden" id="deviceSettingsProvisioningCard" data-lane-visible="android">
+                <div class="card-header bg-body py-3 d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-qr-code me-2"></i>Recovery QR</h5>
+                    <span class="badge bg-secondary" id="deviceSettingsProvisioningLane">App</span>
+                </div>
+                <div class="card-body">
+                    <p class="small text-muted mb-3" id="deviceSettingsProvisioningText">Load device app recovery details.</p>
+                    <div class="mb-3">
+                        <img id="deviceSettingsProvisioningImage" class="img-fluid w-100 rounded border bg-white p-1 app-hidden" alt="Device recovery QR">
+                    </div>
+                    <div class="small font-monospace text-break mb-3 app-hidden" id="deviceSettingsProvisioningSummary"></div>
+                    <div class="alert alert-warning py-2 px-3 small mt-3 mb-0 app-hidden" id="deviceSettingsProvisioningWarning"></div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header bg-body py-3">
+                    <h5 class="mb-0"><i class="bi bi-box-seam me-2"></i>Device Package</h5>
+                </div>
+                <div class="card-body">
+                    <div class="small text-muted mb-3" id="devicePackageSummary">Loading package details...</div>
+                    <div class="small mb-3" id="devicePackageQuota"></div>
+                    <div class="d-grid gap-2" id="devicePackageOfferList"></div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header bg-body py-3">
+                    <h5 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>Device Scope</h5>
+                </div>
+                <div class="card-body small text-muted">
+                    <p>This screen writes to the selected device profile only.</p>
+                    <p class="mb-0">Dashboard-wide MQTT, refresh interval, logs, backups, and environment overrides are managed in <a href="/settings">System Settings</a>.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const requestedDeviceSettingsId = new URLSearchParams(window.location.search).get('device') || '';
+const CAN_EDIT_DEVICE_SECRETS = <%= canEditDeviceSecrets ? 'true' : 'false' %>;
+const BLE_SERVICE_UUID = '6e400001-b5b4-f393-e0a9-e50e24dcca9e';
+const BLE_TX_UUID = '6e400002-b5b4-f393-e0a9-e50e24dcca9e';
+const BLE_RX_UUID = '6e400003-b5b4-f393-e0a9-e50e24dcca9e';
+window._preserveStoredWifiPassword = false;
+if (requestedDeviceSettingsId) {
+    window._activeDeviceId = requestedDeviceSettingsId;
+}
+
+function deviceSettingsHref(deviceId) {
+    if (!deviceId) return '/devices/settings';
+    return `/devices/settings?device=${encodeURIComponent(deviceId)}`;
+}
+
+function togglePassword(id) {
+    const input = document.getElementById(id);
+    if (input) {
+        input.type = input.type === 'password' ? 'text' : 'password';
+    }
+}
+
+function csrfToken() {
+    return document.querySelector('meta[name="csrf-token"]')?.content || '';
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function saveAllSettings() {
+    return saveDeviceSettings();
+}
+
+function renderDeviceSettingsBadge(online) {
+    const badge = document.getElementById('deviceSettingsStatus');
+    if (!badge) return;
+    badge.textContent = online ? 'Online' : 'Offline';
+    badge.className = `badge ${online ? 'bg-success' : 'bg-secondary'}`;
+}
+
+function renderDeviceTransportBadge(mode, message) {
+    const badge = document.getElementById('deviceConfigTransportStatus');
+    const hint = document.getElementById('deviceConfigApplyHint');
+    if (!badge) return;
+
+    if (mode === 'serial') {
+        badge.textContent = 'Serial Applied';
+        badge.className = 'badge bg-success align-self-start';
+    } else if (mode === 'serial-legacy') {
+        badge.textContent = 'Legacy Serial';
+        badge.className = 'badge bg-warning text-dark align-self-start';
+    } else if (mode === 'browser-serial') {
+        badge.textContent = 'Browser USB Applied';
+        badge.className = 'badge bg-success align-self-start';
+    } else if (mode === 'browser-ble') {
+        badge.textContent = 'Browser BLE Applied';
+        badge.className = 'badge bg-success align-self-start';
+    } else if (mode === 'stored_only') {
+        badge.textContent = 'Stored Only';
+        badge.className = 'badge bg-secondary align-self-start';
+    } else if (mode === 'error') {
+        badge.textContent = 'Apply Failed';
+        badge.className = 'badge bg-danger align-self-start';
+    } else {
+        badge.textContent = 'Stored Only';
+        badge.className = 'badge bg-secondary align-self-start';
+    }
+
+    if (hint && message) {
+        hint.textContent = message;
+    }
+}
+
+function deviceRuntimeConfigNeedsFirmwareUpdate(data = {}) {
+    const effective = window._lastDeviceSettingsMqttEffective || {};
+    if (!effective.configured) {
+        return false;
+    }
+
+    const schemaVersion = Number(data.schema_version || 0) || 0;
+    if (schemaVersion > 0 && schemaVersion < 2) {
+        return true;
+    }
+
+    return !data.mqtt_uri && !data.mqtt_username && !data.mqtt_password_set;
+}
+
+function classifyDeviceSettingsLane(device = {}) {
+    const deviceIdTokens = [device.id, device.device_id]
+        .map(value => String(value || '').trim().toLowerCase())
+        .filter(Boolean);
+    if (deviceIdTokens.some(token => /^android(?:[-_]|$)/.test(token))) return 'android';
+
+    const caps = parseDeviceSettingsCapabilities(device.capabilities);
+    const tokens = [
+        device.type,
+        device.board,
+        caps.bridge,
+        caps.bridge_type,
+        caps.platform
+    ].map(value => String(value || '').trim().toLowerCase()).filter(Boolean);
+    if (tokens.some(token => token.includes('android') || (token.includes('http') && token.includes('sms')))) return 'android';
+    return 'esp32';
+}
+
+function parseDeviceSettingsCapabilities(value) {
+    if (!value) return {};
+    if (typeof value === 'object') return value;
+    try {
+        return JSON.parse(value);
+    } catch (_) {
+        return {};
+    }
+}
+
+function resolveAndroidDeviceSettingsTransport(device = {}, payload = {}) {
+    const payloadMode = String(
+        payload?.payload?.transport?.mode ||
+        payload?.payload?.transport_mode ||
+        payload?.transport?.mode ||
+        ''
+    ).trim().toLowerCase();
+    if (payloadMode === 'http') return 'http';
+
+    const capabilities = parseDeviceSettingsCapabilities(device.capabilities);
+    const storedMode = String(device.transport_mode || capabilities.transport_mode || '').trim().toLowerCase();
+    return storedMode === 'http' ? 'http' : 'mqtt';
+}
+
+function renderDeviceSettingsLane(device = {}) {
+    const lane = classifyDeviceSettingsLane(device);
+    const laneBadge = document.getElementById('deviceSettingsLane');
+    const laneHint = document.getElementById('deviceSettingsLaneHint');
+    const description = document.getElementById('deviceConnectivityDescription');
+    const applyHint = document.getElementById('deviceConfigApplyHint');
+    const labels = {
+        esp32: {
+            label: 'ESP32',
+            cls: 'badge bg-primary fs-6',
+            hint: 'Hardware dashboard device. Wi-Fi, APN, local IP, and MQTT provisioning are available.',
+            description: 'Stored in the dashboard profile and applied to this ESP32 when you choose a provisioning path.',
+            apply: 'Save updates the dashboard profile. Apply pushes Wi-Fi/APN/MQTT to ESP32 hardware over the available provisioning transport.'
+        },
+        android: {
+            label: 'Android',
+            cls: 'badge bg-success fs-6',
+            hint: 'Android phone device. Dashboard provisioning is changed here; app permissions and OS controls stay in Android.',
+            description: 'Stored for this Android device. The recovery QR and copied code both carry the same secure setup package for the selected transport.',
+            apply: 'Save updates dashboard-side Android provisioning. Scan the recovery QR on the right if onboarding details were missed.'
+        }
+    };
+    const meta = labels[lane] || labels.esp32;
+
+    if (laneBadge) {
+        laneBadge.className = meta.cls;
+        laneBadge.textContent = meta.label;
+    }
+    if (laneHint) {
+        laneHint.textContent = meta.hint;
+    }
+    if (description) {
+        description.textContent = meta.description;
+    }
+    if (applyHint) {
+        applyHint.textContent = meta.apply;
+    }
+
+    document.querySelectorAll('[data-lane-visible]').forEach((el) => {
+        const allowed = String(el.getAttribute('data-lane-visible') || '')
+            .split(',')
+            .map(value => value.trim())
+            .filter(Boolean);
+        el.style.display = allowed.includes(lane) ? '' : 'none';
+    });
+}
+
+function deviceSettingsSelectedId() {
+    return document.getElementById('deviceSettingsPicker')?.value || '';
+}
+
+function deviceSettingsProvisioningElements() {
+    return {
+        card: document.getElementById('deviceSettingsProvisioningCard'),
+        lane: document.getElementById('deviceSettingsProvisioningLane'),
+        text: document.getElementById('deviceSettingsProvisioningText'),
+        image: document.getElementById('deviceSettingsProvisioningImage'),
+        summary: document.getElementById('deviceSettingsProvisioningSummary'),
+        button: document.getElementById('deviceSettingsProvisioningGenerateBtn'),
+        warning: document.getElementById('deviceSettingsProvisioningWarning')
+    };
+}
+
+function setDeviceSettingsProvisioningVisible(el, visible, displayValue) {
+    if (!el) return;
+    el.classList.toggle('app-hidden', !visible);
+    if (visible && displayValue) el.style.display = displayValue;
+    else el.style.removeProperty('display');
+}
+
+function resetDeviceSettingsProvisioningCard(lane) {
+    const els = deviceSettingsProvisioningElements();
+    if (els.card) setDeviceSettingsProvisioningVisible(els.card, lane === 'android');
+    if (els.lane) {
+        els.lane.textContent = 'Android';
+        els.lane.className = 'badge bg-success';
+    }
+    if (els.text) els.text.textContent = 'Loading recovery details...';
+    if (els.image) setDeviceSettingsProvisioningVisible(els.image, false);
+    if (els.summary) setDeviceSettingsProvisioningVisible(els.summary, false);
+    if (els.warning) setDeviceSettingsProvisioningVisible(els.warning, false);
+}
+
+async function loadDeviceSettingsProvisioningCard(device = {}) {
+    const id = deviceSettingsSelectedId();
+    const lane = classifyDeviceSettingsLane(device);
+    const els = deviceSettingsProvisioningElements();
+    const isOffline = !Boolean(device.online);
+    if (!id || lane !== 'android' || !isOffline) {
+        if (els.card) setDeviceSettingsProvisioningVisible(els.card, false);
+        return;
+    }
+
+    resetDeviceSettingsProvisioningCard(lane);
+
+    try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(id)}/provisioning-qr`, { cache: 'no-store' });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.message || 'Failed to load recovery QR');
+        }
+        if (deviceSettingsSelectedId() !== id) return;
+
+        if (payload.lane === 'android') {
+            const transportMode = resolveAndroidDeviceSettingsTransport(device, payload);
+            const isHttpTransport = transportMode === 'http';
+            const summary = payload.summary || {};
+            const serverUrl = summary.server_url || 'Not configured';
+            const mqttConfigured = Boolean(summary.mqtt_configured);
+
+            if (els.text) {
+                els.text.textContent = isHttpTransport
+                ? 'Scan in Device Bridge to restore the secure HTTP setup code.'
+                : 'Scan in Device Bridge to restore the secure MQTT setup code.';
+            }
+            if (els.image) {
+                els.image.src = payload.qr_data_url || '';
+                setDeviceSettingsProvisioningVisible(els.image, Boolean(payload.qr_data_url));
+            }
+            if (els.summary) {
+                const summaryLines = [
+                    `Transport: ${isHttpTransport ? 'HTTP API' : 'MQTT'}`,
+                    `Device: ${summary.device_id || payload.device_id || id}`
+                ];
+                if (isHttpTransport) {
+                    summaryLines.push(`Server URL: ${serverUrl}`);
+                    if (summary.api_key_name) {
+                        summaryLines.push(`API Key: ${summary.api_key_name}`);
+                    }
+                    summaryLines.push('Secret: API key stays inside the setup code');
+                } else {
+                    summaryLines.push(`Topic Prefix: ${summary.topic_prefix || 'device'}`);
+                    summaryLines.push(`Provisioning: ${mqttConfigured ? 'MQTT details stay inside the setup code' : 'MQTT is not configured yet'}`);
+                }
+                els.summary.textContent = summaryLines.join('\n');
+                setDeviceSettingsProvisioningVisible(els.summary, true);
+            }
+            if (els.warning) setDeviceSettingsProvisioningVisible(els.warning, false);
+            return;
+        }
+    } catch (error) {
+        if (els.text) els.text.textContent = error.message || 'Failed to load recovery QR.';
+    }
+}
+
+function renderDevicePackageCard(payload = {}) {
+    const summary = document.getElementById('devicePackageSummary');
+    const quota = document.getElementById('devicePackageQuota');
+    const list = document.getElementById('devicePackageOfferList');
+    const currentPackage = payload.current_package || null;
+    const quotaState = payload.quota || {};
+    const payment = payload.payment || {};
+    const offers = Array.isArray(payload.offers) ? payload.offers : [];
+    const pendingRequest = Array.isArray(payload.requests)
+        ? payload.requests.find((request) => String(request.status || '') === 'pending')
+        : null;
+
+    if (summary) {
+        if (currentPackage) {
+            summary.innerHTML = `
+                <div class="fw-semibold">${escapeHtml(currentPackage.name)} active</div>
+                <div class="text-muted small">Approved ${currentPackage.approved_at ? new Date(currentPackage.approved_at).toLocaleString() : 'recently'}</div>
+            `;
+        } else if (pendingRequest) {
+            summary.innerHTML = `
+                <div class="fw-semibold">${escapeHtml(pendingRequest.package_name)} pending approval</div>
+                <div class="text-muted small">Pay ${escapeHtml(payment.number || '01628301525')} via ${escapeHtml(payment.method || 'bKash')} and wait for admin approval.</div>
+            `;
+        } else {
+            summary.innerHTML = `<div class="text-muted">No package allocated yet. Apply below.</div>`;
+        }
+    }
+
+    if (quota) {
+        quota.innerHTML = `
+            <div class="small text-muted">SMS today: <strong>${Number(quotaState.sms_day_used || 0)}</strong> / ${Number(quotaState.sms_day_limit || 0) || 'unlimited'}</div>
+            <div class="small text-muted">SMS this month: <strong>${Number(quotaState.sms_month_used || 0)}</strong> / ${Number(quotaState.sms_month_limit || 0) || 'unlimited'}</div>
+            <div class="small text-muted">Assigned users: <strong>${Number(quotaState.assigned_users_used || 0)}</strong> / ${Number(quotaState.assigned_users_limit || 0) || 'unlimited'}</div>
+        `;
+    }
+
+    if (!list) return;
+    list.innerHTML = offers.map((offer) => {
+        const selected = currentPackage && String(currentPackage.code || '') === String(offer.code || '');
+        return `
+            <button type="button" class="btn btn-outline-secondary text-start" onclick="applyDevicePackage('${escapeHtml(offer.code)}')" ${pendingRequest ? 'disabled' : ''}>
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                    <span>
+                        <span class="fw-semibold d-block">${escapeHtml(offer.name || offer.code)}</span>
+                        <span class="small text-muted d-block">${Number(offer.limits?.sms_per_day || 0)} SMS/day · ${Number(offer.limits?.sms_per_month || 0)} SMS/month</span>
+                    </span>
+                    <span class="text-nowrap">${selected ? '<span class="badge bg-success">Active</span>' : `৳${Number(offer.price_bdt || 0)}`}</span>
+                </div>
+            </button>
+        `;
+    }).join('');
+}
+
+async function loadDevicePackageCard() {
+    const id = deviceSettingsSelectedId();
+    if (!id) return;
+    try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(id)}/package`, { cache: 'no-store' });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.message || 'Failed to load package details');
+        }
+        if (deviceSettingsSelectedId() !== id) return;
+        renderDevicePackageCard(payload);
+    } catch (error) {
+        const summary = document.getElementById('devicePackageSummary');
+        const list = document.getElementById('devicePackageOfferList');
+        if (summary) summary.textContent = error.message || 'Failed to load package details.';
+        if (list) list.innerHTML = '';
+    }
+}
+
+async function applyDevicePackage(packageCode) {
+    const id = deviceSettingsSelectedId();
+    if (!id || !packageCode) return;
+
+    try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(id)}/package/apply`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken()
+            },
+            body: JSON.stringify({ package_code: packageCode })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.message || 'Failed to apply for package');
+        }
+        showToast(`${payload.message || 'Package request submitted'} Pay ${payload.payment?.number || '01628301525'} via ${payload.payment?.method || 'bKash'}.`, 'success');
+        loadDevicePackageCard();
+    } catch (error) {
+        showToast(error.message || 'Failed to apply for package', 'danger');
+    }
+}
+
+function renderDeviceMqttEffective(device = {}) {
+    const effective = device.mqtt_effective || {};
+    const uriInput = document.getElementById('deviceSettingsEffectiveMqttUri');
+    const sourceInput = document.getElementById('deviceSettingsEffectiveMqttSource');
+    const hint = document.getElementById('deviceSettingsMqttEffectiveHint');
+    const effectiveUri = effective.uri || '';
+    const sourceLabel = effective.source === 'device_override'
+        ? 'Device override'
+        : (effective.source === 'system_defaults' ? 'System defaults' : 'Not configured');
+    const sourceDetails = effective.sources || {};
+    const usernameValue = effective.username || '';
+
+    if (uriInput) {
+        uriInput.value = effectiveUri || 'Not configured';
+    }
+    if (sourceInput) {
+        sourceInput.value = sourceLabel;
+    }
+    window._lastDeviceSettingsMqttEffective = effective;
+    if (!hint) return;
+
+    if (!effective.configured) {
+        hint.className = 'alert alert-danger mt-3 mb-0 py-2 small';
+        hint.textContent = 'MQTT provisioning is incomplete. This firmware will not publish heartbeat, status, or SMS events until a broker URI is provided through device config.';
+        return;
+    }
+
+    const detailParts = [
+        `Broker ${sourceDetails.uri === 'device' ? 'comes from this device profile' : 'falls back to system settings'}`,
+        `username ${sourceDetails.username === 'device' ? 'uses the device override' : (sourceDetails.username === 'system' ? 'falls back to system settings' : 'is empty')}`,
+        `password ${effective.passwordSet ? (sourceDetails.password === 'device' ? 'is stored per-device' : 'is available from system settings') : 'is not available'}`
+    ];
+
+    hint.className = 'alert alert-secondary mt-3 mb-0 py-2 small';
+    hint.textContent = `Apply to Device will provision ${effectiveUri}${usernameValue ? ` as ${usernameValue}` : ''}. ${detailParts.join('; ')}.`;
+}
+
+function setPreservedWifiPassword(enabled, sourceLabel) {
+    window._preserveStoredWifiPassword = !!enabled;
+    const input = document.getElementById('deviceSettingsWifiPass');
+    if (!input) return;
+
+    if (enabled && !input.value) {
+        input.placeholder = `Stored ${sourceLabel || 'Wi-Fi password'} is preserved unless you type a new one`;
+        return;
+    }
+
+    if (!input.value) {
+        input.placeholder = 'Not hardcoded in firmware';
+    }
+}
+
+function onWifiPasswordInput() {
+    const input = document.getElementById('deviceSettingsWifiPass');
+    if (!input) return;
+
+    if (input.value) {
+        window._preserveStoredWifiPassword = false;
+        return;
+    }
+
+    if (!window._preserveStoredWifiPassword) {
+        input.placeholder = 'Not hardcoded in firmware';
+    }
+}
+
+function getWifiPasswordForBrowserTransport() {
+    const value = document.getElementById('deviceSettingsWifiPass')?.value ?? '';
+    if (!value && window._preserveStoredWifiPassword) {
+        throw new Error('Wi-Fi password is stored in the dashboard profile but masked in the form. Re-enter it before using browser USB or browser Bluetooth apply.');
+    }
+    return value;
+}
+
+function normalizeWifiReasonText(reasonText) {
+    return String(reasonText || '').trim().toLowerCase();
+}
+
+function isWifiAuthFailureReason(reasonText) {
+    const normalized = normalizeWifiReasonText(reasonText);
+    return normalized === 'auth_expire'
+        || normalized === 'auth_fail'
+        || normalized === 'handshake_timeout'
+        || normalized === '4way_handshake_timeout'
+        || normalized === 'group_key_update_timeout'
+        || normalized === 'assoc_fail'
+        || normalized === 'connection_fail';
+}
+
+function renderWifiMismatchHint(device) {
+    const hint = document.getElementById('deviceWifiMismatchHint');
+    if (!hint) return;
+
+    const configured = String(device?.wifi_ssid || '').trim();
+    const wifi = device?.wifi || {};
+    const summary = String(wifi.lastScanSummary || '').trim();
+    const targetVisible = wifi.lastScanTargetVisible;
+    const disconnectText = String(wifi.lastDisconnectReasonText || '').trim();
+
+    if (!configured) {
+        hint.style.display = 'none';
+        hint.textContent = '';
+        return;
+    }
+
+    if (targetVisible === false && summary) {
+        const detectedSsid = summary.split('@')[0]?.trim() || '';
+        const action = detectedSsid && detectedSsid !== configured
+            ? ` <button type="button" class="btn btn-sm btn-outline-warning ms-2 py-0" onclick="useDetectedWifiSsid('${detectedSsid.replace(/'/g, "\\'")}')">Use detected SSID</button><button type="button" class="btn btn-sm btn-warning ms-2 py-0" onclick="useDetectedWifiSsidAndApply('${detectedSsid.replace(/'/g, "\\'")}')">Use and Apply</button>`
+            : '';
+        hint.style.display = '';
+        hint.innerHTML = `<strong>Wi-Fi mismatch:</strong> device is configured for <code>${configured}</code>, but the latest scan saw <code>${summary}</code> instead. Current disconnect reason: <code>${disconnectText || 'unknown'}</code>.${action}`;
+        return;
+    }
+
+    if (targetVisible === false && disconnectText) {
+        hint.style.display = '';
+        hint.innerHTML = `<strong>Wi-Fi warning:</strong> device is configured for <code>${configured}</code>, but the target SSID was not visible. Current disconnect reason: <code>${disconnectText}</code>.`;
+        return;
+    }
+
+    if (targetVisible === true && disconnectText === 'no_ap_found') {
+        hint.style.display = '';
+        hint.innerHTML = `<strong>Wi-Fi join warning:</strong> device can see <code>${configured}</code> in the latest scan, but it still failed to join it. Keep the hotspot on <code>2.4 GHz</code>, stay close to the phone, and re-check hotspot security if this keeps repeating.`;
+        return;
+    }
+
+    if (targetVisible === true && disconnectText === 'no_ap_with_compatible_security') {
+        hint.style.display = '';
+        hint.innerHTML = `<strong>Wi-Fi security warning:</strong> device can see <code>${configured}</code>, but the hotspot security is not compatible. Keep the hotspot on <code>2.4 GHz</code> and prefer <code>WPA2</code>, then Apply to Device again if you changed the password.`;
+        return;
+    }
+
+    if (targetVisible === true && isWifiAuthFailureReason(disconnectText)) {
+        hint.style.display = '';
+        hint.innerHTML = `<strong>Wi-Fi authentication warning:</strong> device can see <code>${configured}</code>, but authentication is failing (<code>${disconnectText}</code>). Re-check the hotspot password, keep the hotspot on <code>2.4 GHz</code>/<code>WPA2</code>, then Apply to Device again if the saved password is stale.`;
+        return;
+    }
+
+    hint.style.display = 'none';
+    hint.textContent = '';
+}
+
+function useDetectedWifiSsid(ssid) {
+    const value = String(ssid || '').trim();
+    if (!value) {
+        return;
+    }
+
+    const input = document.getElementById('deviceSettingsWifiSsid');
+    if (input) {
+        input.value = value;
+    }
+
+    renderDeviceTransportBadge('stored_only', `Detected Wi-Fi SSID ${value} copied into the form. Save and re-apply it if this is the hotspot you want.`);
+    showToast(`Detected SSID ${value} copied into the form`, 'warning');
+}
+
+async function useDetectedWifiSsidAndApply(ssid) {
+    const value = String(ssid || '').trim();
+    if (!value) {
+        return;
+    }
+
+    useDetectedWifiSsid(value);
+    await applyDeviceConnectivity();
+}
+
+async function loadHostHotspotDiagnostics(deviceId) {
+    const hint = document.getElementById('hostHotspotHint');
+    if (!hint || !deviceId) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/hotspot-diagnostics`, { cache: 'no-store' });
+        const payload = await response.json();
+
+        if (!response.ok || !payload.success) {
+            const support = payload.platformSupport || {};
+            const hostScan = payload.data?.hostScan || {};
+            const desiredSsid = String(payload.data?.desiredSsid || '').trim();
+            if (response.status === 501) {
+                const label = support.label || support.platform || 'this platform';
+                hint.style.display = '';
+                if (support.reason === 'hosted_network_not_supported') {
+                    const visibilityNote = hostScan.available && desiredSsid && hostScan.desiredVisible === false
+                        ? ` The configured SSID <code>${desiredSsid}</code> is also not visible from this dashboard host's local Wi-Fi scan right now.`
+                        : '';
+                    hint.innerHTML = `<strong>Dashboard host hotspot:</strong> this Wi-Fi adapter does not support the legacy Windows hosted-network API. Turn on Windows Mobile Hotspot manually, or use another Wi-Fi adapter.${visibilityNote} Device config over serial, browser USB, and browser BLE still works.`;
+                    return;
+                }
+                hint.innerHTML = `<strong>Dashboard host hotspot:</strong> host hotspot tools are not implemented on <code>${label}</code> yet. Device config over serial, browser USB, and browser BLE still works.`;
+                return;
+            }
+            hint.style.display = 'none';
+            hint.textContent = '';
+            return;
+        }
+
+        const data = payload.data || {};
+        const support = data.platformSupport || {};
+        const supportLabel = support.label || 'dashboard host hotspot';
+        const hostScan = data.hostScan || {};
+        if (!data.hostedSsid) {
+            hint.style.display = '';
+            hint.innerHTML = `<strong>${supportLabel}:</strong> no host hotspot SSID is configured on this machine right now. <button type="button" class="btn btn-sm btn-outline-secondary ms-2 py-0" onclick="configureHostHotspotFromProfile(false)">Configure Host Hotspot</button><button type="button" class="btn btn-sm btn-secondary ms-2 py-0" onclick="configureHostHotspotFromProfile(true)">Configure and Start</button>`;
+            return;
+        }
+
+        const ssidMismatch = !!data.desiredSsid && !data.matchesDesired;
+        const passwordMismatch = !!data.desiredPasswordSet && !!data.hostedPasswordKnown && !data.passwordMatchesDesired;
+
+        if (ssidMismatch || passwordMismatch) {
+            const detailParts = [];
+            if (ssidMismatch) {
+                detailParts.push(`device profile expects <code>${data.desiredSsid}</code>, but this host is configured for <code>${data.hostedSsid}</code>`);
+            }
+            if (passwordMismatch) {
+                detailParts.push('the host hotspot password does not match the password currently stored in the device profile');
+            }
+            hint.style.display = '';
+            hint.innerHTML = `<strong>${supportLabel} mismatch:</strong> ${detailParts.join('; ')}. Host status is <code>${data.hostedStatus || 'unknown'}</code>. <button type="button" class="btn btn-sm btn-outline-secondary ms-2 py-0" onclick="syncHostHotspotSettings(false)">Sync Host Hotspot</button><button type="button" class="btn btn-sm btn-secondary ms-2 py-0" onclick="syncHostHotspotSettings(true)">Sync and Apply</button><button type="button" class="btn btn-sm btn-outline-primary ms-2 py-0" onclick="configureHostHotspotFromProfile(false)">Configure Host to Match</button><button type="button" class="btn btn-sm btn-primary ms-2 py-0" onclick="configureHostHotspotFromProfile(true)">Configure and Start Host</button>`;
+            return;
+        }
+
+        if (hostScan.available && data.desiredSsid && hostScan.desiredVisible === false) {
+            hint.style.display = '';
+            hint.innerHTML = `<strong>${supportLabel} warning:</strong> the device profile expects <code>${data.desiredSsid}</code>, but that SSID is not visible from this dashboard host's local Wi-Fi scan right now. Turn on Windows Mobile Hotspot manually and make sure it is broadcasting on 2.4 GHz.`;
+            return;
+        }
+
+        hint.style.display = '';
+        hint.innerHTML = `<strong>${supportLabel}:</strong> configured SSID <code>${data.hostedSsid}</code>, status <code>${data.hostedStatus || 'unknown'}</code>. <button type="button" class="btn btn-sm btn-outline-primary ms-2 py-0" onclick="configureHostHotspotFromProfile(true)">Restart Host Hotspot</button>`;
+    } catch (_) {
+        hint.style.display = 'none';
+        hint.textContent = '';
+    }
+}
+
+async function syncHostHotspotSettings(applyToDevice) {
+    const id = document.getElementById('deviceSettingsPicker')?.value;
+    if (!id) return;
+
+    try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(id)}/runtime-config/use-host-hotspot`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
+            body: JSON.stringify({ apply: !!applyToDevice })
+        });
+        const payload = await response.json();
+
+        if (!response.ok || !payload.success) {
+            renderDeviceTransportBadge('error', payload.message || 'Failed to sync host hotspot settings.');
+            showToast(payload.message || 'Failed to sync host hotspot settings', 'danger');
+            return;
+        }
+
+        const data = payload.data || {};
+        document.getElementById('deviceSettingsWifiSsid').value = data.wifi_ssid || '';
+        document.getElementById('deviceSettingsWifiPass').value = '';
+        setPreservedWifiPassword(!!data.wifi_password_set, 'host hotspot password');
+
+        if (payload.applied) {
+            renderDeviceTransportBadge('serial', payload.message || 'Host hotspot settings applied over serial.');
+            showToast('Host hotspot settings synced and applied', 'success');
+        } else {
+            renderDeviceTransportBadge('stored_only', payload.message || 'Host hotspot settings saved in the dashboard profile.');
+            showToast(
+                applyToDevice
+                    ? (payload.message || 'Host hotspot settings saved, but live apply is not available')
+                    : 'Host hotspot settings saved into the dashboard profile',
+                applyToDevice && payload.transport === 'stored_only' ? 'warning' : 'success'
+            );
+        }
+
+        await loadHostHotspotDiagnostics(id);
+    } catch (error) {
+        renderDeviceTransportBadge('error', 'Failed to sync host hotspot settings.');
+        showToast(error.message || 'Failed to sync host hotspot settings', 'danger');
+    }
+}
+
+async function configureHostHotspotFromProfile(startHotspot) {
+    const id = document.getElementById('deviceSettingsPicker')?.value;
+    if (!id) return;
+
+    try {
+        const saved = await saveDeviceSettings({ silent: true });
+        if (!saved) {
+            showToast('Save the device profile first before configuring the host hotspot', 'danger');
+            return;
+        }
+
+        const response = await fetch(`/api/devices/${encodeURIComponent(id)}/hotspot/configure-host`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ start: !!startHotspot })
+        });
+        const payload = await response.json();
+
+        if (!response.ok || !payload.success) {
+            renderDeviceTransportBadge('error', payload.message || 'Failed to configure host hotspot settings.');
+            showToast(payload.message || 'Failed to configure host hotspot settings', 'danger');
+            return;
+        }
+
+        const data = payload.data || {};
+        renderDeviceTransportBadge(
+            'stored_only',
+            payload.message || 'Host hotspot configured from the dashboard device profile.'
+        );
+        showToast(
+            startHotspot
+                ? 'Host hotspot configured and start attempted'
+                : 'Host hotspot configured from the device profile',
+            'success'
+        );
+
+        if (data.wifi_ssid) {
+            document.getElementById('deviceSettingsWifiSsid').value = data.wifi_ssid;
+        }
+        setPreservedWifiPassword(!!data.wifi_password_set, 'dashboard Wi-Fi password');
+        await loadHostHotspotDiagnostics(id);
+    } catch (error) {
+        renderDeviceTransportBadge('error', 'Failed to configure host hotspot settings.');
+        showToast(error.message || 'Failed to configure host hotspot settings', 'danger');
+    }
+}
+
+function encodeConfigValueForTransport(value) {
+    return btoa(unescape(encodeURIComponent(String(value || ''))));
+}
+
+function buildSettingsConfigCommand() {
+    const id = document.getElementById('deviceSettingsId')?.value?.trim() || '';
+    const apn = document.getElementById('deviceSettingsApn')?.value?.trim() || '';
+    const wifiSsid = document.getElementById('deviceSettingsWifiSsid')?.value?.trim() || '';
+    const wifiPass = getWifiPasswordForBrowserTransport();
+    const parts = ['cfg_set'];
+
+    parts.push(`device_id_override_b64=${encodeConfigValueForTransport(id)}`);
+    parts.push(`modem_apn_b64=${encodeConfigValueForTransport(apn)}`);
+    parts.push(`wifi_ssid_b64=${encodeConfigValueForTransport(wifiSsid)}`);
+    parts.push(`wifi_password_b64=${encodeConfigValueForTransport(wifiPass)}`);
+    return parts.join(' ');
+}
+
+function parseConfigStatusLine(line) {
+    const prefix = 'cfg_status ';
+    if (!line || !line.startsWith(prefix)) {
+        return null;
+    }
+
+    const parsed = {};
+    const body = line.slice(prefix.length).trim();
+    for (const token of body.split(/\s+/)) {
+        const eqIndex = token.indexOf('=');
+        if (eqIndex <= 0) continue;
+        parsed[token.slice(0, eqIndex)] = token.slice(eqIndex + 1);
+    }
+
+    return {
+        ok: parsed.ok === 'yes',
+        schemaVersion: parsed.schema ? Number(parsed.schema) : null,
+        deviceIdOverride: parsed.device_id_override_b64 ? decodeURIComponent(escape(atob(parsed.device_id_override_b64))) : '',
+        wifiSsid: parsed.wifi_ssid_b64 ? decodeURIComponent(escape(atob(parsed.wifi_ssid_b64))) : '',
+        wifiPasswordSet: parsed.wifi_password_set === 'yes',
+        modemApn: parsed.modem_apn_b64 ? decodeURIComponent(escape(atob(parsed.modem_apn_b64))) : ''
+    };
+}
+
+function applyReadConfigToForm(config) {
+    document.getElementById('deviceSettingsWifiSsid').value = config.wifiSsid || '';
+    document.getElementById('deviceSettingsApn').value = config.modemApn || '';
+    if (!config.wifiPasswordSet) {
+        document.getElementById('deviceSettingsWifiPass').value = '';
+    }
+    setPreservedWifiPassword(!!config.wifiPasswordSet, 'device Wi-Fi password');
+}
+
+async function applyDeviceConnectivityViaBrowserSerial() {
+    if (!navigator.serial) {
+        showToast('Web Serial is not supported in this browser', 'warning');
+        return;
+    }
+
+    const saved = await saveDeviceSettings({ silent: true });
+    if (!saved) {
+        showToast('Save the device profile first before applying it', 'danger');
+        return;
+    }
+
+    let command;
+    let port;
+    let reader;
+    let writer;
+
+    try {
+        command = buildSettingsConfigCommand();
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        writer = port.writable.getWriter();
+        reader = port.readable.getReader();
+
+        const encoder = new TextEncoder();
+        await writer.write(encoder.encode(command + '\n'));
+
+        let buffer = '';
+        const deadline = Date.now() + 12000;
+        while (Date.now() < deadline) {
+            const { value, done } = await Promise.race([
+                reader.read(),
+                new Promise((resolve) => setTimeout(() => resolve({ value: null, done: false }), 600))
+            ]);
+
+            if (done) break;
+            if (!value) continue;
+
+            buffer += new TextDecoder().decode(value);
+            const lines = buffer.split(/\r?\n/);
+            buffer = lines.pop() || '';
+
+            for (const line of lines.map(text => text.trim()).filter(Boolean)) {
+                if (line.startsWith('cfg_apply ok=yes')) {
+                    renderDeviceTransportBadge('browser-serial', 'Runtime config applied over browser USB serial. The device is rebooting to take the new Wi-Fi/APN settings.');
+                    showToast('Connectivity config applied over browser USB serial', 'success');
+                    return;
+                }
+                if (line.startsWith('cfg_apply ok=no')) {
+                    throw new Error(line);
+                }
+            }
+        }
+
+        throw new Error('No cfg_apply response from device');
+    } catch (error) {
+        renderDeviceTransportBadge('error', 'Browser USB serial apply failed.');
+        showToast(error.message || 'Browser USB serial apply failed', 'danger');
+    } finally {
+        try { reader?.releaseLock(); } catch (_) {}
+        try { writer?.releaseLock(); } catch (_) {}
+        try { await port?.close(); } catch (_) {}
+    }
+}
+
+async function readDeviceConnectivityViaBrowserSerial() {
+    if (!navigator.serial) {
+        showToast('Web Serial is not supported in this browser', 'warning');
+        return;
+    }
+
+    let port;
+    let reader;
+    let writer;
+
+    try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        writer = port.writable.getWriter();
+        reader = port.readable.getReader();
+
+        const encoder = new TextEncoder();
+        await writer.write(encoder.encode('cfg_get\n'));
+
+        let buffer = '';
+        const deadline = Date.now() + 12000;
+        while (Date.now() < deadline) {
+            const { value, done } = await Promise.race([
+                reader.read(),
+                new Promise((resolve) => setTimeout(() => resolve({ value: null, done: false }), 600))
+            ]);
+
+            if (done) break;
+            if (!value) continue;
+
+            buffer += new TextDecoder().decode(value);
+            const lines = buffer.split(/\r?\n/);
+            buffer = lines.pop() || '';
+
+            for (const line of lines.map(text => text.trim()).filter(Boolean)) {
+                if (line.startsWith('cfg_status ')) {
+                    const parsed = parseConfigStatusLine(line);
+                    if (!parsed?.ok) {
+                        throw new Error('Device rejected config read');
+                    }
+                    applyReadConfigToForm(parsed);
+                    renderDeviceTransportBadge('browser-serial', parsed.wifiPasswordSet
+                        ? 'Read current config over browser USB serial. Password remains masked and is only reported as present.'
+                        : 'Read current config over browser USB serial.');
+                    showToast(parsed.wifiPasswordSet
+                        ? 'Device config loaded over browser USB. Password is present on device but not read back.'
+                        : 'Device config loaded over browser USB', 'success');
+                    return;
+                }
+            }
+        }
+
+        throw new Error('No cfg_status response from device');
+    } catch (error) {
+        renderDeviceTransportBadge('error', 'Browser USB serial read failed.');
+        showToast(error.message || 'Browser USB serial read failed', 'danger');
+    } finally {
+        try { reader?.releaseLock(); } catch (_) {}
+        try { writer?.releaseLock(); } catch (_) {}
+        try { await port?.close(); } catch (_) {}
+    }
+}
+
+async function applyDeviceConnectivityViaBrowserBle() {
+    if (!navigator.bluetooth) {
+        showToast('Web Bluetooth is not supported in this browser', 'warning');
+        return;
+    }
+
+    const saved = await saveDeviceSettings({ silent: true });
+    if (!saved) {
+        showToast('Save the device profile first before applying it', 'danger');
+        return;
+    }
+
+    let command;
+    let device = null;
+    let characteristic = null;
+    let responseBuffer = '';
+
+    try {
+        command = buildSettingsConfigCommand();
+        device = await navigator.bluetooth.requestDevice({
+            acceptAllDevices: true,
+            optionalServices: [BLE_SERVICE_UUID]
+        });
+
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+        const txChar = await service.getCharacteristic(BLE_TX_UUID);
+        const rxChar = await service.getCharacteristic(BLE_RX_UUID);
+        characteristic = rxChar;
+
+        const response = await new Promise(async (resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('No cfg_apply response from BLE device')), 12000);
+
+            function handleNotification(event) {
+                responseBuffer += new TextDecoder().decode(event.target.value);
+                const lines = responseBuffer.split(/\r?\n/);
+                responseBuffer = lines.pop() || '';
+
+                for (const line of lines.map(text => text.trim()).filter(Boolean)) {
+                    if (line.startsWith('cfg_apply ok=yes')) {
+                        clearTimeout(timeout);
+                        rxChar.removeEventListener('characteristicvaluechanged', handleNotification);
+                        resolve(line);
+                        return;
+                    }
+                    if (line.startsWith('cfg_apply ok=no')) {
+                        clearTimeout(timeout);
+                        rxChar.removeEventListener('characteristicvaluechanged', handleNotification);
+                        reject(new Error(line));
+                        return;
+                    }
+                }
+            }
+
+            rxChar.addEventListener('characteristicvaluechanged', handleNotification);
+            await rxChar.startNotifications();
+            await txChar.writeValue(new TextEncoder().encode(command + '\n'));
+        });
+
+        if (response.startsWith('cfg_apply ok=yes')) {
+            renderDeviceTransportBadge('browser-ble', 'Runtime config applied over browser Bluetooth. The device is rebooting to take the new Wi-Fi/APN settings.');
+            showToast('Connectivity config applied over browser Bluetooth', 'success');
+        }
+    } catch (error) {
+        renderDeviceTransportBadge('error', 'Browser Bluetooth apply failed.');
+        showToast(error.message || 'Browser Bluetooth apply failed', 'danger');
+    } finally {
+        try {
+            if (characteristic) {
+                await characteristic.stopNotifications();
+            }
+        } catch (_) {}
+        try {
+            if (device?.gatt?.connected) {
+                device.gatt.disconnect();
+            }
+        } catch (_) {}
+    }
+}
+
+async function readDeviceConnectivityViaBrowserBle() {
+    if (!navigator.bluetooth) {
+        showToast('Web Bluetooth is not supported in this browser', 'warning');
+        return;
+    }
+
+    let device = null;
+    let characteristic = null;
+    let responseBuffer = '';
+
+    try {
+        device = await navigator.bluetooth.requestDevice({
+            acceptAllDevices: true,
+            optionalServices: [BLE_SERVICE_UUID]
+        });
+
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+        const txChar = await service.getCharacteristic(BLE_TX_UUID);
+        const rxChar = await service.getCharacteristic(BLE_RX_UUID);
+        characteristic = rxChar;
+
+        const parsed = await new Promise(async (resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('No cfg_status response from BLE device')), 12000);
+
+            function handleNotification(event) {
+                responseBuffer += new TextDecoder().decode(event.target.value);
+                const lines = responseBuffer.split(/\r?\n/);
+                responseBuffer = lines.pop() || '';
+
+                for (const line of lines.map(text => text.trim()).filter(Boolean)) {
+                    if (line.startsWith('cfg_status ')) {
+                        clearTimeout(timeout);
+                        rxChar.removeEventListener('characteristicvaluechanged', handleNotification);
+                        resolve(parseConfigStatusLine(line));
+                        return;
+                    }
+                    if (line.startsWith('cfg_apply ok=no')) {
+                        clearTimeout(timeout);
+                        rxChar.removeEventListener('characteristicvaluechanged', handleNotification);
+                        reject(new Error(line));
+                        return;
+                    }
+                }
+            }
+
+            rxChar.addEventListener('characteristicvaluechanged', handleNotification);
+            await rxChar.startNotifications();
+            await txChar.writeValue(new TextEncoder().encode('cfg_get\n'));
+        });
+
+        if (!parsed?.ok) {
+            throw new Error('Device rejected config read');
+        }
+
+        applyReadConfigToForm(parsed);
+        renderDeviceTransportBadge('browser-ble', parsed.wifiPasswordSet
+            ? 'Read current config over browser Bluetooth. Password remains masked and is only reported as present.'
+            : 'Read current config over browser Bluetooth.');
+        showToast(parsed.wifiPasswordSet
+            ? 'Device config loaded over browser Bluetooth. Password is present on device but not read back.'
+            : 'Device config loaded over browser Bluetooth', 'success');
+    } catch (error) {
+        renderDeviceTransportBadge('error', 'Browser Bluetooth read failed.');
+        showToast(error.message || 'Browser Bluetooth read failed', 'danger');
+    } finally {
+        try {
+            if (characteristic) {
+                await characteristic.stopNotifications();
+            }
+        } catch (_) {}
+        try {
+            if (device?.gatt?.connected) {
+                device.gatt.disconnect();
+            }
+        } catch (_) {}
+    }
+}
+
+async function loadDeviceSettingsPicker() {
+    try {
+        const response = await fetch('/api/devices?limit=100', {
+            cache: 'no-store',
+            credentials: 'same-origin',
+            headers: {
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
+            }
+        });
+        const payload = await response.json();
+        const picker = document.getElementById('deviceSettingsPicker');
+        if (!picker) return;
+
+        const devices = payload.devices || [];
+        picker.innerHTML = '';
+
+        if (!devices.length) {
+            picker.innerHTML = '<option value="">No devices found</option>';
+            renderDeviceSettingsBadge(false);
+            return;
+        }
+
+        devices.forEach((device) => {
+            const option = document.createElement('option');
+            option.value = device.id;
+            option.textContent = device.name || device.id;
+            picker.appendChild(option);
+        });
+
+        const preferredId = requestedDeviceSettingsId || window._activeDeviceId || devices[0].id;
+        picker.value = devices.some((device) => device.id === preferredId) ? preferredId : devices[0].id;
+        await onDeviceSettingsPick();
+    } catch (error) {
+        console.error('Device settings picker load error', error);
+    }
+}
+
+async function onDeviceSettingsPick() {
+    const id = document.getElementById('deviceSettingsPicker')?.value;
+    if (!id) return;
+
+    window._activeDeviceId = id;
+    history.replaceState({}, '', deviceSettingsHref(id));
+
+    const editorLink = document.getElementById('deviceEditorLink');
+    if (editorLink) {
+        editorLink.href = '/devices';
+    }
+
+    try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(id)}`, { cache: 'no-store' });
+        const payload = await response.json();
+        const device = payload.device || payload;
+
+        document.getElementById('deviceSettingsId').value = id;
+        document.getElementById('deviceSettingsName').value = device.name || '';
+        document.getElementById('deviceSettingsLocation').value = device.location || '';
+        document.getElementById('deviceSettingsWifiSsid').value = device.wifi_ssid || '';
+        document.getElementById('deviceSettingsWifiPass').value = device.wifi_pass || '';
+        setPreservedWifiPassword(false);
+        document.getElementById('deviceSettingsApn').value = device.apn || '';
+        document.getElementById('deviceSettingsLocalIp').value = device.local_ip || '';
+        document.getElementById('deviceSettingsMqttHost').value = device.mqtt_host || '';
+        const mqttUserInput = document.getElementById('deviceSettingsMqttUser');
+        const mqttPassInput = document.getElementById('deviceSettingsMqttPass');
+        if (mqttUserInput) mqttUserInput.value = device.mqtt_user || '';
+        if (mqttPassInput) mqttPassInput.value = '';
+        const mqttHint = document.getElementById('deviceSettingsMqttPassHint');
+        if (mqttHint) {
+            mqttHint.textContent = device.mqtt_pass_set
+                ? 'Per-device password is set. Leave blank to keep current.'
+                : 'No per-device MQTT password stored. System defaults may still be used for provisioning.';
+        }
+        renderDeviceMqttEffective(device);
+        document.getElementById('deviceSettingsTopic').value = `device/${id}/...`;
+        document.getElementById('deviceSettingsType').value = device.type || 'esp32';
+        document.getElementById('devLastSeen').textContent = device.last_seen ? new Date(device.last_seen).toLocaleString() : '-';
+        document.getElementById('devUptime').textContent = device.uptime || '-';
+        renderDeviceSettingsBadge(Boolean(device.online));
+        renderDeviceTransportBadge('stored_only', 'Save keeps the profile in the dashboard. Apply selects the available provisioning path.');
+        renderDeviceSettingsLane({ ...device, id });
+        renderWifiMismatchHint(device);
+        await loadHostHotspotDiagnostics(id);
+        await Promise.allSettled([
+            loadDeviceSettingsProvisioningCard({ ...device, id }),
+            loadDevicePackageCard()
+        ]);
+
+        try {
+            const capsResponse = await fetch(`/api/devices/${encodeURIComponent(id)}/capabilities`, { cache: 'no-store' });
+            const capsPayload = await capsResponse.json();
+            document.getElementById('devFwVersion').textContent = capsPayload.firmware || '-';
+            document.getElementById('devFwBuild').textContent = capsPayload.buildDate || capsPayload.build_date || '-';
+        } catch (capError) {
+            console.error('Device capabilities load error', capError);
+            document.getElementById('devFwVersion').textContent = '-';
+            document.getElementById('devFwBuild').textContent = '-';
+        }
+    } catch (error) {
+        console.error('Device settings load error', error);
+    }
+}
+
+async function saveDeviceSettings(options = {}) {
+    const silent = !!options.silent;
+    const id = document.getElementById('deviceSettingsPicker')?.value;
+    const name = document.getElementById('deviceSettingsName')?.value?.trim();
+    const location = document.getElementById('deviceSettingsLocation')?.value?.trim();
+    const apn = document.getElementById('deviceSettingsApn')?.value?.trim();
+    const wifi_ssid = document.getElementById('deviceSettingsWifiSsid')?.value?.trim();
+    const wifi_pass = document.getElementById('deviceSettingsWifiPass')?.value ?? '';
+    const local_ip = document.getElementById('deviceSettingsLocalIp')?.value?.trim();
+    const mqtt_host = document.getElementById('deviceSettingsMqttHost')?.value?.trim();
+    const mqtt_user = document.getElementById('deviceSettingsMqttUser')?.value?.trim();
+    const mqtt_pass = document.getElementById('deviceSettingsMqttPass')?.value ?? '';
+    if (!id) return false;
+
+    try {
+        const requestBody = { name, location, apn, wifi_ssid, mqtt_host };
+        if (wifi_pass || !window._preserveStoredWifiPassword) {
+            requestBody.wifi_pass = wifi_pass;
+        }
+        const response = await fetch(`/api/devices/${encodeURIComponent(id)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody)
+        });
+        const payload = await response.json();
+        if (!payload.success) {
+            throw new Error(payload.message || 'Device profile save failed');
+        }
+
+        await fetch(`/api/devices/${encodeURIComponent(id)}/local-ip`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
+            body: JSON.stringify({ local_ip: local_ip || null })
+        });
+
+        if (CAN_EDIT_DEVICE_SECRETS && (mqtt_host || mqtt_user || mqtt_pass)) {
+            const mqttResponse = await fetch(`/api/devices/${encodeURIComponent(id)}/mqtt-credentials`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
+                body: JSON.stringify({ mqtt_host: mqtt_host || undefined, mqtt_user: mqtt_user || undefined, mqtt_pass: mqtt_pass || undefined })
+            });
+            const mqttPayload = await mqttResponse.json().catch(() => ({}));
+            if (!mqttResponse.ok || mqttPayload.success === false) {
+                throw new Error(mqttPayload.message || 'Per-device MQTT credential save failed');
+            }
+            if (mqtt_pass) {
+                document.getElementById('deviceSettingsMqttPass').value = '';
+                const mqttHint = document.getElementById('deviceSettingsMqttPassHint');
+                if (mqttHint) {
+                    mqttHint.textContent = 'Password is set. Leave blank to keep current.';
+                }
+            }
+            renderDeviceMqttEffective({
+                mqtt_effective: {
+                    ...(window._lastDeviceSettingsMqttEffective || {}),
+                    uri: mqtt_host || window._lastDeviceSettingsMqttEffective?.uri || '',
+                    configured: Boolean(mqtt_host || window._lastDeviceSettingsMqttEffective?.configured),
+                    username: mqtt_user || window._lastDeviceSettingsMqttEffective?.username || '',
+                    passwordSet: mqtt_pass ? true : (window._lastDeviceSettingsMqttEffective?.passwordSet || false),
+                    source: (mqtt_host || mqtt_user || mqtt_pass) ? 'device_override' : (window._lastDeviceSettingsMqttEffective?.source || 'unset'),
+                    sources: {
+                        uri: mqtt_host ? 'device' : (window._lastDeviceSettingsMqttEffective?.sources?.uri || (window._lastDeviceSettingsMqttEffective?.configured ? 'system' : 'unset')),
+                        username: mqtt_user ? 'device' : (window._lastDeviceSettingsMqttEffective?.sources?.username || 'unset'),
+                        password: mqtt_pass ? 'device' : (window._lastDeviceSettingsMqttEffective?.sources?.password || 'unset')
+                    }
+                }
+            });
+        }
+        if (payload.success) {
+            renderDeviceTransportBadge('stored_only', 'Profile saved in dashboard storage. Use Apply to Device when you want to push it to hardware.');
+            renderDeviceSettingsLane({ id, type: document.getElementById('deviceSettingsType')?.value || id });
+        }
+        if (payload.success && wifi_pass) {
+            setPreservedWifiPassword(true, 'dashboard Wi-Fi password');
+        }
+        if (!silent) {
+            showToast(payload.success ? 'Device profile saved' : (payload.message || 'Save failed'), payload.success ? 'success' : 'danger');
+        }
+        return !!payload.success;
+    } catch (error) {
+        if (!silent) {
+            showToast(error.message || 'Failed to save device', 'danger');
+        }
+        return false;
+    }
+}
+
+async function testDeviceDirectConnect(button) {
+    const id = document.getElementById('deviceSettingsPicker')?.value;
+    const ip = document.getElementById('deviceSettingsLocalIp')?.value?.trim();
+    const status = document.getElementById('deviceDirectConnectStatus');
+    const btn = button?.closest ? button.closest('button') : button;
+    if (!id || !ip) {
+        if (status) {
+            status.className = 'form-text text-warning';
+            status.textContent = 'Enter a local IP address first.';
+        }
+        return;
+    }
+
+    if (btn) btn.disabled = true;
+    if (status) {
+        status.className = 'form-text text-muted';
+        status.textContent = 'Testing...';
+    }
+
+    try {
+        await fetch(`/api/devices/${encodeURIComponent(id)}/local-ip`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
+            body: JSON.stringify({ local_ip: ip })
+        });
+
+        const response = await fetch(`/api/devices/${encodeURIComponent(id)}/direct?path=status`, {
+            cache: 'no-store'
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload.success) {
+            throw new Error(payload.message || 'No response from local device API');
+        }
+
+        if (status) {
+            const preview = payload.data?.board || payload.data?.firmware || JSON.stringify(payload.data).slice(0, 80);
+            status.className = 'form-text text-success';
+            status.textContent = `Connected - ${preview}`;
+        }
+    } catch (error) {
+        if (status) {
+            status.className = 'form-text text-danger';
+            status.textContent = error.message || 'Local direct access failed.';
+        }
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function applyDeviceConnectivity() {
+    const id = document.getElementById('deviceSettingsPicker')?.value;
+
+    if (!id) return;
+
+    try {
+        const saved = await saveDeviceSettings({ silent: true });
+        if (!saved) {
+            showToast('Save the device profile first before applying it', 'danger');
+            return;
+        }
+
+        const apn = document.getElementById('deviceSettingsApn')?.value?.trim();
+        const wifi_ssid = document.getElementById('deviceSettingsWifiSsid')?.value?.trim();
+        const wifi_pass = document.getElementById('deviceSettingsWifiPass')?.value ?? '';
+        const requestBody = { apn, wifi_ssid };
+        if (wifi_pass || !window._preserveStoredWifiPassword) {
+            requestBody.wifi_pass = wifi_pass;
+        }
+        const response = await fetch(`/api/devices/${encodeURIComponent(id)}/runtime-config/apply`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody)
+        });
+        const payload = await response.json();
+
+        if (response.ok && payload.success) {
+            if (payload.transport === 'serial' && payload.applied) {
+                if (payload.partialApplied || payload.compatibilityWarning) {
+                    renderDeviceTransportBadge(
+                        'serial-legacy',
+                        payload.compatibilityWarning || 'Runtime config was only partially applied because the device is still using a legacy config schema.'
+                    );
+                    showToast(payload.compatibilityWarning || 'Connectivity applied partially over serial', 'warning');
+                } else {
+                    renderDeviceTransportBadge('serial', 'Runtime config applied over serial. The device is rebooting so the new Wi-Fi/APN settings take effect.');
+                    showToast('Connectivity config applied over serial', 'success');
+                }
+            } else {
+                renderDeviceTransportBadge('stored_only', payload.message || 'Profile saved, but the dashboard host does not currently have a usable serial transport.');
+                showToast(payload.message || 'Profile saved without live apply', 'warning');
+            }
+            return;
+        }
+
+        renderDeviceTransportBadge('error', payload.message || 'Serial apply failed');
+        showToast(payload.message || 'Failed to apply config over serial', 'danger');
+    } catch (error) {
+        renderDeviceTransportBadge('error', 'Serial apply failed on the dashboard host.');
+        showToast('Failed to apply config over serial', 'danger');
+    }
+}
+
+async function readDeviceConnectivity() {
+    const id = document.getElementById('deviceSettingsPicker')?.value;
+    if (!id) return;
+
+    try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(id)}/runtime-config/read`, { cache: 'no-store' });
+        const payload = await response.json();
+
+        if (!response.ok || !payload.success) {
+            renderDeviceTransportBadge('error', payload.message || 'Failed to read config from device.');
+            showToast(payload.message || 'Failed to read config from device', 'danger');
+            return;
+        }
+
+        const data = payload.data || {};
+        document.getElementById('deviceSettingsWifiSsid').value = data.wifi_ssid || '';
+        document.getElementById('deviceSettingsApn').value = data.apn || '';
+        if (!data.wifi_password_set) {
+            document.getElementById('deviceSettingsWifiPass').value = '';
+        }
+        setPreservedWifiPassword(!!data.wifi_password_set, 'device Wi-Fi password');
+        const legacySchema = deviceRuntimeConfigNeedsFirmwareUpdate(data);
+        if (legacySchema) {
+            renderDeviceTransportBadge(
+                'serial-legacy',
+                'Read current config from device over serial. This device is still on the legacy config schema, so MQTT broker settings are not stored on-device yet. Flash the current main firmware before expecting MQTT runtime operations.'
+            );
+            showToast('Device config loaded, but the device firmware still uses the legacy config schema', 'warning');
+        } else {
+            renderDeviceTransportBadge('serial', data.wifi_password_set
+                ? 'Read current config from device over serial. Wi-Fi password is set on the device but remains masked in the form.'
+                : 'Read current config from device over serial.');
+            showToast(data.wifi_password_set
+                ? 'Device config loaded. Password is present on device but not read back.'
+                : 'Device config loaded from serial', 'success');
+        }
+    } catch (error) {
+        renderDeviceTransportBadge('error', 'Failed to read config from device.');
+        showToast('Failed to read config from device', 'danger');
+    }
+}
+
+function refreshDeviceSettings() {
+    onDeviceSettingsPick();
+}
+
+document.addEventListener('DOMContentLoaded', loadDeviceSettingsPicker);
+</script>
+
+<style>
+.settings-device-page .card-header,
+.settings-device-page .card-body {
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+}
+
+.settings-device-page .form-label {
+    margin-bottom: 0.35rem;
+}
+</style>

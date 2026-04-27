@@ -1,0 +1,1424 @@
+<!-- Page header -->
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <h2 class="mb-0"><i class="bi bi-cpu me-2 text-primary"></i>Device Manager</h2>
+    <div class="d-flex gap-2 align-items-center" id="devicesHeaderActions">
+        <span class="badge bg-secondary" id="deviceCount">Loading...</span>
+        <a href="/onboard" class="btn btn-sm btn-primary">
+            <i class="bi bi-plus-circle me-1"></i>Onboard Device
+        </a>
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadDevices()">
+            <i class="bi bi-arrow-repeat"></i>
+        </button>
+    </div>
+</div>
+
+<% const isSuperAdmin = user && user.role === 'superadmin'; %>
+
+<!-- Tabs -->
+<ul class="nav nav-tabs mb-3" id="deviceManagerTabs">
+    <li class="nav-item">
+        <a class="nav-link active" id="tab-devices" href="#" onclick="switchTab('devices'); return false;">
+            <i class="bi bi-cpu me-1"></i>Devices
+        </a>
+    </li>
+    <% if (isSuperAdmin) { %>
+    <li class="nav-item">
+        <a class="nav-link" id="tab-unregistered" href="#" onclick="switchTab('unregistered'); return false;">
+            <i class="bi bi-shield-exclamation me-1"></i>Unregistered
+            <span class="badge bg-warning-subtle text-warning-emphasis border ms-1" id="unregisteredCount">...</span>
+        </a>
+    </li>
+    <% } %>
+    <li class="nav-item">
+        <a class="nav-link" id="tab-groups" href="#" onclick="switchTab('groups'); return false;">
+            <i class="bi bi-collection me-1"></i>Groups
+        </a>
+    </li>
+</ul>
+
+<!-- ── TAB: Devices ── -->
+<div id="panel-devices">
+    <!-- Search / filter bar -->
+    <div class="mb-3">
+        <input type="text" class="form-control form-control-sm" id="deviceSearch"
+               placeholder="Search by ID, name, or model..." oninput="filterDevices()" style="max-width:320px;">
+    </div>
+
+    <!-- Device table -->
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0" id="devicesTable">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width:90px;">Status</th>
+                            <th>Device ID</th>
+                            <th>Name</th>
+                            <th>Model</th>
+                            <th>Location</th>
+                            <th>Signal</th>
+                            <th>Battery</th>
+                            <th>Last Seen</th>
+                            <% if (isAdmin) { %>
+                            <th style="width:80px;">Users</th>
+                            <% } %>
+                            <th style="width:90px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="devicesBody">
+                        <tr><td colspan="<%= isAdmin ? 10 : 9 %>" class="text-center py-4 text-muted">
+                            <div class="spinner-border spinner-border-sm me-2"></div>Loading...
+                        </td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<% if (isSuperAdmin) { %>
+<div id="panel-unregistered" style="display:none;">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+        <div>
+            <div class="fw-semibold"><i class="bi bi-shield-exclamation me-2 text-warning"></i>Quarantined Device Hits</div>
+            <div class="small text-muted">Unknown devices are ignored until a superadmin reviews and promotes them.</div>
+        </div>
+        <input type="text" class="form-control form-control-sm" id="unregisteredSearch"
+               placeholder="Search by device ID, name, or model..." oninput="filterUnregisteredDevices()" style="max-width:320px;">
+    </div>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Device ID</th>
+                            <th>Type</th>
+                            <th>Model</th>
+                            <th>Identity</th>
+                            <th>Last Event</th>
+                            <th>Last Seen</th>
+                            <th>Hits</th>
+                            <th style="width:140px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="unregisteredDevicesBody">
+                        <tr><td colspan="8" class="text-center py-4 text-muted">
+                            <div class="spinner-border spinner-border-sm me-2"></div>Loading...
+                        </td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+<% } %>
+
+<!-- ── TAB: Groups ── -->
+<div id="panel-groups" style="display:none;">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <span class="text-muted small" id="groupsCount"></span>
+        <button class="btn btn-sm btn-primary" onclick="openCreateGroupModal()">
+            <i class="bi bi-plus-circle me-1"></i>Create Group
+        </button>
+    </div>
+    <div id="groupsList">
+        <div class="text-center text-muted py-4">
+            <div class="spinner-border spinner-border-sm me-2"></div>Loading groups...
+        </div>
+    </div>
+</div>
+
+<% if (isAdmin) { %>
+<!-- Manage Users Modal (admin only) -->
+<div class="modal fade" id="manageUsersModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header py-2">
+                <h6 class="modal-title mb-0"><i class="bi bi-people me-1"></i>Manage Device Access</h6>
+                <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small mb-2">Device: <code id="manageUsersDeviceId"></code></p>
+
+                <!-- Add user form -->
+                <div class="input-group input-group-sm mb-3">
+                    <select class="form-select form-select-sm" id="addUserSelect">
+                        <option value="">— Select user to add —</option>
+                    </select>
+                    <select class="form-select form-select-sm" id="addUserAccess" style="max-width:130px;">
+                        <option value="1">Full control</option>
+                        <option value="0">View only</option>
+                    </select>
+                    <button class="btn btn-primary btn-sm" onclick="assignUser()">
+                        <i class="bi bi-plus-lg"></i> Add
+                    </button>
+                </div>
+
+                <!-- Assigned users list -->
+                <div id="assignedUsersList">
+                    <div class="text-center text-muted small py-3">Loading...</div>
+                </div>
+            </div>
+            <div class="modal-footer py-2">
+                <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+<% } %>
+
+<!-- Create Group Modal -->
+<div class="modal fade" id="createGroupModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header py-2">
+                <h6 class="modal-title mb-0"><i class="bi bi-collection me-1"></i>Create Device Group</h6>
+                <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Name <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control form-control-sm" id="newGroupName" maxlength="100" placeholder="e.g. Production Sensors">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Description <small class="text-muted fw-normal">(optional)</small></label>
+                    <input type="text" class="form-control form-control-sm" id="newGroupDesc" maxlength="500">
+                </div>
+                <div class="mb-0">
+                    <label class="form-label small fw-semibold">Color</label>
+                    <div class="d-flex align-items-center gap-2">
+                        <input type="color" class="form-control form-control-color" id="newGroupColor" value="#0d6efd" style="width:48px;height:32px;padding:2px;">
+                        <small class="text-muted">Used for the group badge</small>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer py-2">
+                <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-sm btn-primary" onclick="createGroup()">Create</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Group Detail Modal -->
+<div class="modal fade" id="groupDetailModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header py-2">
+                <h6 class="modal-title mb-0" id="groupDetailTitle"><i class="bi bi-collection me-1"></i>Group</h6>
+                <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Add device to group -->
+                <div class="input-group input-group-sm mb-3">
+                    <select class="form-select form-select-sm" id="groupAddDeviceSelect">
+                        <option value="">— Select device to add —</option>
+                    </select>
+                    <button class="btn btn-primary btn-sm" onclick="addToGroup()">
+                        <i class="bi bi-plus-lg"></i> Add
+                    </button>
+                </div>
+                <!-- Member list -->
+                <div id="groupMembersList">
+                    <div class="text-center text-muted small py-3">Loading...</div>
+                </div>
+            </div>
+            <div class="modal-footer py-2">
+                <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<% if (isSuperAdmin) { %>
+<div class="modal fade" id="unregisteredDetailModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-xl">
+        <div class="modal-content">
+            <div class="modal-header py-2">
+                <h6 class="modal-title mb-0"><i class="bi bi-shield-exclamation me-1 text-warning"></i><span id="unregisteredDetailTitle">Unregistered Device</span></h6>
+                <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="unregisteredDetailMeta" class="row g-2 mb-3"></div>
+                <div class="card border-0 bg-body-tertiary mb-3">
+                    <div class="card-body py-2 px-3">
+                        <div class="small text-muted mb-1">Identity</div>
+                        <pre class="mb-0 small unregistered-pre" id="unregisteredDetailIdentity">{}</pre>
+                    </div>
+                </div>
+                <div>
+                    <div class="small fw-semibold mb-2">Event Log</div>
+                    <div id="unregisteredDetailLogs" class="border rounded overflow-auto" style="max-height:360px;"></div>
+                </div>
+            </div>
+            <div class="modal-footer py-2">
+                <button class="btn btn-sm btn-outline-danger me-auto" onclick="deleteCurrentUnregisteredDevice()">
+                    <i class="bi bi-trash me-1"></i>Delete
+                </button>
+                <button class="btn btn-sm btn-outline-primary" onclick="openAssignUnregisteredFromDetail()">
+                    <i class="bi bi-person-plus me-1"></i>Assign
+                </button>
+                <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="assignUnregisteredModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header py-2">
+                <h6 class="modal-title mb-0"><i class="bi bi-person-plus me-1"></i>Assign Unregistered Device</h6>
+                <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="small text-muted mb-3">Promote this quarantined device into the managed device list and assign it to a user.</div>
+                <div class="mb-2">
+                    <label class="form-label small fw-semibold">Device ID</label>
+                    <input type="text" class="form-control form-control-sm" id="assignUnregisteredDeviceId" readonly>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label small fw-semibold">Device Name</label>
+                    <input type="text" class="form-control form-control-sm" id="assignUnregisteredName" maxlength="100">
+                </div>
+                <div class="row g-2">
+                    <div class="col-sm-6">
+                        <label class="form-label small fw-semibold">Type</label>
+                        <input type="text" class="form-control form-control-sm" id="assignUnregisteredType" maxlength="32">
+                    </div>
+                    <div class="col-sm-6">
+                        <label class="form-label small fw-semibold">Board</label>
+                        <input type="text" class="form-control form-control-sm" id="assignUnregisteredBoard" maxlength="64">
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <label class="form-label small fw-semibold">Location</label>
+                    <input type="text" class="form-control form-control-sm" id="assignUnregisteredLocation" maxlength="200">
+                </div>
+                <div class="mt-2">
+                    <label class="form-label small fw-semibold">Assign User</label>
+                    <select class="form-select form-select-sm" id="assignUnregisteredUser">
+                        <option value="">Select user...</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer py-2">
+                <button class="btn btn-sm btn-primary" onclick="assignUnregisteredDevice()">Assign Device</button>
+                <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            </div>
+        </div>
+    </div>
+</div>
+<% } %>
+
+<style>
+.btn-xs { padding: 0.15rem 0.4rem; font-size: 0.75rem; }
+.signal-bar { height: 4px; width: 60px; }
+.unregistered-pre {
+    max-height: 220px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.table-row-link {
+    cursor: pointer;
+}
+</style>
+
+<script>
+const IS_ADMIN = <%= isAdmin ? 'true' : 'false' %>;
+const IS_SUPERADMIN = <%= isSuperAdmin ? 'true' : 'false' %>;
+let allDevices = [];
+let allUnregisteredDevices = [];
+let currentUnregisteredDevice = null;
+
+// Pre-loaded device data from server render
+const serverDevices = <%- JSON.stringify(devices || []) %>;
+const requestedEditDeviceId = new URLSearchParams(window.location.search).get('device');
+let requestedEditHandled = false;
+
+// Modals
+<% if (isAdmin) { %>
+let manageUsersModal = null;
+let manageUsersDeviceId = null;
+<% } %>
+let unregisteredDetailModal = null;
+let assignUnregisteredModal = null;
+
+function ensureModal(id) {
+    if (!window.bootstrap) return null;
+    const el = document.getElementById(id);
+    if (!el) return null;
+    return window.bootstrap.Modal.getOrCreateInstance(el);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+<% if (isAdmin) { %>
+    manageUsersModal = ensureModal('manageUsersModal');
+<% } %>
+    unregisteredDetailModal = ensureModal('unregisteredDetailModal');
+    assignUnregisteredModal = ensureModal('assignUnregisteredModal');
+    createGroupModal = ensureModal('createGroupModal');
+    groupDetailModal = ensureModal('groupDetailModal');
+});
+
+function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function loadDevices() {
+    try {
+        const res = await fetch('/api/devices', {
+            cache: 'no-store',
+            credentials: 'same-origin',
+            headers: {
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
+            }
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        allDevices = data.devices;
+        renderDevices(allDevices);
+        if (IS_SUPERADMIN) {
+            loadUnregisteredDevices();
+        }
+        maybeOpenRequestedDeviceEditor();
+    } catch (e) {
+        document.getElementById('devicesBody').innerHTML =
+            `<tr><td colspan="${IS_ADMIN ? 10 : 9}" class="text-center py-3 text-danger">Failed to load: ${escHtml(e.message)}</td></tr>`;
+    }
+}
+
+async function loadUnregisteredDevices() {
+    if (!IS_SUPERADMIN) return;
+    try {
+        const res = await fetch('/api/devices/unregistered', {
+            cache: 'no-store',
+            credentials: 'same-origin'
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Failed to load unregistered devices');
+        allUnregisteredDevices = data.devices || [];
+        renderUnregisteredDevices(allUnregisteredDevices);
+    } catch (error) {
+        const tbody = document.getElementById('unregisteredDevicesBody');
+        if (tbody) {
+            tbody.innerHTML = `<tr><td colspan="8" class="text-center py-3 text-danger">${escHtml(error.message)}</td></tr>`;
+        }
+        const badge = document.getElementById('unregisteredCount');
+        if (badge) badge.textContent = 'Error';
+    }
+}
+
+function formatJson(value) {
+    try {
+        return JSON.stringify(value || {}, null, 2);
+    } catch (_) {
+        return '{}';
+    }
+}
+
+function formatUnregisteredIdentity(identity = {}) {
+    const parts = [
+        identity.name,
+        identity.model,
+        identity.platform,
+        identity.board,
+        identity.transport,
+        identity.bridge
+    ].filter(Boolean);
+    return parts.length ? parts.join(' · ') : 'Identity not reported';
+}
+
+function hasAnyIdentityKey(identity = {}, keys = []) {
+    return keys.some((key) => Object.prototype.hasOwnProperty.call(identity, key));
+}
+
+function inferUnregisteredAssignType(identity = {}, deviceId = '') {
+    const tokens = [
+        deviceId,
+        identity.device_id,
+        identity.deviceId,
+        identity.id,
+        identity.platform,
+        identity.device_type,
+        identity.deviceType,
+        identity.model,
+        identity.board,
+        identity.bridge,
+        identity.bridge_type,
+        identity.transport
+    ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+
+    if (
+        tokens.some((token) => /^android(?:[-_]|$)/.test(token) || token.includes('android')) ||
+        hasAnyIdentityKey(identity, ['android_id', 'androidId', 'install_id', 'installId'])
+    ) {
+        return 'android';
+    }
+
+    const espToken = tokens.find((token) =>
+        token.includes('esp32') ||
+        token.includes('a7670') ||
+        token.includes('simcom') ||
+        token === 'firmware'
+    );
+    if (espToken) return espToken.includes('esp32') || espToken.includes('a7670') ? espToken : 'esp32';
+
+    if (
+        identity.type === 'device_status' ||
+        identity.type === 'status' ||
+        hasAnyIdentityKey(identity, [
+            'active_path',
+            'activePath',
+            'wifi_configured',
+            'wifi_started',
+            'wifi_connected',
+            'wifi_ip_assigned',
+            'wifi_ssid',
+            'free_heap_bytes',
+            'largest_free_block_bytes',
+            'internal_free_heap_bytes',
+            'free_psram_bytes',
+            'sd_mounted',
+            'storage_media_mounted',
+            'storage_queue_depth',
+            'modem_operator',
+            'modem_network_type',
+            'imei'
+        ])
+    ) {
+        return 'esp32';
+    }
+
+    return 'esp32';
+}
+
+function inferUnregisteredDisplayType(identity = {}, deviceId = '') {
+    return inferUnregisteredAssignType(identity, deviceId) || 'esp32';
+}
+
+function inferUnregisteredDisplayModel(identity = {}, deviceId = '') {
+    const displayType = inferUnregisteredDisplayType(identity, deviceId);
+    const model = String(
+        identity.model ||
+        identity.device_model ||
+        identity.deviceModel ||
+        identity.board ||
+        ''
+    ).trim();
+    if (model) return model;
+    return displayType === 'android' ? 'Android Device' : 'ESP32 Device';
+}
+
+function filterUnregisteredDevices() {
+    const query = String(document.getElementById('unregisteredSearch')?.value || '').trim().toLowerCase();
+    if (!query) {
+        renderUnregisteredDevices(allUnregisteredDevices);
+        return;
+    }
+    const filtered = allUnregisteredDevices.filter((device) => {
+        const identity = device.identity || {};
+        const displayType = device.device_type || inferUnregisteredDisplayType(identity, device.device_id);
+        const displayModel = device.model || inferUnregisteredDisplayModel(identity, device.device_id);
+        return [
+            device.device_id,
+            displayType,
+            displayModel,
+            identity.name,
+            identity.model,
+            identity.device_model,
+            identity.deviceModel,
+            identity.platform,
+            identity.board,
+            identity.transport
+        ].some((value) => String(value || '').toLowerCase().includes(query));
+    });
+    renderUnregisteredDevices(filtered);
+}
+
+function renderUnregisteredDevices(devices) {
+    const tbody = document.getElementById('unregisteredDevicesBody');
+    const badge = document.getElementById('unregisteredCount');
+    if (!tbody || !badge) return;
+
+    badge.textContent = String(allUnregisteredDevices.length);
+
+    if (!devices.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-muted">No unregistered device hits recorded.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = devices.map((device) => {
+        const identity = device.identity || {};
+        const identityParts = [
+            identity.name,
+            identity.model,
+            identity.platform,
+            identity.board,
+            identity.transport
+        ].filter(Boolean);
+        const identityText = identityParts.length ? identityParts.join(' · ') : 'Identity not reported';
+        const seenText = `${device.first_seen ? new Date(device.first_seen).toLocaleString() : 'Unknown'} -> ${device.last_seen ? new Date(device.last_seen).toLocaleString() : 'Unknown'}`;
+        const displayType = device.device_type || inferUnregisteredDisplayType(identity, device.device_id);
+        const displayModel = device.model || inferUnregisteredDisplayModel(identity, device.device_id);
+        return `<tr>
+            <td><code class="small">${escHtml(device.device_id || '')}</code></td>
+            <td><span class="badge bg-info-subtle text-info-emphasis border">${escHtml(displayType)}</span></td>
+            <td><small>${escHtml(displayModel)}</small></td>
+            <td><small>${escHtml(identityText)}</small></td>
+            <td>
+                <div><span class="badge bg-secondary-subtle text-secondary-emphasis border">${escHtml(device.last_event_type || 'event')}</span></div>
+                <div class="small text-muted">${escHtml(device.notes || 'ignored')}</div>
+            </td>
+            <td><small>${escHtml(seenText)}</small></td>
+            <td><span class="badge bg-light text-dark border">${Number(device.event_count || 0)}</span></td>
+        </tr>`;
+    }).join('');
+}
+
+function maybeOpenRequestedDeviceEditor() {
+    if (requestedEditHandled || !requestedEditDeviceId) return;
+    requestedEditHandled = true;
+    window.location.href = `/devices/settings?device=${encodeURIComponent(requestedEditDeviceId)}`;
+}
+
+function filterDevices() {
+    const q = document.getElementById('deviceSearch').value.toLowerCase();
+    const filtered = q ? allDevices.filter(d =>
+        d.id.toLowerCase().includes(q) || (d.name || '').toLowerCase().includes(q) || (d.model || '').toLowerCase().includes(q)
+    ) : allDevices;
+    renderDevices(filtered);
+}
+
+function renderDevices(devices) {
+    const tbody = document.getElementById('devicesBody');
+    const total = allDevices.length;
+    document.getElementById('deviceCount').textContent = total + ' device' + (total !== 1 ? 's' : '');
+
+    if (!devices.length) {
+        const msg = allDevices.length ? 'No devices match your search.' : 'No devices registered yet. <a href="/onboard">Onboard your first device</a>.';
+        tbody.innerHTML = `<tr><td colspan="${IS_ADMIN ? 10 : 9}" class="text-center py-4 text-muted">${msg}</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = devices.map(d => {
+        const online = d.online;
+        const statusBadge = online
+            ? '<span class="badge bg-success rounded-pill"><i class="bi bi-circle-fill me-1" style="font-size:0.45rem;vertical-align:2px"></i>Online</span>'
+            : '<span class="badge bg-secondary rounded-pill"><i class="bi bi-circle me-1" style="font-size:0.45rem;vertical-align:2px"></i>Offline</span>';
+        const activePath = d.activePath ? String(d.activePath) : '';
+        const mqttReady = d.mqtt && d.mqtt.connected
+            ? (d.mqtt.subscribed
+                ? '<span class="badge bg-success-subtle text-success-emphasis border mt-1">MQTT ready</span>'
+                : '<span class="badge bg-warning-subtle text-warning-emphasis border mt-1">MQTT up</span>')
+            : '<span class="badge bg-secondary-subtle text-secondary-emphasis border mt-1">MQTT down</span>';
+        const pathLine = online && activePath && activePath !== 'offline'
+            ? `<div class="small text-muted">${escHtml(activePath === 'wifi' ? 'Active: Wi-Fi' : `Active: ${activePath}`)}</div>`
+            : (!online
+                ? '<div class="small text-muted"><i class="bi bi-clock-history me-1"></i>No recent heartbeat</div>'
+                : '');
+        const wifiLine = online && d.wifi?.connected
+            ? `<div class="small text-muted"><i class="bi bi-wifi me-1"></i>${escHtml(d.wifi.ssid || 'Wi-Fi connected')}</div>`
+            : (online && activePath === 'wifi'
+                ? '<div class="small text-warning"><i class="bi bi-wifi-off me-1"></i>Wi-Fi path selected</div>'
+                : '');
+        const wifiReasonLine = online && !d.wifi?.connected && Number(d.wifi?.lastDisconnectReason || 0) > 0
+            ? `<div class="small text-muted"><i class="bi bi-exclamation-triangle me-1"></i>${escHtml(`${d.wifi.lastDisconnectReason}${d.wifi.lastDisconnectReasonText ? ` (${d.wifi.lastDisconnectReasonText})` : ''}`)}</div>`
+            : '';
+
+        const signal = d.signal != null
+            ? `<div class="d-flex align-items-center gap-1">
+                 <div class="progress signal-bar flex-shrink-0"><div class="progress-bar bg-${d.signal > 60 ? 'success' : d.signal > 30 ? 'warning' : 'danger'}" style="width:${d.signal}%"></div></div>
+                 <small class="text-muted">${d.signal}%${d.signalDbm != null ? ` / ${escHtml(String(d.signalDbm))} dBm` : ''}</small>
+               </div>`
+            : '<small class="text-muted">—</small>';
+
+        const battery = d.battery != null
+            ? `<small><i class="bi bi-battery${d.battery > 60 ? '-full' : d.battery > 20 ? '-half' : ''} me-1"></i>${d.battery}%</small>`
+            : '<small class="text-muted">—</small>';
+
+        const lastSeen = d.lastSeen
+            ? `<small>${new Date(d.lastSeen).toLocaleString()}</small>`
+            : '<small class="text-muted">Never</small>';
+
+        const location = d.location ? escHtml(d.location) : '<span class="text-muted">—</span>';
+        const model = d.model ? escHtml(d.model) : '<span class="text-muted">—</span>';
+
+        const usersCol = IS_ADMIN
+            ? `<td><button class="btn btn-xs btn-outline-secondary" onclick="openManageUsers('${escHtml(d.id)}')" title="Manage users">
+                   <i class="bi bi-people me-1"></i>${d.assigned_users || 0}
+               </button></td>`
+            : '';
+
+        const canWrite = !IS_ADMIN ? d.can_write : true;
+        const actions = canWrite
+            ? `<a class="btn btn-xs btn-outline-secondary me-1" href="/devices/settings?device=${encodeURIComponent(d.id)}" title="Edit device settings">
+                   <i class="bi bi-pencil"></i>
+               </a>`
+            : '';
+        const deleteBtn = IS_ADMIN
+            ? `<button class="btn btn-xs btn-outline-danger" onclick="deleteDevice('${escHtml(d.id)}')" title="Delete">
+                   <i class="bi bi-trash"></i>
+               </button>`
+            : '';
+
+        return `<tr>
+            <td>${statusBadge}<div>${mqttReady}</div></td>
+            <td><code class="small">${escHtml(d.id)}</code>${pathLine}${wifiLine}${wifiReasonLine}</td>
+            <td>${d.name ? escHtml(d.name) : '<span class="text-muted">—</span>'}</td>
+            <td><small>${model}</small></td>
+            <td><small>${location}</small></td>
+            <td>${signal}</td>
+            <td>${battery}</td>
+            <td>${lastSeen}</td>
+            ${usersCol}
+            <td class="text-end">${actions}${deleteBtn}</td>
+        </tr>`;
+    }).join('');
+}
+
+function handleRowEnter(event, action) {
+    if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        action();
+    }
+}
+
+async function fetchUnregisteredDevice(deviceId) {
+    const res = await fetch(`/api/devices/unregistered/${encodeURIComponent(deviceId)}`, {
+        cache: 'no-store',
+        credentials: 'same-origin'
+    });
+    const data = await res.json();
+    if (!data.success) {
+        throw new Error(data.message || 'Failed to load device');
+    }
+    currentUnregisteredDevice = data;
+    return data;
+}
+
+function buildDetailStat(label, value) {
+    return `<div class="col-sm-6 col-lg-3">
+        <div class="border rounded p-2 h-100">
+            <div class="small text-muted">${escHtml(label)}</div>
+            <div class="fw-semibold">${escHtml(value || '—')}</div>
+        </div>
+    </div>`;
+}
+
+function renderUnregisteredLogRows(logs) {
+    if (!logs.length) {
+        return '<div class="p-3 text-muted small">No event log captured yet.</div>';
+    }
+    return logs.map((entry) => `
+        <button type="button" class="list-group-item list-group-item-action border-0 border-bottom rounded-0" onclick="toggleUnregisteredLogPayload(${entry.id})">
+            <div class="d-flex align-items-center justify-content-between gap-2">
+                <div>
+                    <span class="badge bg-secondary-subtle text-secondary-emphasis border me-2">${escHtml(entry.event_type || 'event')}</span>
+                    <span class="small">${escHtml(entry.phone_number || 'No number')}</span>
+                </div>
+                <small class="text-muted">${escHtml(entry.created_at ? new Date(entry.created_at).toLocaleString() : 'Unknown')}</small>
+            </div>
+            <div class="collapse mt-2" id="unregisteredLogPayload-${entry.id}">
+                <pre class="mb-0 small unregistered-pre bg-body-tertiary rounded p-2">${escHtml(formatJson(entry.payload || {}))}</pre>
+            </div>
+        </button>
+    `).join('');
+}
+
+function toggleUnregisteredLogPayload(id) {
+    const target = document.getElementById(`unregisteredLogPayload-${id}`);
+    if (!target) return;
+    target.classList.toggle('show');
+}
+
+async function openUnregisteredDetail(deviceId) {
+    if (!IS_SUPERADMIN) return;
+    try {
+        const data = await fetchUnregisteredDevice(deviceId);
+        const device = data.device || {};
+        document.getElementById('unregisteredDetailTitle').textContent = device.device_id || 'Unregistered Device';
+        document.getElementById('unregisteredDetailIdentity').textContent = formatJson(device.identity || {});
+        const detailIdentity = device.identity || {};
+        const detailType = device.device_type || inferUnregisteredDisplayType(detailIdentity, device.device_id);
+        const detailModel = device.model || inferUnregisteredDisplayModel(detailIdentity, device.device_id);
+        document.getElementById('unregisteredDetailMeta').innerHTML = [
+            buildDetailStat('Last Event', device.last_event_type || 'event'),
+            buildDetailStat('Last Number', device.last_number || 'Unknown'),
+            buildDetailStat('Type', detailType),
+            buildDetailStat('Model', detailModel),
+            buildDetailStat('First Seen', device.first_seen ? new Date(device.first_seen).toLocaleString() : 'Unknown'),
+            buildDetailStat('Last Seen', device.last_seen ? new Date(device.last_seen).toLocaleString() : 'Unknown'),
+            buildDetailStat('Hits', String(device.event_count || 0)),
+            buildDetailStat('Identity', formatUnregisteredIdentity(device.identity || {})),
+            buildDetailStat('Notes', device.notes || 'Ignored'),
+            buildDetailStat('Status', 'Quarantined')
+        ].join('');
+        document.getElementById('unregisteredDetailLogs').innerHTML = `<div class="list-group list-group-flush">${renderUnregisteredLogRows(data.logs || [])}</div>`;
+        (unregisteredDetailModal || (unregisteredDetailModal = ensureModal('unregisteredDetailModal')))?.show();
+    } catch (error) {
+        alert(`Failed to load unregistered device: ${error.message}`);
+    }
+}
+
+async function openAssignUnregistered(deviceId) {
+    if (!IS_SUPERADMIN) return;
+    try {
+        const data = currentUnregisteredDevice?.device?.device_id === deviceId
+            ? currentUnregisteredDevice
+            : await fetchUnregisteredDevice(deviceId);
+        const device = data.device || {};
+        const identity = device.identity || {};
+        document.getElementById('assignUnregisteredDeviceId').value = device.device_id || '';
+        document.getElementById('assignUnregisteredName').value = identity.name || device.device_id || '';
+        document.getElementById('assignUnregisteredType').value = inferUnregisteredAssignType(identity, device.device_id);
+        document.getElementById('assignUnregisteredBoard').value = identity.board || identity.model || '';
+        document.getElementById('assignUnregisteredLocation').value = '';
+        const userSelect = document.getElementById('assignUnregisteredUser');
+        userSelect.innerHTML = '<option value="">Select user...</option>' + (data.users || []).map((user) =>
+            `<option value="${user.id}">${escHtml(user.username)}${user.name ? ` (${escHtml(user.name)})` : ''}</option>`
+        ).join('');
+        (assignUnregisteredModal || (assignUnregisteredModal = ensureModal('assignUnregisteredModal')))?.show();
+    } catch (error) {
+        alert(`Failed to prepare assignment: ${error.message}`);
+    }
+}
+
+function openAssignUnregisteredFromDetail() {
+    const deviceId = currentUnregisteredDevice?.device?.device_id;
+    if (deviceId) {
+        openAssignUnregistered(deviceId);
+    }
+}
+
+function deleteCurrentUnregisteredDevice() {
+    const deviceId = currentUnregisteredDevice?.device?.device_id;
+    if (deviceId) {
+        deleteUnregisteredDevice(deviceId);
+    }
+}
+
+async function deleteUnregisteredDevice(deviceId) {
+    if (!deviceId) return;
+    const confirmed = await window.appConfirm?.({
+        title: 'Delete Unregistered Device',
+        message: `Delete quarantined device <strong>${escHtml(deviceId)}</strong> and its event history?`,
+        confirmText: 'Delete',
+        confirmClass: 'btn btn-danger'
+    }) ?? confirm(`Delete unregistered device ${deviceId}?`);
+    if (!confirmed) return;
+
+    try {
+        const res = await fetch(`/api/devices/unregistered/${encodeURIComponent(deviceId)}`, {
+            method: 'DELETE',
+            headers: {
+                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+            }
+        });
+        const data = await res.json();
+        if (!data.success) {
+            throw new Error(data.message || 'Failed to delete unregistered device');
+        }
+
+        if (currentUnregisteredDevice?.device?.device_id === deviceId) {
+            currentUnregisteredDevice = null;
+            (unregisteredDetailModal || (unregisteredDetailModal = ensureModal('unregisteredDetailModal')))?.hide();
+        }
+
+        await loadUnregisteredDevices();
+    } catch (error) {
+        alert(`Failed to delete unregistered device: ${error.message}`);
+    }
+}
+
+async function assignUnregisteredDevice() {
+    const deviceId = document.getElementById('assignUnregisteredDeviceId').value.trim();
+    const name = document.getElementById('assignUnregisteredName').value.trim();
+    const type = document.getElementById('assignUnregisteredType').value.trim();
+    const board = document.getElementById('assignUnregisteredBoard').value.trim();
+    const location = document.getElementById('assignUnregisteredLocation').value.trim();
+    const userId = document.getElementById('assignUnregisteredUser').value;
+    if (!deviceId) return;
+    if (!userId) {
+        document.getElementById('assignUnregisteredUser').focus();
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/devices/unregistered/${encodeURIComponent(deviceId)}/assign`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+            },
+            body: JSON.stringify({
+                name,
+                type,
+                board,
+                location,
+                user_id: Number.parseInt(userId, 10)
+            })
+        });
+        const data = await res.json();
+        if (!data.success) {
+            throw new Error(data.message || 'Failed to assign device');
+        }
+        (assignUnregisteredModal || (assignUnregisteredModal = ensureModal('assignUnregisteredModal')))?.hide();
+        (unregisteredDetailModal || (unregisteredDetailModal = ensureModal('unregisteredDetailModal')))?.hide();
+        currentUnregisteredDevice = null;
+        await Promise.all([loadDevices(), loadUnregisteredDevices()]);
+        window.location.href = `/devices/settings?device=${encodeURIComponent(deviceId)}`;
+    } catch (error) {
+        alert(`Failed to assign device: ${error.message}`);
+    }
+}
+
+renderUnregisteredDevices = function renderUnregisteredDevicesOverride(devices) {
+    const tbody = document.getElementById('unregisteredDevicesBody');
+    const badge = document.getElementById('unregisteredCount');
+    if (!tbody || !badge) return;
+
+    badge.textContent = String(allUnregisteredDevices.length);
+
+    if (!devices.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-muted">No unregistered device hits recorded.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = devices.map((device) => {
+        const identity = device.identity || {};
+        const identityText = formatUnregisteredIdentity(identity);
+        const displayType = device.device_type || inferUnregisteredDisplayType(identity, device.device_id);
+        const displayModel = device.model || inferUnregisteredDisplayModel(identity, device.device_id);
+        return `<tr class="table-row-link" role="button" tabindex="0" onclick="openUnregisteredDetail('${escHtml(device.device_id || '')}')" onkeydown="handleRowEnter(event, () => openUnregisteredDetail('${escHtml(device.device_id || '')}'))">
+            <td><code class="small">${escHtml(device.device_id || '')}</code></td>
+            <td><span class="badge bg-info-subtle text-info-emphasis border">${escHtml(displayType)}</span></td>
+            <td><small>${escHtml(displayModel)}</small></td>
+            <td><small>${escHtml(identityText)}</small></td>
+            <td>
+                <div><span class="badge bg-secondary-subtle text-secondary-emphasis border">${escHtml(device.last_event_type || 'event')}</span></div>
+                <div class="small text-muted">${escHtml(device.last_number || device.notes || 'ignored')}</div>
+            </td>
+            <td><small>${escHtml(device.last_seen ? new Date(device.last_seen).toLocaleString() : 'Unknown')}</small></td>
+            <td><span class="badge bg-light text-dark border">${Number(device.event_count || 0)}</span></td>
+            <td class="text-end">
+                <div class="btn-group btn-group-sm" role="group">
+                    <button class="btn btn-xs btn-outline-primary" onclick="event.stopPropagation(); openAssignUnregistered('${escHtml(device.device_id || '')}')" title="Assign device">
+                        <i class="bi bi-person-plus"></i>
+                    </button>
+                    <button class="btn btn-xs btn-outline-danger" onclick="event.stopPropagation(); deleteUnregisteredDevice('${escHtml(device.device_id || '')}')" title="Delete unregistered device">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            </td>
+        </tr>`;
+    }).join('');
+};
+
+renderDevices = function renderDevicesOverride(devices) {
+    const tbody = document.getElementById('devicesBody');
+    const total = allDevices.length;
+    document.getElementById('deviceCount').textContent = total + ' device' + (total !== 1 ? 's' : '');
+
+    if (!devices.length) {
+        const msg = allDevices.length ? 'No devices match your search.' : 'No devices registered yet. <a href="/onboard">Onboard your first device</a>.';
+        tbody.innerHTML = `<tr><td colspan="${IS_ADMIN ? 10 : 9}" class="text-center py-4 text-muted">${msg}</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = devices.map(d => {
+        const online = d.online;
+        const statusBadge = online
+            ? '<span class="badge bg-success rounded-pill"><i class="bi bi-circle-fill me-1" style="font-size:0.45rem;vertical-align:2px"></i>Online</span>'
+            : '<span class="badge bg-secondary rounded-pill"><i class="bi bi-circle me-1" style="font-size:0.45rem;vertical-align:2px"></i>Offline</span>';
+        const activePath = d.activePath ? String(d.activePath) : '';
+        const mqttReady = d.mqtt && d.mqtt.connected
+            ? (d.mqtt.subscribed
+                ? '<span class="badge bg-success-subtle text-success-emphasis border mt-1">MQTT ready</span>'
+                : '<span class="badge bg-warning-subtle text-warning-emphasis border mt-1">MQTT up</span>')
+            : '<span class="badge bg-secondary-subtle text-secondary-emphasis border mt-1">MQTT down</span>';
+        const pathLine = online && activePath && activePath !== 'offline'
+            ? `<div class="small text-muted">${escHtml(activePath === 'wifi' ? 'Active: Wi-Fi' : `Active: ${activePath}`)}</div>`
+            : (!online ? '<div class="small text-muted"><i class="bi bi-clock-history me-1"></i>No recent heartbeat</div>' : '');
+        const wifiLine = online && d.wifi?.connected
+            ? `<div class="small text-muted"><i class="bi bi-wifi me-1"></i>${escHtml(d.wifi.ssid || 'Wi-Fi connected')}</div>`
+            : (online && activePath === 'wifi'
+                ? '<div class="small text-warning"><i class="bi bi-wifi-off me-1"></i>Wi-Fi path selected</div>'
+                : '');
+        const wifiReasonLine = online && !d.wifi?.connected && Number(d.wifi?.lastDisconnectReason || 0) > 0
+            ? `<div class="small text-muted"><i class="bi bi-exclamation-triangle me-1"></i>${escHtml(`${d.wifi.lastDisconnectReason}${d.wifi.lastDisconnectReasonText ? ` (${d.wifi.lastDisconnectReasonText})` : ''}`)}</div>`
+            : '';
+        const signal = d.signal != null
+            ? `<div class="d-flex align-items-center gap-1">
+                 <div class="progress signal-bar flex-shrink-0"><div class="progress-bar bg-${d.signal > 60 ? 'success' : d.signal > 30 ? 'warning' : 'danger'}" style="width:${d.signal}%"></div></div>
+                 <small class="text-muted">${d.signal}%${d.signalDbm != null ? ` / ${escHtml(String(d.signalDbm))} dBm` : ''}</small>
+               </div>`
+            : '<small class="text-muted">—</small>';
+        const battery = d.battery != null
+            ? `<small><i class="bi bi-battery${d.battery > 60 ? '-full' : d.battery > 20 ? '-half' : ''} me-1"></i>${d.battery}%</small>`
+            : '<small class="text-muted">—</small>';
+        const lastSeen = d.lastSeen
+            ? `<small>${new Date(d.lastSeen).toLocaleString()}</small>`
+            : '<small class="text-muted">Never</small>';
+        const location = d.location ? escHtml(d.location) : '<span class="text-muted">—</span>';
+        const model = d.model ? escHtml(d.model) : '<span class="text-muted">—</span>';
+        const usersCol = IS_ADMIN
+            ? `<td><button class="btn btn-xs btn-outline-secondary" onclick="event.stopPropagation(); openManageUsers('${escHtml(d.id)}')" title="Manage users">
+                   <i class="bi bi-people me-1"></i>${d.assigned_users || 0}
+               </button></td>`
+            : '';
+        const deleteBtn = IS_ADMIN
+            ? `<button class="btn btn-xs btn-outline-danger" onclick="event.stopPropagation(); deleteDevice('${escHtml(d.id)}')" title="Delete">
+                   <i class="bi bi-trash"></i>
+               </button>`
+            : '';
+
+        return `<tr class="table-row-link" role="button" tabindex="0" onclick="editDevice('${escHtml(d.id)}')" onkeydown="handleRowEnter(event, () => editDevice('${escHtml(d.id)}'))">
+            <td>${statusBadge}<div>${mqttReady}</div></td>
+            <td><code class="small">${escHtml(d.id)}</code>${pathLine}${wifiLine}${wifiReasonLine}</td>
+            <td>${d.name ? escHtml(d.name) : '<span class="text-muted">—</span>'}</td>
+            <td><small>${model}</small></td>
+            <td><small>${location}</small></td>
+            <td>${signal}</td>
+            <td>${battery}</td>
+            <td>${lastSeen}</td>
+            ${usersCol}
+            <td class="text-end">${deleteBtn}</td>
+        </tr>`;
+    }).join('');
+};
+
+// ── Edit device ──────────────────────────────────────────────────────────────
+
+async function editDevice(id) {
+    window.location.href = `/devices/settings?device=${encodeURIComponent(id)}`;
+}
+
+async function legacyEditDeviceModalDeadCode(id) {
+    // Load MQTT credentials (admin UI only)
+    const mqttUserEl = document.getElementById('editMqttUser');
+    const mqttPassEl = document.getElementById('editMqttPass');
+    const mqttHint   = document.getElementById('editMqttPassHint');
+    if (mqttUserEl) {
+        mqttUserEl.value = '';
+        mqttPassEl.value = '';
+        try {
+            const r = await fetch(`/api/devices/${encodeURIComponent(id)}/mqtt-credentials`);
+            const d = await r.json();
+            if (d.success) {
+                mqttUserEl.value = d.data.mqtt_user || '';
+                mqttHint.textContent = d.data.mqtt_pass_set ? 'Password is set — leave blank to keep current.' : 'No password set.';
+            }
+        } catch { /* non-fatal */ }
+    }
+    return;
+    setTimeout(() => document.getElementById('editDeviceName').focus(), 150);
+}
+
+async function saveDeviceEdit() {
+    const id       = document.getElementById('editDeviceId').value;
+    const name     = document.getElementById('editDeviceName').value.trim();
+    const location = document.getElementById('editDeviceLocation').value.trim();
+    if (!name) { document.getElementById('editDeviceName').focus(); return; }
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    try {
+        const res = await fetch(`/api/devices/${encodeURIComponent(id)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+            body: JSON.stringify({ name, location })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+
+        // Save local IP
+        const localIp = document.getElementById('editLocalIp')?.value.trim();
+        if (localIp !== undefined) {
+            await fetch(`/api/devices/${encodeURIComponent(id)}/local-ip`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+                body: JSON.stringify({ local_ip: localIp || null })
+            });
+        }
+
+        // Save MQTT credentials if fields exist and have values
+        const mqttUser = document.getElementById('editMqttUser')?.value.trim();
+        const mqttPass = document.getElementById('editMqttPass')?.value;
+        if (mqttUser || mqttPass) {
+            await fetch(`/api/devices/${encodeURIComponent(id)}/mqtt-credentials`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+                body: JSON.stringify({ mqtt_user: mqttUser || undefined, mqtt_pass: mqttPass || undefined })
+            });
+        }
+
+        loadDevices();
+    } catch (e) {
+        alert('Failed to save: ' + e.message);
+    }
+}
+
+document.getElementById('editDeviceName')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') saveDeviceEdit();
+});
+
+async function testDirectConnect() {
+    const id  = document.getElementById('editDeviceId').value;
+    const ip  = document.getElementById('editLocalIp').value.trim();
+    const el  = document.getElementById('directConnectStatus');
+    const btn = document.getElementById('btnTestDirect');
+    if (!ip) { el.className = 'form-text text-warning'; el.textContent = 'Enter an IP address first.'; return; }
+    btn.disabled = true;
+    el.className = 'form-text text-muted';
+    el.textContent = 'Testing…';
+    // Save the IP first so the proxy can use it
+    await fetch(`/api/devices/${encodeURIComponent(id)}/local-ip`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+        body: JSON.stringify({ local_ip: ip })
+    }).catch(() => {});
+    try {
+        const r = await fetch(`/api/devices/${encodeURIComponent(id)}/direct?path=status`);
+        const d = await r.json();
+        if (r.ok && d.success) {
+            el.className = 'form-text text-success';
+            el.textContent = `Connected — ${d.data?.board || d.data?.firmware || JSON.stringify(d.data).substring(0, 60)}`;
+        } else {
+            el.className = 'form-text text-danger';
+            el.textContent = `Unreachable: ${d.message || 'no response'}`;
+        }
+    } catch (e) {
+        el.className = 'form-text text-danger';
+        el.textContent = 'Error: ' + e.message;
+    }
+    btn.disabled = false;
+}
+
+// ── Delete device ─────────────────────────────────────────────────────────────
+
+async function deleteDevice(id) {
+    const confirmed = await window.appConfirm?.({
+        title: 'Delete Device',
+        message: `Remove device <strong>${escHtml(id)}</strong> from the registry? Associated SMS, calls, and GPS records are kept.`,
+        confirmText: 'Delete',
+        confirmClass: 'btn btn-danger'
+    }) ?? confirm(`Delete device ${id}?`);
+    if (!confirmed) return;
+    try {
+        const res = await fetch(`/api/devices/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: { 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' }
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        loadDevices();
+    } catch (e) {
+        alert('Failed to delete: ' + e.message);
+    }
+}
+
+// ── Manage users (admin only) ─────────────────────────────────────────────────
+
+<% if (isAdmin) { %>
+async function openManageUsers(deviceId) {
+    manageUsersDeviceId = deviceId;
+    document.getElementById('manageUsersDeviceId').textContent = deviceId;
+    document.getElementById('assignedUsersList').innerHTML = '<div class="text-center text-muted small py-3">Loading...</div>';
+    (manageUsersModal || (manageUsersModal = ensureModal('manageUsersModal')))?.show();
+    await Promise.all([loadAssignedUsers(), loadAllUsersForSelect()]);
+}
+
+async function loadAssignedUsers() {
+    try {
+        const res = await fetch(`/api/devices/${encodeURIComponent(manageUsersDeviceId)}/users`);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+
+        const el = document.getElementById('assignedUsersList');
+        if (!data.users.length) {
+            el.innerHTML = '<p class="text-muted small mb-0">No users assigned yet.</p>';
+            return;
+        }
+        el.innerHTML = `<table class="table table-sm mb-0">
+            <thead><tr><th>User</th><th>Role</th><th>Access</th><th></th></tr></thead>
+            <tbody>${data.users.map(u => `
+                <tr>
+                    <td class="small">${escHtml(u.username)}${u.name ? ' <span class="text-muted">(' + escHtml(u.name) + ')</span>' : ''}</td>
+                    <td><span class="badge ${roleBadgeCls(u.role)}">${escHtml(u.role)}</span></td>
+                    <td><span class="badge ${u.can_write ? 'bg-primary' : 'bg-secondary'}">${u.can_write ? 'Full' : 'View'}</span></td>
+                    <td class="text-end">
+                        <button class="btn btn-xs btn-outline-danger" onclick="unassignUser(${u.id})"><i class="bi bi-x"></i></button>
+                    </td>
+                </tr>
+            `).join('')}</tbody>
+        </table>`;
+    } catch (e) {
+        document.getElementById('assignedUsersList').innerHTML = `<p class="text-danger small">${escHtml(e.message)}</p>`;
+    }
+}
+
+async function loadAllUsersForSelect() {
+    try {
+        const res = await fetch('/admin/api/users?limit=200');
+        const data = await res.json();
+        if (!data.success) return;
+        const sel = document.getElementById('addUserSelect');
+        sel.innerHTML = '<option value="">— Select user to add —</option>' +
+            data.users.map(u => `<option value="${u.id}">${escHtml(u.username)}${u.name ? ' (' + escHtml(u.name) + ')' : ''}</option>`).join('');
+    } catch (_) {}
+}
+
+async function assignUser() {
+    const userId   = document.getElementById('addUserSelect').value;
+    const canWrite = document.getElementById('addUserAccess').value;
+    if (!userId) return;
+    try {
+        const res = await fetch(`/api/devices/${encodeURIComponent(manageUsersDeviceId)}/users`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+            body: JSON.stringify({ user_id: parseInt(userId), can_write: canWrite === '1' })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        document.getElementById('addUserSelect').value = '';
+        await Promise.all([loadAssignedUsers(), loadDevices()]);
+    } catch (e) {
+        alert('Failed to assign user: ' + e.message);
+    }
+}
+
+async function unassignUser(userId) {
+    try {
+        const res = await fetch(`/api/devices/${encodeURIComponent(manageUsersDeviceId)}/users/${userId}`, {
+            method: 'DELETE',
+            headers: { 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' }
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        await Promise.all([loadAssignedUsers(), loadDevices()]);
+    } catch (e) {
+        alert('Failed to unassign: ' + e.message);
+    }
+}
+
+function roleBadgeCls(role) {
+    return role === 'superadmin' ? 'bg-purple text-white'
+         : role === 'admin'      ? 'bg-danger'
+         : role === 'operator'   ? 'bg-warning text-dark'
+         : 'bg-secondary';
+}
+<% } %>
+
+// ── Tab switching ────────────────────────────────────────────────────────────
+
+function switchTab(tab) {
+    document.getElementById('panel-devices').style.display = tab === 'devices' ? '' : 'none';
+    if (document.getElementById('panel-unregistered')) {
+        document.getElementById('panel-unregistered').style.display = tab === 'unregistered' ? '' : 'none';
+    }
+    document.getElementById('panel-groups').style.display  = tab === 'groups'  ? '' : 'none';
+    document.getElementById('tab-devices').classList.toggle('active', tab === 'devices');
+    document.getElementById('tab-unregistered')?.classList.toggle('active', tab === 'unregistered');
+    document.getElementById('tab-groups').classList.toggle('active',  tab === 'groups');
+    // Show/hide the Onboard button only on the Devices tab
+    document.getElementById('devicesHeaderActions').style.display = (tab === 'devices' || tab === 'unregistered') ? '' : 'none';
+    if (tab === 'unregistered' && IS_SUPERADMIN) {
+        loadUnregisteredDevices();
+    }
+    if (tab === 'groups') loadGroups();
+}
+
+// ── Groups ────────────────────────────────────────────────────────────────────
+
+let currentGroupId = null;
+let createGroupModal = null;
+let groupDetailModal = null;
+
+async function loadGroups() {
+    const el = document.getElementById('groupsList');
+    el.innerHTML = '<div class="text-center text-muted py-4"><div class="spinner-border spinner-border-sm me-2"></div>Loading groups...</div>';
+    try {
+        const res  = await fetch('/api/device-groups');
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        document.getElementById('groupsCount').textContent =
+            data.groups.length + ' group' + (data.groups.length !== 1 ? 's' : '');
+        renderGroups(data.groups);
+    } catch (e) {
+        el.innerHTML = `<div class="alert alert-danger py-2">${escHtml(e.message)}</div>`;
+    }
+}
+
+function renderGroups(groups) {
+    const el = document.getElementById('groupsList');
+    if (!groups.length) {
+        el.innerHTML = '<div class="text-center text-muted py-5"><i class="bi bi-collection display-6 d-block mb-2"></i>No groups yet. Create one to get started.</div>';
+        return;
+    }
+    el.innerHTML = `<div class="table-responsive"><table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+            <tr>
+                <th>Name</th>
+                <th>Description</th>
+                <th style="width:90px;">Devices</th>
+                <th style="width:120px;">Owner</th>
+                <th style="width:100px;"></th>
+            </tr>
+        </thead>
+        <tbody>
+            ${groups.map(g => `
+            <tr>
+                <td>
+                    <span class="badge me-1" style="background:${escHtml(g.color || '#0d6efd')}">&nbsp;</span>
+                    <strong>${escHtml(g.name)}</strong>
+                </td>
+                <td><small class="text-muted">${g.description ? escHtml(g.description) : '—'}</small></td>
+                <td><span class="badge bg-secondary">${g.member_count || 0}</span></td>
+                <td><small>${escHtml(g.owner_name || '—')}</small></td>
+                <td class="text-end">
+                    <button class="btn btn-xs btn-outline-secondary me-1" onclick="openGroupDetail(${g.id}, ${JSON.stringify(escHtml(g.name))})" title="View members">
+                        <i class="bi bi-eye"></i>
+                    </button>
+                    <button class="btn btn-xs btn-outline-danger" onclick="deleteGroup(${g.id}, ${JSON.stringify(escHtml(g.name))})" title="Delete group">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            </tr>`).join('')}
+        </tbody>
+    </table></div>`;
+}
+
+function openCreateGroupModal() {
+    document.getElementById('newGroupName').value = '';
+    document.getElementById('newGroupDesc').value = '';
+    document.getElementById('newGroupColor').value = '#0d6efd';
+    (createGroupModal || (createGroupModal = ensureModal('createGroupModal')))?.show();
+    setTimeout(() => document.getElementById('newGroupName').focus(), 150);
+}
+
+async function createGroup() {
+    const name  = document.getElementById('newGroupName').value.trim();
+    const desc  = document.getElementById('newGroupDesc').value.trim();
+    const color = document.getElementById('newGroupColor').value;
+    if (!name) { document.getElementById('newGroupName').focus(); return; }
+    try {
+        const res  = await fetch('/api/device-groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, description: desc || null, color })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        (createGroupModal || (createGroupModal = ensureModal('createGroupModal')))?.hide();
+        loadGroups();
+    } catch (e) {
+        alert('Failed to create group: ' + e.message);
+    }
+}
+
+document.getElementById('newGroupName').addEventListener('keydown', e => {
+    if (e.key === 'Enter') createGroup();
+});
+
+async function deleteGroup(id, name) {
+    const confirmed = await window.appConfirm?.({
+        title: 'Delete Group',
+        message: `Delete group <strong>${name}</strong>? Devices will not be deleted.`,
+        confirmText: 'Delete',
+        confirmClass: 'btn btn-danger'
+    }) ?? confirm(`Delete group "${name}"?`);
+    if (!confirmed) return;
+    try {
+        const res  = await fetch(`/api/device-groups/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        loadGroups();
+    } catch (e) {
+        alert('Failed to delete group: ' + e.message);
+    }
+}
+
+async function openGroupDetail(id, name) {
+    currentGroupId = id;
+    document.getElementById('groupDetailTitle').innerHTML = `<i class="bi bi-collection me-1"></i>${name}`;
+    document.getElementById('groupMembersList').innerHTML = '<div class="text-center text-muted small py-3">Loading...</div>';
+    // Populate device select from already-loaded allDevices list
+    const sel = document.getElementById('groupAddDeviceSelect');
+    sel.innerHTML = '<option value="">— Select device to add —</option>' +
+        allDevices.map(d => `<option value="${escHtml(d.id)}">${escHtml(d.id)}${d.name ? ' — ' + escHtml(d.name) : ''}</option>`).join('');
+    (groupDetailModal || (groupDetailModal = ensureModal('groupDetailModal')))?.show();
+    await refreshGroupMembers(id);
+}
+
+async function refreshGroupMembers(id) {
+    try {
+        const res  = await fetch(`/api/device-groups/${id}`);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        const devices = data.group.devices || [];
+        const el = document.getElementById('groupMembersList');
+        if (!devices.length) {
+            el.innerHTML = '<p class="text-muted small mb-0">No devices in this group yet.</p>';
+            return;
+        }
+        el.innerHTML = `<table class="table table-sm mb-0">
+            <thead><tr><th>Device ID</th><th>Name</th><th>Status</th><th></th></tr></thead>
+            <tbody>${devices.map(d => `
+                <tr>
+                    <td><code class="small">${escHtml(d.id)}</code></td>
+                    <td class="small">${d.name ? escHtml(d.name) : '<span class="text-muted">—</span>'}</td>
+                    <td><span class="badge ${d.status === 'online' ? 'bg-success' : 'bg-secondary'}">${escHtml(d.status || 'offline')}</span></td>
+                    <td class="text-end">
+                        <button class="btn btn-xs btn-outline-danger" onclick="removeFromGroup(${id}, '${escHtml(d.id)}')">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    </td>
+                </tr>
+            `).join('')}</tbody>
+        </table>`;
+    } catch (e) {
+        document.getElementById('groupMembersList').innerHTML = `<p class="text-danger small">${escHtml(e.message)}</p>`;
+    }
+}
+
+async function addToGroup() {
+    const deviceId = document.getElementById('groupAddDeviceSelect').value;
+    if (!deviceId || !currentGroupId) return;
+    try {
+        const res  = await fetch(`/api/device-groups/${currentGroupId}/members`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ device_id: deviceId })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        document.getElementById('groupAddDeviceSelect').value = '';
+        await refreshGroupMembers(currentGroupId);
+        loadGroups(); // refresh counts
+    } catch (e) {
+        alert('Failed to add device: ' + e.message);
+    }
+}
+
+async function removeFromGroup(groupId, deviceId) {
+    try {
+        const res  = await fetch(`/api/device-groups/${groupId}/members/${encodeURIComponent(deviceId)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        await refreshGroupMembers(groupId);
+        loadGroups(); // refresh counts
+    } catch (e) {
+        alert('Failed to remove device: ' + e.message);
+    }
+}
+
+// Init — use server-rendered data first for instant display, then fetch live state
+allDevices = serverDevices;
+renderDevices(allDevices);
+maybeOpenRequestedDeviceEditor();
+loadDevices(); // fetch live signal/battery/status
+</script>

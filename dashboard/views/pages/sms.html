@@ -1,0 +1,2326 @@
+<!-- SMS Management -->
+<div class="sms-sync-overlay d-none" id="smsSyncOverlay" aria-live="polite" aria-busy="true">
+    <div class="sms-sync-card">
+        <div class="spinner-border text-primary mb-3" role="status" aria-hidden="true"></div>
+        <h5 class="mb-1">Device SMS Syncing</h5>
+        <p class="text-muted mb-0" id="smsSyncOverlayText">Please wait while messages are copied from the phone.</p>
+    </div>
+</div>
+<div class="sms-compact d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4 gap-3">
+    <div>
+        <h2 class="mb-1">
+            <i class="bi bi-chat-dots me-2"></i>SMS Management
+        </h2>
+        <p class="text-muted mb-0">Send and receive messages, manage contacts</p>
+    </div>
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-primary" type="button" onclick="openContactsModal('smsChatTo')">
+            <i class="bi bi-person-lines-fill me-2"></i>
+            <span class="d-none d-md-inline">Contacts</span>
+        </button>
+        <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#scheduleModal">
+            <i class="bi bi-clock me-1"></i><span class="d-none d-lg-inline">Schedule</span>
+        </button>
+        <a href="/api/sms/export/csv" class="btn btn-outline-secondary" id="smsExportCsvLink" download>
+            <i class="bi bi-download me-1"></i><span class="d-none d-md-inline">Export CSV</span>
+        </a>
+        <button class="btn btn-primary" type="button" id="smsFocusComposerBtn">
+            <i class="bi bi-plus-circle me-2"></i>
+            <span class="d-none d-md-inline">New SMS</span>
+        </button>
+    </div>
+</div>
+<div class="d-flex justify-content-between align-items-center mb-2">
+    <small class="text-muted">Tip: <kbd>/</kbd> search, <kbd>C</kbd> compose, <kbd>?</kbd> shortcuts</small>
+    <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="modal" data-bs-target="#smsShortcutsModal" aria-label="Open SMS keyboard shortcuts">
+        <i class="bi bi-keyboard me-1"></i>Shortcuts
+    </button>
+</div>
+
+<!-- Stats Cards -->
+<div class="sms-compact row g-2 mb-3 sms-stats-row">
+    <div class="col-6 col-sm-3">
+        <div class="card bg-primary bg-opacity-10 border-0">
+            <div class="card-body">
+                <div class="d-flex align-items-center">
+                    <div class="flex-shrink-0">
+                        <i class="bi bi-envelope fs-2 text-primary"></i>
+                    </div>
+                    <div class="flex-grow-1 ms-3">
+                        <h6 class="mb-1">Total</h6>
+                        <h4 id="smsTotalCount" class="mb-0"><%= pagination.totalItems %></h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-sm-3">
+        <div class="card bg-success bg-opacity-10 border-0">
+            <div class="card-body">
+                <div class="d-flex align-items-center">
+                    <div class="flex-shrink-0">
+                        <i class="bi bi-send fs-2 text-success"></i>
+                    </div>
+                    <div class="flex-grow-1 ms-3">
+                        <h6 class="mb-1">Outgoing</h6>
+                        <h4 id="smsSentCount" class="mb-0"><%= messages.filter(m => m.type === 'outgoing').length %></h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-sm-3">
+        <div class="card bg-info bg-opacity-10 border-0">
+            <div class="card-body">
+                <div class="d-flex align-items-center">
+                    <div class="flex-shrink-0">
+                        <i class="bi bi-inbox fs-2 text-info"></i>
+                    </div>
+                    <div class="flex-grow-1 ms-3">
+                        <h6 class="mb-1">Received</h6>
+                        <h4 id="smsInboxCount" class="mb-0"><%= messages.filter(m => m.type !== 'outgoing').length %></h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-sm-3">
+        <div class="card bg-warning bg-opacity-10 border-0">
+            <div class="card-body">
+                <div class="d-flex align-items-center">
+                    <div class="flex-shrink-0">
+                        <i class="bi bi-envelope-open fs-2 text-warning"></i>
+                    </div>
+                    <div class="flex-grow-1 ms-3">
+                        <h6 class="mb-1">Unread</h6>
+                        <h4 id="smsUnreadCount" class="mb-0"><%= unreadCount %></h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Search Bar -->
+<div class="sms-compact card mb-4 sticky-top" style="top: 58px; z-index: 1020;">
+    <div class="card-body">
+        <div class="row g-2">
+            <div class="col-12 col-md-8">
+                <div class="input-group">
+                    <span class="input-group-text bg-white">
+                        <i class="bi bi-search"></i>
+                    </span>
+                    <input type="text" class="form-control" id="searchSms" placeholder="Search conversations...">
+                </div>
+            </div>
+            <div class="col-6 col-md-2">
+                <select class="form-select" id="filterType">
+                    <option value="all">All Conversations</option>
+                    <option value="unread">Unread Only</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-2">
+                <select class="form-select" id="sortOrder">
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                </select>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="d-flex flex-wrap gap-2 mb-3" id="quickFilterChips" aria-label="Quick message filters">
+    <button class="btn btn-sm btn-outline-secondary active" data-quick-filter="all">All</button>
+    <button class="btn btn-sm btn-outline-secondary" data-quick-filter="unread">Unread</button>
+    <button class="btn btn-sm btn-outline-secondary" data-quick-filter="today">Today</button>
+</div>
+
+<!-- Conversation Workspace -->
+<div class="sms-compact row g-2 mb-3" id="smsConversationWorkspace">
+    <div class="col-12 col-sm-5 col-lg-4">
+        <div class="card h-100 sms-conversation-card">
+            <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center gap-2">
+                <div>
+                    <h5 class="mb-0"><i class="bi bi-chat-left-text me-2"></i>Conversations</h5>
+                    <small class="text-muted" id="smsConversationMeta">Loading latest threads...</small>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-warning text-dark d-none" id="scheduledBadge">0</span>
+                    <button class="btn btn-sm btn-outline-secondary rounded-circle sms-header-icon-btn" type="button" data-bs-toggle="modal" data-bs-target="#scheduleModal" title="Open schedule planner" aria-label="Open schedule planner">
+                        <i class="bi bi-calendar-plus"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" onclick="markAllAsRead()">
+                        <i class="bi bi-envelope-open me-1"></i><span class="d-none d-lg-inline">Read all</span>
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" type="button" id="smsPullMessagesBtn" onclick="pullDeviceMessages(this)">
+                        <i class="bi bi-cloud-arrow-down me-1"></i><span class="d-none d-lg-inline">Pull messages</span>
+                    </button>
+                </div>
+            </div>
+            <div class="list-group list-group-flush sms-conversation-list" id="smsConversationList">
+                <div class="sms-conversation-state sms-conversation-state-loading">
+                    <div class="sms-conversation-state-icon">
+                        <i class="bi bi-arrow-repeat"></i>
+                    </div>
+                    <div class="sms-conversation-state-title">Loading conversations...</div>
+                    <div class="sms-conversation-state-detail">Fetching the latest thread summaries for this device.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-7 col-lg-8">
+        <div class="card h-100 sms-chat-card">
+            <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center gap-2 flex-wrap sms-chat-topbar">
+                <div>
+                    <h5 class="mb-0 sms-chat-number" id="smsChatNumber"><i class="bi bi-chat-square-text me-2"></i>Select a conversation</h5>
+                    <small class="text-muted" id="smsChatMeta">Messages will appear here.</small>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-light text-dark border" id="smsChatCount">0 messages</span>
+                    <button type="button" class="btn btn-sm btn-outline-success" id="smsChatCallBtn" disabled>
+                        <i class="bi bi-telephone me-1"></i><span class="d-none d-md-inline">Call</span>
+                    </button>
+                    <div class="dropdown">
+                        <button type="button" class="btn btn-sm btn-outline-secondary rounded-circle sms-header-icon-btn" id="smsChatThreadMenuBtn" data-bs-toggle="dropdown" aria-expanded="false" title="Thread actions" aria-label="Thread actions" disabled>
+                            <i class="bi bi-three-dots"></i>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><button type="button" class="dropdown-item" data-thread-menu-action="mark-read"><i class="bi bi-envelope-open me-2"></i>Mark Read</button></li>
+                            <li><button type="button" class="dropdown-item text-danger" data-thread-menu-action="delete-thread"><i class="bi bi-trash me-2"></i>Delete Thread</button></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body bg-light-subtle sms-chat-body">
+                <div id="smsChatMessages" class="sms-chat-thread d-flex flex-column gap-2">
+                    <div class="sms-conversation-state sms-conversation-state-empty">
+                        <div class="sms-conversation-state-icon">
+                            <i class="bi bi-chat-square-text"></i>
+                        </div>
+                        <div class="sms-conversation-state-title">Pick a conversation from the left</div>
+                        <div class="sms-conversation-state-detail">Or add a recipient below to start a new SMS.</div>
+                    </div>
+                </div>
+            </div>
+            <div class="card-footer bg-white sms-chat-footer">
+                <input type="hidden" id="smsChatTo">
+                <div class="sms-chat-compose-shell">
+                    <div class="d-flex align-items-center gap-2 sms-recipient-row">
+                        <div class="sms-chat-recipient-strip flex-grow-1">
+                            <span class="sms-chat-recipient-label">Recipients</span>
+                            <div class="sms-chat-recipient-flow">
+                                <div class="sms-recipient-pills" id="smsChatRecipientPills" aria-live="polite"></div>
+                                <button type="button" class="btn btn-sm btn-light border sms-recipient-add-pill" id="smsChatAddRecipientBtn" title="Add recipient">
+                                    <i class="bi bi-plus-lg"></i>
+                                    <span>Add recipient</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="d-none sms-recipient-editor" id="smsChatRecipientEditor">
+                            <input type="tel" class="form-control form-control-sm border-0 bg-light" id="smsChatRecipientEntry" data-intl-tel-input placeholder="Type one phone number">
+                            <button type="button" class="btn btn-sm btn-primary" id="smsChatRecipientApplyBtn" title="Add recipients">
+                                <i class="bi bi-check-lg"></i>
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="smsChatRecipientCancelBtn" title="Close recipient input">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="sms-chat-summary-row">
+                        <div class="small text-muted text-truncate" id="smsChatRecipientMeta"></div>
+                        <small class="text-muted sms-chat-send-mode-meta text-end" id="smsChatSendModeMeta">0 chars | 1 part</small>
+                    </div>
+                    <div id="smsAttachmentPreview" class="sms-attach-preview d-none"></div>
+                    <div class="d-none d-flex flex-wrap align-items-center justify-content-between gap-2 sms-chat-mode-row" id="smsChatModeRow">
+                        <div class="d-flex align-items-center gap-2 min-w-0">
+                            <span class="badge rounded-pill bg-light text-dark border" id="smsChatSendModeBadge">
+                                <i class="bi bi-lightning-charge-fill me-1"></i>Instant
+                            </span>
+                            <div class="d-none sms-chat-schedule-wrap" id="smsChatScheduleWrap">
+                                <input type="datetime-local" class="form-control form-control-sm" id="smsChatScheduleAt" aria-label="Schedule send time">
+                            </div>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 sms-chat-mode-actions">
+                            <button type="button" class="btn btn-sm btn-success sms-chat-mode-action" id="smsChatScheduleConfirmBtn" title="Keep scheduled send">
+                                <i class="bi bi-check-lg"></i>
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-danger sms-chat-mode-action" id="smsChatScheduleCancelBtn" title="Switch back to instant">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <form id="smsChatForm" class="sms-chat-form d-flex align-items-end gap-2">
+                        <div class="sms-chat-attachment-slot" data-sms-http-required="true" data-sms-http-display="flex">
+                            <button type="button" class="btn btn-light border rounded-circle sms-icon-btn" id="smsAttachBtn" title="Attach image or contact card">
+                                <i class="bi bi-paperclip"></i>
+                            </button>
+                            <input type="file" class="d-none" id="smsAttachmentInput" accept="image/*,text/vcard,text/x-vcard,.vcf">
+                        </div>
+                        <textarea class="form-control sms-chat-input" id="smsChatMessage" rows="1" placeholder="Type SMS reply..."></textarea>
+                        <div class="sms-chat-send-cluster d-flex align-items-center gap-2 flex-shrink-0">
+                            <span class="sms-chat-char-pill text-nowrap d-none">
+                                <span id="smsChatCharCount">0</span><span class="sms-chat-char-limit"> chars</span>
+                                <span class="ms-2" id="smsChatByteCount">0/1023 bytes</span>
+                            </span>
+                            <span class="small text-muted text-nowrap d-none" id="smsChatParts">(single: 1 part, GSM-7, limit 160)</span>
+                            <input type="hidden" id="smsChatSendMode" value="instant">
+                            <div class="btn-group sms-send-group">
+                                <button type="submit" class="btn btn-primary rounded-start-pill sms-send-primary" id="smsChatSendBtn" title="Send SMS">
+                                    <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                                    <i class="bi bi-send-fill"></i>
+                                </button>
+                                <button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split rounded-end-pill sms-send-toggle" data-bs-toggle="dropdown" aria-expanded="false" title="Choose send mode">
+                                    <span class="visually-hidden">Choose send mode</span>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end sms-send-mode-menu">
+                                    <li>
+                                        <button type="button" class="dropdown-item active" data-chat-send-mode="instant">
+                                            <i class="bi bi-lightning-charge-fill me-2"></i>Send now
+                                        </button>
+                                    </li>
+                                    <li>
+                                        <button type="button" class="dropdown-item" data-chat-send-mode="scheduled">
+                                            <i class="bi bi-clock-fill me-2"></i>Schedule send
+                                        </button>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                    </form>
+                    <div class="sms-chat-help">
+                        Instant uses MQTT runtime. Scheduled SMS stays dashboard-owned until dispatch.
+                        <span data-sms-http-required="true" data-sms-http-display="inline">Attachments preview only until MMS transport is enabled.</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Schedule SMS Modal -->
+<div class="modal fade" id="scheduleModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header flex-wrap gap-2">
+                <h5 class="modal-title"><i class="bi bi-clock me-2"></i>Schedule Planner</h5>
+                <div class="d-flex flex-wrap gap-2 ms-auto">
+                    <button type="button" class="btn btn-sm btn-primary" onclick="openSmsScheduleEntryModal('single')">
+                        <i class="bi bi-plus-circle me-1"></i>Single Message
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="openSmsScheduleEntryModal('upload')">
+                        <i class="bi bi-upload me-1"></i>Upload
+                    </button>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="border rounded">
+                    <div class="d-flex justify-content-between align-items-center px-3 py-2 border-bottom bg-light">
+                        <h6 class="fw-semibold mb-0">Scheduled Messages</h6>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="loadScheduledSms()">
+                            <i class="bi bi-arrow-repeat"></i>
+                        </button>
+                    </div>
+                    <div class="list-group list-group-flush" id="scheduledSmsList" style="max-height: 360px; overflow-y: auto;">
+                        <div class="text-center text-muted py-4">Loading scheduled messages...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="scheduleSingleModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-chat-left-text me-2"></i>Single Scheduled Message</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">Recipient</label>
+                    <input type="tel" class="form-control" id="schedSingleTo" data-intl-tel-input placeholder="Choose country or type number">
+                    <div class="sms-recipient-pills d-none mt-2" id="schedSingleRecipientPills" aria-live="polite"></div>
+                    <div class="form-text mt-1" id="schedSingleRecipientMeta">Single or multiple numbers: separate with comma, semicolon, or new line.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Message</label>
+                    <textarea class="form-control" id="schedSingleMessage" rows="3" placeholder="Your message..."></textarea>
+                    <div class="form-text d-flex flex-wrap justify-content-between gap-2">
+                        <span>Scheduled SMS uses the same device send path and supports multipart SMS up to 1023 UTF-8 bytes and 15 parts.</span>
+                        <span class="text-nowrap">
+                            <span id="schedSingleCharCount">0</span> chars
+                            <span class="ms-2"><span id="schedSingleByteCount">0</span>/1023 bytes</span>
+                            <span class="ms-2" id="schedSingleParts">(1 part, GSM-7)</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="mb-0">
+                    <label class="form-label">Send At</label>
+                    <input type="datetime-local" class="form-control" id="schedSingleSendAt">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="schedSingleCreateBtn" onclick="createScheduledSms()">
+                    <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                    <i class="bi bi-clock me-1"></i><span id="schedCreateBtn">Schedule</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="scheduleUploadModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-file-earmark-spreadsheet me-2"></i>Upload Scheduled Messages</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="border rounded p-3 bg-light-subtle">
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+                        <div>
+                            <h6 class="fw-semibold mb-1">Bulk Excel Template</h6>
+                            <div class="small text-muted">Upload CSV exported from Excel with columns: phone, message, send_at, sim_slot.</div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="downloadSmsScheduleTemplate()">
+                            <i class="bi bi-download me-1"></i>Template
+                        </button>
+                    </div>
+                    <div class="input-group">
+                        <input type="file" class="form-control" id="schedImportFile" accept=".csv,.tsv,text/csv,text/plain">
+                        <button type="button" class="btn btn-outline-primary" id="schedImportBtn" onclick="importScheduledSmsTemplate()">
+                            <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                            <i class="bi bi-upload me-1"></i>Upload
+                        </button>
+                    </div>
+                    <div class="small text-muted mt-3" id="schedImportSimSlotGuide">
+                        sim_slot uses modem slot indexes: 0 = SIM 1, 1 = SIM 2.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- SMS Thread Modal -->
+<div class="modal fade" id="smsThreadModal" tabindex="-1" aria-labelledby="smsThreadTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <h5 class="modal-title" id="smsThreadTitle">
+                        <i class="bi bi-chat-square-text me-2"></i>Conversation
+                    </h5>
+                    <small class="text-muted" id="smsThreadMeta">Loading thread...</small>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body bg-light-subtle">
+                <div class="d-flex justify-content-between align-items-center mb-3 gap-2 flex-wrap">
+                    <div>
+                        <div class="fw-semibold" id="smsThreadNumber">-</div>
+                        <div class="small text-muted" id="smsThreadCount">0 messages</div>
+                    </div>
+                    <div class="btn-group btn-group-sm">
+                        <button type="button" class="btn btn-outline-success" id="smsThreadCallBtn">
+                            <i class="bi bi-telephone me-1"></i>Call
+                        </button>
+                        <button type="button" class="btn btn-outline-primary" id="smsThreadReplyBtn">
+                            <i class="bi bi-reply me-1"></i>Reply
+                        </button>
+                        <div class="dropdown">
+                            <button type="button" class="btn btn-outline-secondary" id="smsThreadMenuBtn" data-bs-toggle="dropdown" aria-expanded="false" title="Thread actions" aria-label="Thread actions" disabled>
+                                <i class="bi bi-three-dots"></i>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li><button type="button" class="dropdown-item" data-thread-menu-action="mark-read"><i class="bi bi-envelope-open me-2"></i>Mark Read</button></li>
+                                <li><button type="button" class="dropdown-item text-danger" data-thread-menu-action="delete-thread"><i class="bi bi-trash me-2"></i>Delete Thread</button></li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                <div id="smsThreadMessages" class="d-flex flex-column gap-2">
+                    <div class="text-muted text-center py-4">Select a message to open its conversation.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="smsMessageDetailsModal" tabindex="-1" aria-labelledby="smsMessageDetailsTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <h5 class="modal-title" id="smsMessageDetailsTitle">
+                        <i class="bi bi-info-circle me-2"></i>Message Details
+                    </h5>
+                    <small class="text-muted" id="smsMessageDetailsMeta">Full SMS metadata</small>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="smsMessageDetailsBody">
+                <div class="text-muted">No message selected.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Infinite scroll sentinels (one per tab) -->
+<div id="inboxSentinel" class="sms-sentinel text-center py-3 d-none">
+    <div class="spinner-border spinner-border-sm text-secondary" role="status">
+        <span class="visually-hidden">Loading more…</span>
+    </div>
+    <span class="ms-2 text-muted small">Loading more messages…</span>
+</div>
+<div id="sentSentinel" class="sms-sentinel text-center py-3 d-none">
+    <div class="spinner-border spinner-border-sm text-secondary" role="status">
+        <span class="visually-hidden">Loading more…</span>
+    </div>
+    <span class="ms-2 text-muted small">Loading more messages…</span>
+</div>
+<div id="allSentinel" class="sms-sentinel text-center py-3 d-none">
+    <div class="spinner-border spinner-border-sm text-secondary" role="status">
+        <span class="visually-hidden">Loading more…</span>
+    </div>
+    <span class="ms-2 text-muted small">Loading more messages…</span>
+</div>
+<!-- Pass server-rendered initial state to JS -->
+<script>
+window.SMS_INIT = {
+    deviceId: "<%= deviceId %>",
+    totalItems: <%- pagination.totalItems %>,
+    initialCount: <%- messages ? messages.length : 0 %>
+};
+
+function smsPageActiveDeviceId() {
+    const activeDeviceId = window.getActiveDeviceId
+        ? window.getActiveDeviceId()
+        : (window.SMS_INIT?.deviceId || '');
+    return String(activeDeviceId || '').trim();
+}
+
+function smsPageActiveSimSlot() {
+    return smsPageActiveSimContext().simSlot;
+}
+
+function smsPageActiveSimContext() {
+    if (typeof window.getActiveDeviceSimContext === 'function') {
+        return window.getActiveDeviceSimContext() || {
+            deviceId: smsPageActiveDeviceId(),
+            simSlot: null
+        };
+    }
+    return {
+        deviceId: smsPageActiveDeviceId(),
+        simSlot: typeof window.getActiveDeviceSimSlot === 'function' ? window.getActiveDeviceSimSlot() : null
+    };
+}
+
+function getSmsPageCachedDeviceStatus() {
+    const deviceId = smsPageActiveDeviceId();
+    if (!deviceId) return null;
+    try {
+        const key = typeof window.getLastDeviceStatusCacheKey === 'function'
+            ? window.getLastDeviceStatusCacheKey(deviceId)
+            : `lastDeviceStatus:${deviceId}`;
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function getSmsPageSimSlotGuideLines() {
+    const status = getSmsPageCachedDeviceStatus();
+    const rawSlots = Array.isArray(status?.simSlots)
+        ? status.simSlots
+        : (Array.isArray(status?.sim_slots)
+            ? status.sim_slots
+            : (Array.isArray(status?.sim?.slots)
+                ? status.sim.slots
+                : (Array.isArray(status?.status?.sim?.slots) ? status.status.sim.slots : [])));
+
+    const slots = rawSlots
+        .map((slot, index) => {
+            if (!slot || typeof slot !== 'object') return null;
+            const slotIndex = Number.parseInt(String(
+                slot.slotIndex
+                ?? slot.slot_index
+                ?? slot.simSlot
+                ?? slot.sim_slot
+                ?? index
+            ), 10);
+            const number = String(
+                slot.number
+                ?? slot.subscriberNumber
+                ?? slot.subscriber_number
+                ?? slot.msisdn
+                ?? slot.phoneNumber
+                ?? slot.phone_number
+                ?? ''
+            ).trim();
+            const carrier = String(
+                slot.operatorName
+                ?? slot.operator
+                ?? slot.carrierName
+                ?? slot.carrier_name
+                ?? slot.displayName
+                ?? slot.display_name
+                ?? ''
+            ).trim();
+            return {
+                slotIndex: Number.isFinite(slotIndex) && slotIndex >= 0 ? slotIndex : index,
+                number,
+                carrier
+            };
+        })
+        .filter(Boolean)
+        .sort((left, right) => left.slotIndex - right.slotIndex);
+
+    if (!slots.length) {
+        return ['0 = SIM 1', '1 = SIM 2'];
+    }
+
+    return slots.map((slot) => {
+        const parts = [`${slot.slotIndex} = SIM ${slot.slotIndex + 1}`];
+        if (slot.number) {
+            parts.push(slot.number);
+        }
+        if (slot.carrier) {
+            parts.push(slot.carrier);
+        }
+        return parts.join(' | ');
+    });
+}
+
+function renderScheduleImportSimSlotGuide() {
+    const guide = document.getElementById('schedImportSimSlotGuide');
+    if (!guide) return;
+    const lines = getSmsPageSimSlotGuideLines();
+    guide.textContent = `sim_slot guide: ${lines.join(' ; ')}`;
+}
+
+function isSmsPageDeviceSnapshotCurrent(deviceId) {
+    return String(deviceId || '') === smsPageActiveDeviceId();
+}
+
+function isSmsPageScopeMatch(payload = {}) {
+    const activeDeviceId = smsPageActiveDeviceId();
+    const payloadDeviceId = String(payload?.deviceId || payload?.device_id || '').trim();
+    if (activeDeviceId && payloadDeviceId && payloadDeviceId !== activeDeviceId) {
+        return false;
+    }
+
+    const activeContext = smsPageActiveSimContext();
+    const activeSimSlot = activeContext.simSlot;
+    if (activeSimSlot === null) {
+        return true;
+    }
+    const payloadSimSlot = payload?.simSlot ?? payload?.sim_slot ?? null;
+    if (payloadSimSlot === null || payloadSimSlot === undefined || payloadSimSlot === '') {
+        return true;
+    }
+
+    return Number(payloadSimSlot) === Number(activeSimSlot);
+}
+
+function buildSmsPageRequestUrl(url, options = {}) {
+    const requestUrl = new URL(url, window.location.origin);
+    const includeDeviceId = options.includeDeviceId !== false;
+    const fresh = Boolean(options.fresh);
+    const activeContext = includeDeviceId ? smsPageActiveSimContext() : {
+        deviceId: '',
+        simSlot: null
+    };
+
+    if (activeContext.deviceId && requestUrl.pathname.startsWith('/api/sms') && !requestUrl.searchParams.has('deviceId')) {
+        requestUrl.searchParams.set('deviceId', activeContext.deviceId);
+    }
+    if (activeContext.simSlot !== null && requestUrl.pathname.startsWith('/api/sms') && !requestUrl.searchParams.has('simSlot')) {
+        requestUrl.searchParams.set('simSlot', String(activeContext.simSlot));
+    }
+    if (fresh && !requestUrl.searchParams.has('_ts')) {
+        requestUrl.searchParams.set('_ts', String(Date.now()));
+    }
+
+    return `${requestUrl.pathname}${requestUrl.search}${requestUrl.hash}`;
+}
+
+async function fetchSmsPageJson(url, options = {}) {
+    const requestOptions = { ...options };
+    const method = String(requestOptions.method || 'GET').toUpperCase();
+    const headers = new Headers(requestOptions.headers || {});
+    const isReadRequest = method === 'GET' || method === 'HEAD';
+    const includeDeviceId = requestOptions.includeDeviceId !== false;
+    const activeContext = includeDeviceId ? smsPageActiveSimContext() : {
+        simSlot: null
+    };
+
+    delete requestOptions.includeDeviceId;
+
+    if (!isReadRequest
+        && activeContext.simSlot !== null
+        && requestOptions.body
+        && headers.get('Content-Type')?.includes('application/json')) {
+        try {
+            const parsedBody = JSON.parse(String(requestOptions.body || '{}'));
+            if (requestOptions.includeSimSlot !== false && includeDeviceId) {
+                parsedBody.simSlot = activeContext.simSlot;
+            }
+            requestOptions.body = JSON.stringify(parsedBody);
+        } catch (_) {}
+    }
+
+    if (isReadRequest) {
+        headers.set('Cache-Control', 'no-cache');
+        headers.set('Pragma', 'no-cache');
+        requestOptions.cache = 'no-store';
+    }
+
+    requestOptions.credentials = requestOptions.credentials || 'same-origin';
+    requestOptions.headers = headers;
+
+    const response = await fetch(buildSmsPageRequestUrl(url, {
+        includeDeviceId,
+        fresh: isReadRequest
+    }), requestOptions);
+    return response.json();
+}
+
+// ── SMS Templates ─────────────────────────────────────────────────────────
+let _smsTemplates = [];
+
+function upsertSmsTemplate(item) {
+    if (!item || item.id == null) return;
+    const index = _smsTemplates.findIndex(t => String(t.id) === String(item.id));
+    if (index >= 0) {
+        _smsTemplates[index] = {
+            ..._smsTemplates[index],
+            ...item
+        };
+        return;
+    }
+    _smsTemplates.unshift(item);
+}
+
+function removeSmsTemplate(id) {
+    _smsTemplates = _smsTemplates.filter(t => String(t.id) !== String(id));
+}
+
+async function loadSmsTemplates() {
+    try {
+        const data = await fetchSmsPageJson('/api/sms/templates', { includeDeviceId: false });
+        _smsTemplates = data.success ? data.data : [];
+        renderSmsTemplates();
+    } catch (_) { renderSmsTemplates(); }
+}
+
+function renderSmsTemplates() {
+    const container = document.getElementById('smsTemplateButtons');
+    if (!container) return;
+    if (_smsTemplates.length === 0) {
+        container.innerHTML = '<span class="text-muted small">No saved templates. Save a message to create one.</span>';
+        return;
+    }
+    container.innerHTML = _smsTemplates.map(t => `
+        <span class="badge bg-secondary d-inline-flex align-items-center gap-1 py-2 px-2" style="cursor:pointer;font-size:0.82rem" title="${escapeHtml(t.message)}">
+            <span onclick="applyTemplate(${t.id})">${escapeHtml(t.title)}</span>
+            <button type="button" class="btn-close btn-close-white ms-1" style="font-size:0.55rem" onclick="deleteTemplate(${t.id})" title="Delete"></button>
+        </span>
+    `).join('');
+}
+
+function applyTemplate(id) {
+    const tpl = _smsTemplates.find(t => t.id === id);
+    if (!tpl) return;
+    const el = document.getElementById('modalMessage');
+    if (el) { el.value = tpl.message; el.dispatchEvent(new Event('input')); }
+}
+
+async function deleteTemplate(id) {
+    if (!confirm('Delete this template?')) return;
+    try {
+        const data = await fetchSmsPageJson(`/api/sms/templates/${id}`, {
+            method: 'DELETE',
+            includeDeviceId: false
+        });
+        if (data.success) {
+            removeSmsTemplate(id);
+            renderSmsTemplates();
+        } else {
+            showToast(data.message || 'Failed to delete template', 'danger');
+        }
+    } catch (_) { showToast('Failed to delete template', 'danger'); }
+}
+
+async function saveCurrentAsTemplate() {
+    const msgEl = document.getElementById('modalMessage');
+    if (!msgEl || !msgEl.value.trim()) { showToast('Enter a message first', 'warning'); return; }
+    const title = prompt('Template name:', '');
+    if (!title || !title.trim()) return;
+    try {
+        const data = await fetchSmsPageJson('/api/sms/templates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            includeDeviceId: false,
+            body: JSON.stringify({ title: title.trim(), message: msgEl.value.trim() })
+        });
+        if (data.success) {
+            upsertSmsTemplate(data.data);
+            renderSmsTemplates();
+            showToast('Template saved', 'success');
+        } else {
+            showToast(data.message || 'Failed to save', 'danger');
+        }
+    } catch (_) { showToast('Failed to save template', 'danger'); }
+}
+
+function escapeHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Scheduled SMS ──────────────────────────────────────────────────────────
+let _scheduledSms = [];
+let _scheduledSmsLoadToken = 0;
+window.getScheduledSmsItems = function () {
+    return Array.isArray(_scheduledSms) ? _scheduledSms.slice() : [];
+};
+
+function upsertScheduledSms(item) {
+    if (!item || item.id == null) return;
+    const normalizedItem = {
+        status: 'pending',
+        ...item
+    };
+    const index = _scheduledSms.findIndex(s => String(s.id) === String(normalizedItem.id));
+    if (index >= 0) {
+        _scheduledSms[index] = {
+            ..._scheduledSms[index],
+            ...normalizedItem
+        };
+    } else {
+        _scheduledSms.unshift(normalizedItem);
+    }
+}
+
+function removeScheduledSms(id) {
+    _scheduledSms = _scheduledSms.filter(s => String(s.id) !== String(id));
+}
+
+async function loadScheduledSms() {
+    const requestDeviceId = smsPageActiveDeviceId();
+    const requestToken = ++_scheduledSmsLoadToken;
+    try {
+        const data = await fetchSmsPageJson('/api/sms/scheduled');
+        if (requestToken !== _scheduledSmsLoadToken || !isSmsPageDeviceSnapshotCurrent(requestDeviceId)) return;
+        _scheduledSms = data.success ? data.data : [];
+        renderScheduledSms();
+    } catch (_) {
+        if (requestToken !== _scheduledSmsLoadToken || !isSmsPageDeviceSnapshotCurrent(requestDeviceId)) return;
+        renderScheduledSms();
+    }
+}
+
+function renderScheduledSms() {
+    const badge = document.getElementById('scheduledBadge');
+    const list = document.getElementById('scheduledSmsList');
+    const pending = _scheduledSms.filter(s => s.status === 'pending');
+    if (badge) {
+        badge.textContent = pending.length;
+        badge.classList.toggle('d-none', pending.length === 0);
+    }
+    if (list) {
+        const items = getScheduledSmsItems().sort((left, right) => {
+            const leftPending = String(left?.status || 'pending') === 'pending';
+            const rightPending = String(right?.status || 'pending') === 'pending';
+            if (leftPending !== rightPending) return leftPending ? -1 : 1;
+            return new Date(left?.send_at || 0) - new Date(right?.send_at || 0);
+        });
+        if (!items.length) {
+            list.innerHTML = '<div class="text-center text-muted py-4">No scheduled messages for this device.</div>';
+        } else {
+            list.innerHTML = items.map(item => {
+                const status = String(item?.status || 'pending').trim().toLowerCase();
+                const badgeClass = status === 'pending'
+                    ? 'bg-warning text-dark'
+                    : status === 'queued'
+                        ? 'bg-info text-dark'
+                        : status === 'sent'
+                            ? 'bg-success'
+                            : 'bg-danger';
+                const when = item?.send_at ? new Date(item.send_at).toLocaleString() : '-';
+                const toNumber = item?.to_number || item?.to || '-';
+                return `
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between align-items-start gap-3">
+                            <div class="min-w-0">
+                                <div class="fw-semibold text-truncate">${escapeHtml(toNumber)}</div>
+                                <div class="small text-muted text-truncate">${escapeHtml(item?.message || '')}</div>
+                                <div class="small text-muted mt-1">${escapeHtml(when)}</div>
+                                ${item?.error ? `<div class="small text-danger mt-1">${escapeHtml(item.error)}</div>` : ''}
+                            </div>
+                            <div class="text-end flex-shrink-0">
+                                <span class="badge ${badgeClass}">${escapeHtml(status)}</span>
+                                ${status === 'pending' ? `<button type="button" class="btn btn-sm btn-outline-danger d-block mt-2 ms-auto" onclick="cancelScheduledSms(${Number(item.id)})"><i class="bi bi-x-lg"></i></button>` : ''}
+                            </div>
+                        </div>
+                    </div>`;
+            }).join('');
+        }
+    }
+    window.dispatchEvent(new CustomEvent('sms:scheduled-updated', {
+        detail: {
+            count: _scheduledSms.length,
+            pending: pending.length
+        }
+    }));
+}
+
+function splitScheduledRecipients(value) {
+    return String(value || '')
+        .split(/[\n,;]+/)
+        .map(item => item.trim())
+        .filter(Boolean);
+}
+
+function openSmsScheduleEntryModal(mode) {
+    const modalId = mode === 'upload' ? 'scheduleUploadModal' : 'scheduleSingleModal';
+    const modalEl = document.getElementById(modalId);
+    if (!modalEl) return;
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+}
+
+function updateScheduledRecipientMeta() {
+    const input = document.getElementById('schedSingleTo');
+    const meta = document.getElementById('schedSingleRecipientMeta');
+    const pills = document.getElementById('schedSingleRecipientPills');
+    if (!input || !meta) return;
+    const recipients = Array.from(new Set(splitScheduledRecipients(input.value)));
+    const count = recipients.length;
+    if (pills) {
+        pills.classList.toggle('d-none', count === 0);
+        pills.innerHTML = recipients.map(value => `
+            <span class="sms-recipient-pill" data-recipient-value="${escapeHtml(value)}">
+                <span>${escapeHtml(value)}</span>
+                <button type="button" class="sms-recipient-pill-remove-inline" data-recipient-value="${escapeHtml(value)}" aria-label="Remove recipient ${escapeHtml(value)}">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </span>
+        `).join('');
+    }
+    meta.textContent = count
+        ? `${count} recipient${count === 1 ? '' : 's'} selected`
+        : 'Single or multiple numbers: separate with comma, semicolon, or new line.';
+}
+
+async function createScheduledSms() {
+    const recipients = Array.from(new Set(splitScheduledRecipients(document.getElementById('schedSingleTo')?.value || '')));
+    const message = document.getElementById('schedSingleMessage')?.value.trim();
+    const messageAnalysis = window.smsComposeLimits?.analyze ? window.smsComposeLimits.analyze(message) : null;
+    const sendAt = document.getElementById('schedSingleSendAt')?.value;
+    const button = document.getElementById('schedSingleCreateBtn');
+    const spinner = button?.querySelector('.spinner-border');
+    if (!message || !sendAt) { showToast('All fields required', 'warning'); return; }
+    if (!recipients.length) { showToast('Enter at least one recipient', 'warning'); return; }
+    if (messageAnalysis && !messageAnalysis.valid) {
+        showToast(window.smsComposeLimits?.formatError?.(messageAnalysis) || 'SMS message exceeds the device limit.', 'warning');
+        return;
+    }
+    const scheduledDate = new Date(sendAt);
+    if (!Number.isFinite(scheduledDate.getTime()) || scheduledDate <= new Date()) {
+        showToast('Choose a future time for scheduled SMS.', 'warning');
+        return;
+    }
+    const deviceId = smsPageActiveDeviceId();
+    if (!deviceId) { showToast('Select a device first.', 'warning'); return; }
+    if (button) button.disabled = true;
+    if (spinner) spinner.classList.remove('d-none');
+    try {
+        const activeSimSlot = typeof window.getActiveDeviceSimSlot === 'function'
+            ? window.getActiveDeviceSimSlot()
+            : null;
+        const res = await fetch(buildSmsPageRequestUrl('/api/sms/scheduled'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: recipients[0], recipients, message, send_at: scheduledDate.toISOString(), deviceId, simSlot: activeSimSlot })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showToast(data.count > 1 ? `${data.count} SMS scheduled` : 'SMS scheduled', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('scheduleSingleModal'))?.hide();
+            window.PhoneInputs?.setValue?.('schedSingleTo', '');
+            const schedTo = document.getElementById('schedSingleTo');
+            if (schedTo) schedTo.value = '';
+            const schedMessage = document.getElementById('schedSingleMessage');
+            if (schedMessage) schedMessage.value = '';
+            const schedSendAt = document.getElementById('schedSingleSendAt');
+            if (schedSendAt) schedSendAt.value = '';
+            window.updateSmsComposeCounterById?.('schedSingleMessage', { countId: 'schedSingleCharCount', byteId: 'schedSingleByteCount', partsId: 'schedSingleParts' });
+            updateScheduledRecipientMeta();
+            loadScheduledSms();
+        } else {
+            showToast(data.message || 'Failed to schedule', 'danger');
+        }
+    } catch (_) { showToast('Network error', 'danger'); }
+    finally {
+        if (spinner) spinner.classList.add('d-none');
+        if (button) button.disabled = false;
+    }
+}
+
+function downloadSmsScheduleTemplate() {
+    const now = new Date(Date.now() + 60 * 60 * 1000);
+    const sendAt = now.toISOString().slice(0, 16);
+    const csv = [
+        'phone,message,send_at,sim_slot',
+        `+8801700000000,"Test scheduled SMS",${sendAt},0`
+    ].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'sms-schedule-template.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+}
+
+async function importScheduledSmsTemplate() {
+    const input = document.getElementById('schedImportFile');
+    const button = document.getElementById('schedImportBtn');
+    const spinner = button?.querySelector('.spinner-border');
+    const file = input?.files?.[0];
+    const deviceId = smsPageActiveDeviceId();
+    if (!deviceId) { showToast('Select a device first.', 'warning'); return; }
+    if (!file) { showToast('Choose a CSV template first.', 'warning'); return; }
+    const formData = new FormData();
+    formData.append('file', file);
+    if (button) button.disabled = true;
+    if (spinner) spinner.classList.remove('d-none');
+    try {
+        const res = await fetch(buildSmsPageRequestUrl('/api/sms/scheduled/import'), {
+            method: 'POST',
+            body: formData
+        });
+        const data = await res.json();
+        if (data.success) {
+            const skipped = Array.isArray(data.errors) && data.errors.length ? ` (${data.errors.length} skipped)` : '';
+            showToast(`${data.count || 0} SMS scheduled from template${skipped}`, 'success');
+            input.value = '';
+            bootstrap.Modal.getInstance(document.getElementById('scheduleUploadModal'))?.hide();
+            loadScheduledSms();
+        } else {
+            showToast(data.message || 'Failed to import template', 'danger');
+        }
+    } catch (_) { showToast('Network error', 'danger'); }
+    finally {
+        if (spinner) spinner.classList.add('d-none');
+        if (button) button.disabled = false;
+    }
+}
+
+async function cancelScheduledSms(id) {
+    if (!confirm('Cancel this scheduled SMS?')) return;
+    try {
+        const res = await fetch(buildSmsPageRequestUrl(`/api/sms/scheduled/${id}`), { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) { showToast('Cancelled', 'success'); loadScheduledSms(); }
+        else showToast(data.message || 'Failed', 'danger');
+    } catch (_) { showToast('Network error', 'danger'); }
+}
+
+// Set default datetime-local to 1 hour from now when schedule modal opens
+document.addEventListener('DOMContentLoaded', function() {
+    const schedModal = document.getElementById('scheduleModal');
+    if (schedModal) {
+        schedModal.addEventListener('show.bs.modal', () => {
+            loadScheduledSms();
+        });
+    }
+    const schedSingleModal = document.getElementById('scheduleSingleModal');
+    if (schedSingleModal) {
+        schedSingleModal.addEventListener('show.bs.modal', () => {
+            const dt = document.getElementById('schedSingleSendAt');
+            if (dt && !dt.value) {
+                const d = new Date(Date.now() + 3600000);
+                dt.value = d.toISOString().slice(0, 16);
+            }
+            updateScheduledRecipientMeta();
+        });
+    }
+    const schedUploadModal = document.getElementById('scheduleUploadModal');
+    if (schedUploadModal) {
+        schedUploadModal.addEventListener('show.bs.modal', () => {
+            renderScheduleImportSimSlotGuide();
+        });
+    }
+    document.getElementById('schedSingleTo')?.addEventListener('input', updateScheduledRecipientMeta);
+    document.getElementById('schedSingleRecipientPills')?.addEventListener('click', function (event) {
+        const button = event.target.closest('.sms-recipient-pill-remove-inline[data-recipient-value]');
+        const input = document.getElementById('schedSingleTo');
+        if (!button || !input) return;
+        const removeValue = String(button.dataset.recipientValue || '').trim();
+        input.value = splitScheduledRecipients(input.value).filter(item => item !== removeValue).join(', ');
+        updateScheduledRecipientMeta();
+    });
+});
+
+// Listen for server-sent socket events
+if (window.socket) {
+    window.socket.on('sms:template-added', (item) => {
+        upsertSmsTemplate(item);
+        renderSmsTemplates();
+    });
+    window.socket.on('sms:template-updated', (item) => {
+        upsertSmsTemplate(item);
+        renderSmsTemplates();
+    });
+    window.socket.on('sms:template-deleted', ({ id }) => {
+        removeSmsTemplate(id);
+        renderSmsTemplates();
+    });
+    window.socket.on('sms:scheduled-created', (item) => {
+        if (!isSmsPageScopeMatch(item)) return;
+        upsertScheduledSms(item);
+        renderScheduledSms();
+    });
+    window.socket.on('sms:scheduled-cancelled', ({ id, deviceId }) => {
+        if (!isSmsPageScopeMatch({ id, deviceId })) return;
+        removeScheduledSms(id);
+        renderScheduledSms();
+    });
+    window.socket.on('sms:scheduled-queued', ({ id, deviceId, simSlot, sim_slot }) => {
+        if (!isSmsPageScopeMatch({ id, deviceId, simSlot, sim_slot })) return;
+        const item = _scheduledSms.find(s => String(s.id) === String(id));
+        if (item) { item.status = 'queued'; item.sent_at = new Date().toISOString(); renderScheduledSms(); }
+    });
+    window.socket.on('sms:scheduled-failed', ({ id, deviceId, simSlot, sim_slot, error }) => {
+        if (!isSmsPageScopeMatch({ id, deviceId, simSlot, sim_slot })) return;
+        const item = _scheduledSms.find(s => String(s.id) === String(id));
+        if (item) {
+            item.status = 'failed';
+            item.error = error || item.error || 'Failed to queue scheduled SMS';
+            renderScheduledSms();
+        }
+    });
+}
+
+// Load templates when compose modal opens
+document.addEventListener('DOMContentLoaded', function() {
+    const modal = document.getElementById('composeSmsModal');
+    if (modal) modal.addEventListener('show.bs.modal', loadSmsTemplates);
+});
+</script>
+
+<!-- Compose SMS Modal -->
+<div class="modal fade" id="composeSmsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-pencil-square me-2"></i>Compose New SMS
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="composeSmsForm">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">To</label>
+                        <div class="d-flex gap-2">
+                            <input type="tel" class="form-control" id="modalTo" name="to" data-intl-tel-input
+                                   placeholder="Choose country or type number" required>
+                            <button class="btn btn-outline-primary flex-shrink-0" type="button" id="pickContactBtn" onclick="openContactsModal('modalTo')">
+                                <i class="bi bi-person-lines-fill"></i> Contacts
+                            </button>
+                        </div>
+                        <div class="sms-recipient-pills d-none mt-2" id="modalRecipientPills" aria-live="polite"></div>
+                        <div class="form-text">
+                            <i class="bi bi-info-circle me-1"></i>
+                            Paste one or many numbers. Separate entries with comma, semicolon, or new line. Short service codes are also allowed.
+                        </div>
+                        <div class="small text-muted mt-1" id="modalRecipientMeta">1 recipient will use the normal SMS thread.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Message</label>
+                        <textarea class="form-control" id="modalMessage" name="message" rows="4"
+                                  placeholder="Type your message here..." required></textarea>
+                        <div class="d-flex justify-content-between mt-2">
+                            <small class="text-muted">
+                                <i class="bi bi-info-circle me-1"></i>
+                                Dashboard auto-switches to multipart when the message exceeds one SMS part
+                            </small>
+                            <span class="badge bg-light text-dark">
+                                <span id="modalCharCount">0</span> chars
+                                <span class="ms-2"><span id="modalByteCount">0</span>/1023 bytes</span>
+                                <span id="smsParts" class="ms-2 text-muted">(single: 1 part, GSM-7, limit 160)</span>
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- SMS Templates -->
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <label class="form-label fw-bold mb-0">Templates</label>
+                            <button type="button" class="btn btn-sm btn-outline-success" onclick="saveCurrentAsTemplate()">
+                                <i class="bi bi-bookmark-plus me-1"></i>Save as Template
+                            </button>
+                        </div>
+                        <div class="d-flex flex-wrap gap-2" id="smsTemplateButtons">
+                            <span class="text-muted small">Loading...</span>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    <i class="bi bi-x-lg me-2"></i>Cancel
+                </button>
+                <button type="button" class="btn btn-primary" id="modalSendBtn">
+                    <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                    <i class="bi bi-send me-2"></i>Send Message
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Contacts Modal -->
+<div class="modal fade" id="contactsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-person-lines-fill me-2"></i>Contacts
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Search and filters -->
+                <div class="row g-2 mb-3">
+                    <div class="col-12 col-md-6">
+                        <div class="input-group">
+                            <span class="input-group-text bg-white">
+                                <i class="bi bi-search"></i>
+                            </span>
+                            <input type="text" class="form-control" id="contactSearch" placeholder="Search contacts...">
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <select class="form-select" id="contactCompanyFilter">
+                            <option value="">All Companies</option>
+                        </select>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <select class="form-select" id="contactSort">
+                            <option value="name">Sort by Name</option>
+                            <option value="recent">Recently Added</option>
+                            <option value="frequent">Most Used</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Contact stats -->
+                <div class="d-flex gap-3 mb-3 flex-wrap">
+                    <span class="badge bg-primary" id="totalContacts">Loading...</span>
+                    <span class="badge bg-warning" id="favoriteContacts">Loading...</span>
+                </div>
+
+                <!-- Contacts list -->
+                <div class="list-group" id="contactsList" style="max-height: 400px; overflow-y: auto;">
+                    <!-- Will be populated by JavaScript -->
+                    <div class="text-center py-4">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addContactModal">
+                    <i class="bi bi-person-plus me-2"></i>Add Contact
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add/Edit Contact Modal -->
+<div class="modal fade" id="addContactModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-person-plus me-2"></i><span id="contactModalTitle">Add New Contact</span>
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="contactForm">
+                    <input type="hidden" id="contactId">
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Name *</label>
+                        <input type="text" class="form-control" id="contactName" required>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Phone Number *</label>
+                        <input type="tel" class="form-control" id="contactPhone" data-intl-tel-input required>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Email</label>
+                        <input type="email" class="form-control" id="contactEmail">
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Company</label>
+                        <input type="text" class="form-control" id="contactCompany">
+                    </div>
+                    
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="contactFavorite">
+                            <label class="form-check-label" for="contactFavorite">Add to favorites</label>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Notes</label>
+                        <textarea class="form-control" id="contactNotes" rows="2"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger d-none" id="deleteContactBtn">Delete</button>
+                <button type="button" class="btn btn-primary" id="saveContactBtn">Save Contact</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Load SMS page script -->
+<script src="/js/sms.js"></script>
+<div class="modal fade" id="smsShortcutsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-keyboard me-2"></i>SMS Shortcuts</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body small">
+                <div class="d-flex justify-content-between"><span>Focus search</span><kbd>/</kbd></div>
+                <div class="d-flex justify-content-between mt-2"><span>Compose SMS</span><kbd>C</kbd></div>
+                <div class="d-flex justify-content-between mt-2"><span>Open shortcuts</span><kbd>?</kbd></div>
+                <div class="d-flex justify-content-between mt-2"><span>Mark all read</span><kbd>Shift</kbd>+<kbd>R</kbd></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.sms-sync-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2055;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(4px);
+}
+
+.sms-sync-card {
+    width: min(92vw, 24rem);
+    padding: 1.5rem;
+    border-radius: 1.25rem;
+    background: var(--bs-body-bg);
+    box-shadow: 0 1.25rem 3rem rgba(15, 23, 42, 0.25);
+    text-align: center;
+}
+
+.sms-compact .card-body,
+.sms-compact .card-header {
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+}
+
+.sms-compact .message-item {
+    padding: 0.62rem 0.7rem !important;
+}
+
+.sms-compact .message-item h6 {
+    font-size: 0.86rem;
+}
+
+.sms-compact .message-item .message-text {
+    font-size: 0.82rem;
+    line-height: 1.3;
+}
+
+.sms-compact .message-item small {
+    font-size: 0.74rem;
+}
+
+.sms-compact .nav-tabs .nav-link {
+    padding: 0.48rem 0.6rem;
+    font-size: 0.84rem;
+}
+
+.sms-stats-row .card-body {
+    padding: 0.6rem 0.75rem;
+}
+
+.sms-stats-row h6 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.sms-stats-row h4 {
+    font-size: 1.15rem;
+}
+
+.sms-stats-row .fs-2 {
+    font-size: 1.3rem !important;
+}
+
+.sms-conversation-list {
+    max-height: 68vh;
+    overflow-y: auto;
+}
+
+.sms-conversation-state {
+    display: flex;
+    min-height: 11rem;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 1.25rem 1rem;
+    color: var(--bs-secondary-color);
+}
+
+.sms-conversation-state-icon {
+    width: 2.75rem;
+    height: 2.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: rgba(13, 110, 253, 0.08);
+    color: var(--bs-primary);
+    font-size: 1.15rem;
+    margin-bottom: 0.6rem;
+}
+
+.sms-conversation-state-error .sms-conversation-state-icon {
+    background: rgba(220, 53, 69, 0.12);
+    color: var(--bs-danger);
+}
+
+.sms-conversation-state-title {
+    font-weight: 600;
+    color: var(--bs-body-color);
+}
+
+.sms-conversation-state-detail {
+    margin-top: 0.35rem;
+    font-size: 0.83rem;
+    max-width: 20rem;
+}
+
+.sms-conversation-card,
+.sms-chat-card {
+    min-height: 62vh;
+}
+
+.sms-chat-body {
+    padding: 0.5rem !important;
+    background:
+        radial-gradient(circle at 12px 12px, rgba(13, 110, 253, 0.07) 2px, transparent 2px),
+        linear-gradient(135deg, #f7fbff 0%, #eef5ef 100%);
+    background-size: 30px 30px, 100% 100%;
+}
+
+.sms-chat-thread {
+    min-height: 42vh;
+    max-height: 54vh;
+    overflow-y: auto;
+    padding: 0.25rem;
+}
+
+.sms-chat-topbar h5 {
+    font-size: 1rem;
+}
+
+.sms-chat-number {
+    max-width: min(70vw, 34rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sms-chat-footer {
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+    padding: 0.4rem 0.55rem !important;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(247, 250, 252, 0.96) 100%);
+}
+
+.sms-chat-compose-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.38rem;
+    position: relative;
+    padding: 0.42rem;
+    border: 1px solid rgba(13, 110, 253, 0.1);
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+}
+
+.sms-header-icon-btn {
+    width: 2rem;
+    height: 2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.sms-recipient-row {
+    min-height: 2rem;
+    position: relative;
+}
+
+.sms-chat-recipient-strip {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.sms-chat-recipient-label {
+    flex: 0 0 auto;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--bs-secondary-color);
+}
+
+.sms-chat-recipient-flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+}
+
+.sms-chat-form {
+    display: flex !important;
+    align-items: flex-end !important;
+    gap: 0.4rem !important;
+    width: 100%;
+    flex-wrap: nowrap;
+}
+
+.sms-chat-attachment-slot {
+    display: flex;
+    align-items: center !important;
+    flex: 0 0 auto;
+}
+
+.sms-recipient-editor {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    position: absolute;
+    top: calc(100% + 0.42rem);
+    left: 0;
+    right: 0;
+    z-index: 24;
+    padding: 0.18rem;
+    border: 1px solid rgba(13, 110, 253, 0.12);
+    border-radius: 999px;
+    background: rgba(248, 249, 250, 0.92);
+    box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
+}
+
+.sms-recipient-editor .iti {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.sms-recipient-editor .form-control,
+.sms-recipient-editor .iti input {
+    min-width: 0;
+    border-radius: 999px;
+    padding-top: 0.24rem;
+    padding-bottom: 0.24rem;
+    box-shadow: none;
+}
+
+.sms-recipient-editor .iti input {
+    width: 100%;
+}
+
+.sms-chat-summary-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    min-height: 1rem;
+    padding-top: 0.1rem;
+}
+
+.sms-chat-mode-row {
+    position: absolute;
+    right: 0.42rem;
+    bottom: calc(2.3rem + 0.95rem);
+    z-index: 20;
+    min-height: 0;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid rgba(13, 110, 253, 0.14);
+    border-radius: 0.95rem;
+    background: rgba(255, 255, 255, 0.98);
+    box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
+}
+
+.sms-chat-mode-row::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    right: 1.1rem;
+    border-width: 7px 7px 0 7px;
+    border-style: solid;
+    border-color: rgba(255, 255, 255, 0.98) transparent transparent transparent;
+}
+
+.sms-chat-mode-actions {
+    flex: 0 0 auto;
+}
+
+.sms-chat-mode-action {
+    width: 2rem;
+    height: 2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: 999px;
+}
+
+.sms-inline-icon-btn {
+    width: 1.95rem;
+    height: 1.95rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    padding: 0;
+}
+
+.sms-recipient-add-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-height: 1.9rem;
+    padding: 0.22rem 0.6rem;
+    border-radius: 999px;
+    border-color: rgba(13, 110, 253, 0.18) !important;
+    color: var(--bs-primary);
+    background: rgba(13, 110, 253, 0.04);
+    white-space: nowrap;
+}
+
+.sms-recipient-add-pill:hover {
+    background: rgba(13, 110, 253, 0.08);
+    color: var(--bs-primary);
+}
+
+.sms-chat-schedule-wrap {
+    min-width: 11.5rem;
+}
+
+.sms-chat-schedule-wrap .form-control {
+    border-radius: 999px;
+    min-height: 1.95rem;
+    padding-top: 0.22rem;
+    padding-bottom: 0.22rem;
+    border-color: rgba(13, 110, 253, 0.14);
+}
+
+.sms-chat-send-mode-meta {
+    font-size: 0.72rem;
+}
+
+.sms-send-group .btn {
+    min-height: 2.15rem;
+}
+
+.sms-send-primary {
+    min-width: 2.55rem;
+}
+
+.sms-send-toggle {
+    padding-left: 0.48rem;
+    padding-right: 0.48rem;
+}
+
+.sms-send-mode-menu .dropdown-item.active,
+.sms-send-mode-menu .dropdown-item:active {
+    background: rgba(13, 110, 253, 0.12);
+    color: var(--bs-primary);
+}
+
+.sms-chat-input {
+    flex: 1 1 16rem;
+    width: auto;
+    min-width: 0;
+    min-height: 2.15rem;
+    max-height: 5rem;
+    resize: none;
+    border-radius: 1.1rem;
+    padding: 0.44rem 0.78rem;
+    line-height: 1.28;
+    border-color: rgba(13, 110, 253, 0.12);
+    box-shadow: none;
+}
+
+.sms-icon-btn {
+    width: 2.15rem;
+    height: 2.15rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+
+.sms-chat-send-cluster {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem !important;
+    flex: 0 0 auto;
+    align-self: flex-end;
+    margin-left: auto;
+}
+
+.sms-chat-char-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.9rem;
+    min-height: 1.85rem;
+    padding: 0 0.5rem;
+    border-radius: 999px;
+    border: 1px solid rgba(13, 110, 253, 0.1);
+    background: rgba(13, 110, 253, 0.05);
+    color: var(--bs-secondary-color);
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
+.sms-chat-char-limit {
+    opacity: 0.72;
+}
+
+.sms-recipient-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+}
+
+.sms-recipient-placeholder {
+    color: var(--bs-secondary-color);
+    font-size: 0.8rem;
+    line-height: 1.3;
+}
+
+.sms-recipient-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 100%;
+    padding: 0.22rem 0.52rem;
+    border: 1px solid rgba(13, 110, 253, 0.16);
+    border-radius: 999px;
+    background: rgba(13, 110, 253, 0.065);
+    color: var(--bs-body-color);
+    font-size: 0.78rem;
+    line-height: 1.1;
+}
+
+.sms-recipient-pill-empty {
+    color: var(--bs-secondary-color);
+    font-size: 0.82rem;
+}
+
+.sms-recipient-pill span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sms-recipient-pill button {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    line-height: 1;
+}
+
+.sms-recipient-pill button:hover {
+    color: var(--bs-danger);
+}
+
+.sms-message-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.65rem;
+}
+
+.sms-message-header-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.sms-message-info {
+    border: 0;
+    background: transparent;
+    color: var(--bs-secondary-color);
+    padding: 0;
+    line-height: 1;
+}
+
+.sms-message-info:hover {
+    color: var(--bs-primary);
+}
+
+.sms-detail-editor {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid rgba(15, 23, 42, 0.14);
+    border-radius: 1rem;
+    background: linear-gradient(180deg, #101827 0%, #0b1220 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.sms-detail-editor-copy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    z-index: 1;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 0.6rem;
+    color: #e2e8f0;
+    background: rgba(30, 41, 59, 0.9);
+}
+
+.sms-detail-editor-copy:hover,
+.sms-detail-editor-copy:focus,
+.sms-detail-editor-copy:focus-visible {
+    color: #fff;
+    border-color: rgba(96, 165, 250, 0.5);
+    background: rgba(37, 99, 235, 0.28);
+}
+
+.sms-detail-editor-pre {
+    flex: 1 1 auto;
+    margin: 0;
+    padding: 0.95rem 3.5rem 1.05rem 1rem;
+    overflow: auto;
+    color: #dbeafe;
+    font-size: 0.8rem;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: "Cascadia Code", "Consolas", "SFMono-Regular", monospace;
+}
+
+.sms-message-menu-toggle,
+.sms-thread-menu-toggle {
+    color: var(--bs-secondary-color);
+    line-height: 1;
+}
+
+.sms-message-menu-toggle:hover,
+.sms-thread-menu-toggle:hover {
+    color: var(--bs-primary);
+}
+
+.sms-bubble {
+    max-width: min(100%, 34rem);
+    border: 0;
+    border-radius: 1rem;
+}
+
+.sms-bubble-in {
+    border-top-left-radius: 0.3rem;
+    background: #fff;
+}
+
+.sms-bubble-out {
+    border-top-right-radius: 0.3rem;
+    background: #d8fdd2;
+}
+
+.sms-bubble-meta {
+    font-size: 0.72rem;
+}
+
+.sms-media-card,
+.sms-contact-card,
+.sms-attach-preview {
+    border: 1px solid rgba(0, 0, 0, 0.09);
+    border-radius: 0.75rem;
+    background: rgba(255, 255, 255, 0.86);
+    padding: 0.42rem 0.52rem;
+}
+
+.sms-media-thumb {
+    width: 3rem;
+    height: 3rem;
+    border-radius: 0.6rem;
+    object-fit: cover;
+    flex: 0 0 auto;
+}
+
+.sms-media-icon {
+    width: 2rem;
+    height: 2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    flex: 0 0 auto;
+}
+
+.sms-media-meta {
+    font-size: 0.75rem;
+}
+
+.sms-attach-preview {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.sms-chat-help {
+    font-size: 0.7rem;
+    line-height: 1.2;
+    color: var(--bs-secondary-color);
+}
+
+[data-bs-theme="dark"] .sms-chat-footer {
+    background: linear-gradient(180deg, rgba(37, 41, 47, 0.98) 0%, rgba(31, 36, 41, 0.98) 100%);
+}
+
+[data-bs-theme="dark"] .sms-chat-compose-shell {
+    background: rgba(44, 48, 53, 0.94);
+    border-color: rgba(110, 168, 254, 0.16);
+    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.22);
+}
+
+[data-bs-theme="dark"] .sms-recipient-editor {
+    background: rgba(26, 29, 33, 0.92);
+    border-color: rgba(110, 168, 254, 0.16);
+}
+
+[data-bs-theme="dark"] .sms-chat-input,
+[data-bs-theme="dark"] .sms-chat-schedule-wrap .form-control {
+    border-color: rgba(110, 168, 254, 0.16);
+    background: rgba(26, 29, 33, 0.9);
+}
+
+[data-bs-theme="dark"] .sms-chat-char-pill {
+    background: rgba(110, 168, 254, 0.08);
+    border-color: rgba(110, 168, 254, 0.16);
+    color: #adb5bd;
+}
+
+[data-bs-theme="dark"] .sms-recipient-add-pill {
+    background: rgba(110, 168, 254, 0.08);
+    border-color: rgba(110, 168, 254, 0.2) !important;
+    color: #9ec5fe;
+}
+
+[data-bs-theme="dark"] .sms-chat-mode-row {
+    background: rgba(44, 48, 53, 0.98);
+    border-color: rgba(110, 168, 254, 0.16);
+    box-shadow: 0 18px 34px rgba(0, 0, 0, 0.3);
+}
+
+[data-bs-theme="dark"] .sms-chat-mode-row::after {
+    border-color: rgba(44, 48, 53, 0.98) transparent transparent transparent;
+}
+
+[data-bs-theme="dark"] .sms-detail-editor {
+    border-color: rgba(110, 168, 254, 0.18);
+    background: linear-gradient(180deg, #0b1220 0%, #09111e 100%);
+}
+
+[data-bs-theme="dark"] .sms-detail-editor-copy {
+    border-color: rgba(110, 168, 254, 0.18);
+    background: rgba(30, 41, 59, 0.88);
+    color: #dbeafe;
+}
+
+.conversation-item {
+    border-left: 3px solid transparent;
+    padding: 0.55rem 0.7rem;
+    cursor: pointer;
+}
+
+.conversation-item-top {
+    margin-bottom: 0.35rem;
+}
+
+.conversation-item-title {
+    font-size: 0.9rem;
+}
+
+.conversation-preview {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    line-height: 1.25;
+    max-height: calc(1.25em * 2);
+    white-space: normal;
+    word-break: break-word;
+}
+
+.conversation-item-time {
+    font-size: 0.72rem;
+    white-space: nowrap;
+}
+
+.conversation-item-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.conversation-item-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.conversation-item-badges .badge {
+    margin-top: 0 !important;
+}
+
+.conversation-item-total {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.conversation-item.active {
+    border-left-color: var(--bs-primary);
+}
+
+.message-item.unread {
+    background-color: #f0f7ff;
+    border-left: 3px solid #0d6efd;
+}
+
+.message-item:hover {
+    background-color: #f8f9fa;
+}
+
+.contact-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 0.5rem;
+}
+
+.contact-card {
+    padding: 0.5rem;
+    border: 1px solid #dee2e6;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.contact-card:hover {
+    background-color: #e9ecef;
+    transform: translateY(-2px);
+}
+
+.contact-card.selected {
+    background-color: #0d6efd;
+    color: white;
+    border-color: #0d6efd;
+}
+
+#contactsList .list-group-item {
+    cursor: pointer;
+}
+
+#contactsList .list-group-item:hover {
+    background-color: #f8f9fa;
+}
+
+#contactsList .list-group-item.active {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+}
+
+#quickFilterChips .btn.active {
+    background: var(--bs-primary);
+    border-color: var(--bs-primary);
+    color: #fff;
+}
+
+@media (min-width: 576px) {
+    .sms-conversation-card,
+    .sms-chat-card {
+        min-height: calc(100vh - 15rem);
+    }
+
+    .sms-chat-thread,
+    .sms-conversation-list {
+        max-height: calc(100vh - 23rem);
+    }
+}
+
+@media (max-width: 767.98px) {
+    .sms-compact.d-flex.flex-column.flex-md-row {
+        margin-bottom: 1rem !important;
+    }
+
+    .sms-stats-row {
+        margin-bottom: 0.85rem !important;
+    }
+
+    .sms-stats-row .card-body {
+        padding: 0.5rem 0.65rem;
+    }
+
+    .sms-stats-row h4 {
+        font-size: 1rem;
+    }
+
+    .sms-conversation-card,
+    .sms-chat-card {
+        min-height: 0;
+    }
+
+    .sms-chat-thread {
+        min-height: 18rem;
+        max-height: 22rem;
+    }
+
+    .sms-chat-compose-shell {
+        padding: 0.38rem;
+        border-radius: 0.9rem;
+    }
+
+    .sms-chat-recipient-strip {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.22rem;
+    }
+
+    .sms-chat-mode-row {
+        right: 0.38rem;
+        left: 0.38rem;
+        bottom: calc(2.3rem + 0.85rem);
+        padding: 0.6rem;
+    }
+
+    .sms-chat-help {
+        gap: 0.25rem 0.5rem;
+    }
+
+    .conversation-item-footer {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .conversation-item-total {
+        white-space: normal;
+    }
+}
+
+@media (max-width: 991.98px) {
+    .sms-chat-help {
+        display: none;
+    }
+
+    .sms-chat-summary-row {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.2rem;
+    }
+
+    .sms-chat-mode-row {
+        align-items: flex-start !important;
+    }
+
+    .sms-chat-mode-actions {
+        width: 100%;
+        justify-content: flex-end;
+    }
+
+    .sms-recipient-editor {
+        left: 0;
+        right: 0;
+    }
+
+    .sms-chat-schedule-wrap {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .sms-message-header {
+        flex-wrap: wrap;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .sms-chat-form {
+        flex-wrap: wrap;
+        row-gap: 0.34rem;
+    }
+
+    .sms-chat-form > .sms-chat-send-cluster {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .sms-chat-mode-row {
+        bottom: calc(3.9rem + 0.95rem);
+    }
+
+    .sms-chat-char-pill {
+        min-width: 3.1rem;
+    }
+
+    .sms-recipient-row {
+        align-items: flex-start !important;
+    }
+}
+</style>
+
+<script>
+/*
+// ── Bulk select / delete for SMS ────────────────────────────────────────────
+(function () {
+    const modes = { inbox: false, sent: false };
+
+    function getTabEl(tab) {
+        return document.getElementById(tab === 'inbox' ? 'inboxMessages' : 'sentMessages');
+    }
+
+    window.toggleSelectMode = function (tab) {
+        modes[tab] = !modes[tab];
+        const container = getTabEl(tab);
+        if (!container) return;
+
+        const cbs = container.querySelectorAll('.bulk-checkbox');
+        const btn = document.getElementById(tab + 'SelectToggle');
+        const deleteBtn = document.getElementById(tab + 'BulkDeleteBtn');
+        const countEl = document.getElementById(tab + 'SelectedCount');
+
+        cbs.forEach(el => el.classList.toggle('d-none', !modes[tab]));
+
+        if (modes[tab]) {
+            btn.innerHTML = '<i class="bi bi-x-lg me-1"></i>Cancel';
+            btn.classList.replace('btn-outline-secondary', 'btn-outline-secondary');
+        } else {
+            btn.innerHTML = '<i class="bi bi-check2-square me-1"></i>Select';
+            // Uncheck all and hide delete button
+            container.querySelectorAll('.sms-select-cb').forEach(c => c.checked = false);
+            if (deleteBtn) deleteBtn.classList.add('d-none');
+            if (countEl) countEl.classList.add('d-none');
+        }
+
+        // Wire up checkbox change listeners once select mode is on
+        container.querySelectorAll('.sms-select-cb').forEach(cb => {
+            cb.onchange = () => updateSelectionCount(tab);
+        });
+    };
+
+    function updateSelectionCount(tab) {
+        const container = getTabEl(tab);
+        if (!container) return;
+        const checked = container.querySelectorAll('.sms-select-cb:checked');
+        const deleteBtn = document.getElementById(tab + 'BulkDeleteBtn');
+        const countEl = document.getElementById(tab + 'SelectedCount');
+        const n = checked.length;
+
+        if (n > 0) {
+            if (deleteBtn) deleteBtn.classList.remove('d-none');
+            if (countEl) { countEl.textContent = n + ' selected'; countEl.classList.remove('d-none'); }
+        } else {
+            if (deleteBtn) deleteBtn.classList.add('d-none');
+            if (countEl) countEl.classList.add('d-none');
+        }
+    }
+
+    window.bulkDeleteSelected = function (tab) {
+        const container = getTabEl(tab);
+        if (!container) return;
+        const checked = Array.from(container.querySelectorAll('.sms-select-cb:checked'));
+        if (checked.length === 0) return;
+        const ids = checked.map(cb => Number(cb.value));
+
+        if (!confirm('Delete ' + ids.length + ' message' + (ids.length > 1 ? 's' : '') + '?')) return;
+
+        const deleteBtn = document.getElementById(tab + 'BulkDeleteBtn');
+        if (deleteBtn) { deleteBtn.disabled = true; deleteBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Deleting…'; }
+
+        fetch(buildSmsPageRequestUrl('/api/sms/bulk-delete'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids, deviceId: smsPageActiveDeviceId() })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                // Remove rows from DOM
+                checked.forEach(cb => {
+                    const row = cb.closest('.message-item');
+                    if (row) row.remove();
+                });
+                toggleSelectMode(tab); // exit select mode
+                if (typeof showToast === 'function') showToast('Deleted ' + ids.length + ' message' + (ids.length > 1 ? 's' : ''), 'success');
+            } else {
+                if (typeof showToast === 'function') showToast('Delete failed: ' + (data.message || 'unknown error'), 'danger');
+                if (deleteBtn) { deleteBtn.disabled = false; deleteBtn.innerHTML = '<i class="bi bi-trash me-1"></i>Delete selected'; }
+            }
+        })
+        .catch(() => {
+            if (typeof showToast === 'function') showToast('Network error during delete', 'danger');
+            if (deleteBtn) { deleteBtn.disabled = false; deleteBtn.innerHTML = '<i class="bi bi-trash me-1"></i>Delete selected'; }
+        });
+    };
+})();
+*/
+</script>

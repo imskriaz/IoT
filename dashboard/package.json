@@ -1,0 +1,109 @@
+{
+  "name": "IoT",
+  "version": "2.0.0",
+  "description": "Complete IoT management dashboard with camera, audio, GPS, GPIO",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "env:check": "node utils/check_env.js",
+    "env:doctor": "node utils/env_doctor.js",
+    "env:doctor:strict": "node utils/env_doctor.js --strict",
+    "env:repair:safe": "node utils/env_doctor.js --write-safe-secrets --strict",
+    "env:secrets": "node utils/seed_env_secrets.js --dry-run",
+    "env:secrets:write": "node utils/seed_env_secrets.js --write",
+    "env:sync": "node utils/sync_env.js",
+    "init-db": "node utils/init-db.js",
+    "test": "jest --runInBand",
+    "capture:phase1": "node utils/phase1_capture.js",
+    "capture:status": "node utils/capture_status.js",
+    "verify:status-pipeline": "node utils/verify_status_pipeline.js",
+    "compare:phase1": "node utils/phase1_compare.js --save --save-json",
+    "soak:phase1": "node utils/phase1_soak.js",
+    "sessions:phase1": "node utils/phase1_sessions.js",
+    "latest:phase1": "node utils/phase1_sessions.js --latest --verbose",
+    "summary:phase1": "node utils/phase1_sessions.js --summary"
+  },
+  "keywords": [
+    "esp32",
+    "esp32-s3",
+    "iot",
+    "dashboard",
+    "mqtt",
+    "webcam",
+    "gps",
+    "gpio",
+    "sms",
+    "calls",
+    "ussd"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.2",
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^12.8.0",
+    "body-parser": "^1.20.2",
+    "bootstrap": "^5.3.2",
+    "bootstrap-icons": "^1.11.3",
+    "chart.js": "^4.4.1",
+    "compression": "^1.7.4",
+    "connect-flash": "^0.1.1",
+    "connect-sqlite3": "^0.9.16",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "ejs": "^3.1.9",
+    "express": "^4.18.2",
+    "express-ejs-layouts": "^2.5.1",
+    "express-rate-limit": "^8.3.1",
+    "express-session": "^1.17.3",
+    "express-validator": "^7.0.1",
+    "helmet": "^7.1.0",
+    "intl-tel-input": "^26.9.0",
+    "moment": "^2.29.4",
+    "morgan": "^1.10.1",
+    "mqtt": "^5.3.5",
+    "multer": "^1.4.5-lts.1",
+    "node-telegram-bot-api": "^0.67.0",
+    "nodemailer": "^8.0.3",
+    "qrcode": "^1.5.4",
+    "serialport": "^12.0.0",
+    "socket.io": "^4.7.2",
+    "speakeasy": "^2.0.0",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.6",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
+    "winston": "^3.11.0",
+    "winston-daily-rotate-file": "^5.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testTimeout": 15000,
+    "openHandlesTimeout": 5000,
+    "setupFilesAfterEnv": [
+      "<rootDir>/tests/jest.setup.js"
+    ],
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ]
+  },
+  "devDependencies": {
+    "jest": "^30.3.0",
+    "nodemon": "^3.0.2",
+    "supertest": "^7.2.2"
+  },
+  "nodemonConfig": {
+    "ignore": [
+      "logs/**",
+      "data/**",
+      "backups/**",
+      "public/uploads/**",
+      "storage/**",
+      "temp/**"
+    ]
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

@@ -1,0 +1,591 @@
+<div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-3">
+    <div>
+        <h2 class="mb-1"><i class="bi bi-list-task me-2"></i>Queue Manager</h2>
+        <div class="text-muted small">Persisted dashboard queue for the active device. Clear stuck durable work or legacy telephony leftovers; live calls and USSD stay runtime-only over MQTT.</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <button class="btn btn-outline-secondary btn-sm" onclick="refreshQueueManager()">
+            <i class="bi bi-arrow-repeat me-1"></i>Refresh
+        </button>
+        <button class="btn btn-outline-danger btn-sm" onclick="clearFilteredQueue()">
+            <i class="bi bi-trash3 me-1"></i>Clear Filtered Queue
+        </button>
+        <button class="btn btn-outline-primary btn-sm" onclick="runQueueAction('restart-modem')">
+            <i class="bi bi-router me-1"></i>Restart Modem
+        </button>
+        <button class="btn btn-primary btn-sm" onclick="runQueueAction('restart-device')">
+            <i class="bi bi-arrow-clockwise me-1"></i>Restart Device
+        </button>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Active Device</div>
+                <div class="fw-semibold" id="qmDeviceId">--</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Pending</div>
+                <div class="fs-5 fw-semibold" id="qmPending">0</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Active</div>
+                <div class="fs-5 fw-semibold" id="qmActive">0</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Failed</div>
+                <div class="fs-5 fw-semibold" id="qmFailed">0</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Recent</div>
+                <div class="small" id="qmRecent">No recent queue activity</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-4">
+                <label class="form-label small text-muted mb-1">Scope</label>
+                <select class="form-select form-select-sm" id="qmScope" onchange="refreshQueueManager()">
+                    <option value="device">Device Queue</option>
+                    <option value="call">Telephony Leftovers</option>
+                    <option value="all">All Commands</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label small text-muted mb-1">Status</label>
+                <select class="form-select form-select-sm" id="qmStatus" onchange="refreshQueueManager()">
+                    <option value="open">Open Only</option>
+                    <option value="all">All</option>
+                    <option value="pending">Pending</option>
+                    <option value="waiting_response">Waiting Response</option>
+                    <option value="failed">Failed</option>
+                    <option value="ambiguous">Ambiguous</option>
+                    <option value="completed">Completed</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label small text-muted mb-1">Limit</label>
+                <select class="form-select form-select-sm" id="qmLimit" onchange="refreshQueueManager()">
+                    <option value="30">30 rows</option>
+                    <option value="60" selected>60 rows</option>
+                    <option value="100">100 rows</option>
+                    <option value="200">200 rows</option>
+                </select>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th aria-sort="none">
+                            <button type="button" class="btn btn-link btn-sm p-0 text-dark text-decoration-none fw-semibold qm-sort-btn" data-qm-sort="command">
+                                Command <i class="bi bi-chevron-expand ms-1" data-qm-sort-icon="command"></i>
+                            </button>
+                        </th>
+                        <th aria-sort="none">
+                            <button type="button" class="btn btn-link btn-sm p-0 text-dark text-decoration-none fw-semibold qm-sort-btn" data-qm-sort="status">
+                                Status <i class="bi bi-chevron-expand ms-1" data-qm-sort-icon="status"></i>
+                            </button>
+                        </th>
+                        <th aria-sort="none">
+                            <button type="button" class="btn btn-link btn-sm p-0 text-dark text-decoration-none fw-semibold qm-sort-btn" data-qm-sort="attempts">
+                                Attempts <i class="bi bi-chevron-expand ms-1" data-qm-sort-icon="attempts"></i>
+                            </button>
+                        </th>
+                        <th aria-sort="none">
+                            <button type="button" class="btn btn-link btn-sm p-0 text-dark text-decoration-none fw-semibold qm-sort-btn" data-qm-sort="created">
+                                Created <i class="bi bi-chevron-expand ms-1" data-qm-sort-icon="created"></i>
+                            </button>
+                        </th>
+                        <th aria-sort="descending">
+                            <button type="button" class="btn btn-link btn-sm p-0 text-dark text-decoration-none fw-semibold qm-sort-btn" data-qm-sort="updated">
+                                Updated <i class="bi bi-caret-down-fill ms-1" data-qm-sort-icon="updated"></i>
+                            </button>
+                        </th>
+                        <th>Error / Response</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="qmRows">
+                    <tr><td colspan="7" class="text-center text-muted py-4">Loading queue data...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="queueDetailsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <h5 class="modal-title"><i class="bi bi-list-task me-2"></i>Queue Item Details</h5>
+                    <div class="small text-muted" id="queueDetailsSubtitle">Select a row to inspect the full payload.</div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <dl class="row small mb-3" id="queueDetailsMeta"></dl>
+                <div class="mb-3">
+                    <div class="fw-semibold mb-1">Payload</div>
+                    <pre class="bg-light border rounded p-2 small mb-0" id="queueDetailsPayload" style="max-height: 220px; overflow: auto;">-</pre>
+                </div>
+                <div>
+                    <div class="fw-semibold mb-1">Response / Error</div>
+                    <pre class="bg-light border rounded p-2 small mb-0" id="queueDetailsResponse" style="max-height: 220px; overflow: auto;">-</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+    const queueItemsById = new Map();
+    const queueSort = { field: 'updated', direction: 'desc' };
+    const sortableFields = new Set(['command', 'status', 'attempts', 'created', 'updated']);
+
+    function activeDeviceId() {
+        return window.getActiveDeviceId ? window.getActiveDeviceId() : '';
+    }
+
+    async function askQueueConfirm(message, options = {}) {
+        if (typeof window.appConfirm === 'function') {
+            return window.appConfirm({
+                title: options.title || 'Please Confirm',
+                message,
+                confirmText: options.confirmText || 'Confirm',
+                confirmClass: options.confirmClass || 'btn btn-danger'
+            });
+        }
+        return confirm(message);
+    }
+
+    function badgeClass(status) {
+        switch (status) {
+            case 'completed': return 'bg-success';
+            case 'dispatching':
+            case 'waiting_response': return 'bg-primary';
+            case 'pending': return 'bg-warning text-dark';
+            case 'failed': return 'bg-danger';
+            case 'ambiguous': return 'bg-secondary';
+            default: return 'bg-light text-dark';
+        }
+    }
+
+    function esc(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function shortJson(value) {
+        if (!value) return '';
+        try {
+            const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+            const text = JSON.stringify(parsed);
+            return text.length > 140 ? text.slice(0, 140) + '...' : text;
+        } catch (_) {
+            const text = String(value);
+            return text.length > 140 ? text.slice(0, 140) + '...' : text;
+        }
+    }
+
+    function formatJsonBlock(value) {
+        if (value == null || value === '') return '-';
+        try {
+            const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+            return JSON.stringify(parsed, null, 2);
+        } catch (_) {
+            return String(value);
+        }
+    }
+
+    function selectedQueueFilters() {
+        return {
+            scope: document.getElementById('qmScope')?.value || 'device',
+            status: document.getElementById('qmStatus')?.value || 'all',
+            limit: document.getElementById('qmLimit')?.value || '60'
+        };
+    }
+
+    function scopeLabel(scope) {
+        switch (scope) {
+            case 'call': return 'telephony leftover rows';
+            case 'all': return 'command rows';
+            default: return 'device queue rows';
+        }
+    }
+
+    function statusLabel(status) {
+        switch (status) {
+            case 'open': return 'open';
+            case 'all': return 'all clearable';
+            case 'waiting_response': return 'waiting response';
+            default: return String(status || 'all').replace(/_/g, ' ');
+        }
+    }
+
+    function defaultDirectionForSort(field) {
+        return field === 'command' || field === 'status' ? 'asc' : 'desc';
+    }
+
+    function parseTime(value) {
+        const time = Date.parse(String(value || '').replace(' ', 'T'));
+        return Number.isFinite(time) ? time : 0;
+    }
+
+    function compareValues(left, right, direction) {
+        if (left < right) return direction === 'asc' ? -1 : 1;
+        if (left > right) return direction === 'asc' ? 1 : -1;
+        return 0;
+    }
+
+    function compareQueueItems(left, right, field, direction) {
+        let comparison = 0;
+        switch (field) {
+            case 'command':
+                comparison = compareValues(
+                    String(left.command || '').toLowerCase(),
+                    String(right.command || '').toLowerCase(),
+                    direction
+                );
+                break;
+            case 'status':
+                comparison = compareValues(
+                    String(left.status || '').toLowerCase(),
+                    String(right.status || '').toLowerCase(),
+                    direction
+                );
+                break;
+            case 'attempts':
+                comparison = compareValues(Number(left.attemptCount || 0), Number(right.attemptCount || 0), direction);
+                if (comparison === 0) {
+                    comparison = compareValues(Number(left.maxAttempts || 0), Number(right.maxAttempts || 0), direction);
+                }
+                break;
+            case 'created':
+                comparison = compareValues(parseTime(left.createdAt), parseTime(right.createdAt), direction);
+                break;
+            case 'updated':
+            default:
+                comparison = compareValues(parseTime(left.updatedAt), parseTime(right.updatedAt), direction);
+                break;
+        }
+        if (comparison !== 0) return comparison;
+
+        comparison = compareValues(parseTime(left.updatedAt), parseTime(right.updatedAt), 'desc');
+        if (comparison !== 0) return comparison;
+        comparison = compareValues(parseTime(left.createdAt), parseTime(right.createdAt), 'desc');
+        if (comparison !== 0) return comparison;
+        return compareValues(String(left.id || ''), String(right.id || ''), 'desc');
+    }
+
+    function sortQueueItems(items) {
+        return [...items].sort((left, right) =>
+            compareQueueItems(left, right, queueSort.field, queueSort.direction)
+        );
+    }
+
+    function sortIconClass(direction) {
+        return direction === 'asc' ? 'bi-caret-up-fill' : 'bi-caret-down-fill';
+    }
+
+    function updateSortHeaders() {
+        document.querySelectorAll('.qm-sort-btn[data-qm-sort]').forEach((button) => {
+            const field = button.dataset.qmSort;
+            const active = field === queueSort.field;
+            const icon = button.querySelector('[data-qm-sort-icon]');
+            const th = button.closest('th');
+            const nextDirection = active
+                ? (queueSort.direction === 'asc' ? 'desc' : 'asc')
+                : defaultDirectionForSort(field);
+            button.classList.toggle('text-primary', active);
+            button.classList.toggle('text-dark', !active);
+            button.setAttribute('aria-label', `Sort by ${field} ${nextDirection === 'asc' ? 'ascending' : 'descending'}`);
+            if (icon) {
+                icon.className = `bi ${active ? sortIconClass(queueSort.direction) : 'bi-chevron-expand'} ms-1`;
+            }
+            if (th) {
+                th.setAttribute('aria-sort', active ? (queueSort.direction === 'asc' ? 'ascending' : 'descending') : 'none');
+            }
+        });
+    }
+
+    function setQueueSort(field) {
+        if (!sortableFields.has(field)) return;
+        if (queueSort.field === field) {
+            queueSort.direction = queueSort.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+            queueSort.field = field;
+            queueSort.direction = defaultDirectionForSort(field);
+        }
+        updateSortHeaders();
+        refreshQueueManager();
+    }
+
+    function renderSummary(data) {
+        const summary = data?.summary || {};
+        const domains = data?.domains || {};
+        const runtime = data?.runtime || {};
+        const recent = Array.isArray(data?.recent) ? data.recent[0] : null;
+        document.getElementById('qmDeviceId').textContent = data?.deviceId || '--';
+        document.getElementById('qmPending').textContent = Number(summary.pending || 0);
+        document.getElementById('qmActive').textContent = Number(summary.active || 0);
+        document.getElementById('qmFailed').textContent = Number(summary.failed || 0);
+        document.getElementById('qmRecent').textContent = recent
+            ? `${recent.command || 'command'} - ${recent.status || 'unknown'}`
+            : 'No recent queue activity';
+        const topDomain = Object.entries(domains)
+            .map(([name, counts]) => ({
+                name,
+                totalOpen: Number(counts?.totalOpen || 0)
+            }))
+            .filter((entry) => entry.totalOpen > 0)
+            .sort((a, b) => b.totalOpen - a.totalOpen)[0] || null;
+        let recentText = recent
+            ? `${recent.domain ? `${recent.domain} - ` : ''}${recent.command || 'command'} - ${recent.status || 'unknown'}`
+            : 'No recent queue activity';
+        if (!recent && topDomain) {
+            recentText = `${topDomain.name} lane - ${topDomain.totalOpen} open`;
+        }
+        if (runtime.busy) {
+            recentText += ' - device busy';
+        } else if (runtime.queued) {
+            recentText += ' - queued';
+        }
+        document.getElementById('qmRecent').textContent = recentText;
+    }
+
+    function renderRows(items) {
+        const tbody = document.getElementById('qmRows');
+        queueItemsById.clear();
+        if (!Array.isArray(items) || items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No queue rows for this filter.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = sortQueueItems(items).map((item) => {
+            queueItemsById.set(String(item.id), item);
+            const errorText = item.lastError || shortJson(item.responsePayload) || shortJson(item.payload) || '-';
+            const clearDisabled = item.status === 'dispatching';
+            return `
+                <tr class="queue-row" data-queue-id="${esc(item.id)}" role="button" tabindex="0" title="Open queue item details">
+                    <td>
+                        <div class="fw-semibold">${esc(item.command)}</div>
+                        <div class="text-muted small">${esc(item.domain || 'control')}</div>
+                        <div class="text-muted small font-monospace">${esc(item.messageId || item.id)}</div>
+                    </td>
+                    <td>
+                        <span class="badge ${badgeClass(item.status)}">${esc(item.status)}</span>
+                    </td>
+                    <td class="small">${Number(item.attemptCount || 0)} / ${Number(item.maxAttempts || 0)}</td>
+                    <td class="small text-muted">${esc(item.createdAt || '-')}</td>
+                    <td class="small text-muted">${esc(item.updatedAt || item.createdAt || '-')}</td>
+                    <td class="small">
+                        <div class="text-break">${esc(errorText)}</div>
+                    </td>
+                    <td class="text-end">
+                        <button class="btn btn-sm btn-outline-secondary me-1" onclick="showQueueItemDetails('${esc(item.id)}')">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger" ${clearDisabled ? 'disabled' : ''} onclick="clearQueueItem('${esc(item.id)}')">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    window.showQueueItemDetails = function (queueId) {
+        const item = queueItemsById.get(String(queueId || ''));
+        if (!item) return;
+        const subtitle = document.getElementById('queueDetailsSubtitle');
+        const meta = document.getElementById('queueDetailsMeta');
+        const payload = document.getElementById('queueDetailsPayload');
+        const response = document.getElementById('queueDetailsResponse');
+        if (subtitle) subtitle.textContent = `${item.command || 'command'} - ${item.status || 'unknown'} - ${item.messageId || item.id}`;
+        if (meta) {
+            const rows = [
+                ['ID', item.id],
+                ['Device', item.deviceId],
+                ['Domain', item.domain || 'control'],
+                ['Command', item.command],
+                ['Status', item.status],
+                ['Attempts', `${Number(item.attemptCount || 0)} / ${Number(item.maxAttempts || 0)}`],
+                ['Priority', item.priority],
+                ['Requires response', item.requiresResponse ? 'Yes' : 'No'],
+                ['Replay safe', item.replaySafe ? 'Yes' : 'No'],
+                ['Source', item.source || '-'],
+                ['Created', item.createdAt || '-'],
+                ['Updated', item.updatedAt || '-'],
+                ['Published', item.publishedAt || '-'],
+                ['Next attempt', item.nextAttemptAt || '-'],
+                ['Completed', item.completedAt || '-']
+            ];
+            meta.innerHTML = rows.map(([label, value]) => `
+                <dt class="col-sm-4 text-muted">${esc(label)}</dt>
+                <dd class="col-sm-8 text-break">${esc(value == null || value === '' ? '-' : value)}</dd>
+            `).join('');
+        }
+        if (payload) payload.textContent = formatJsonBlock(item.payload);
+        if (response) response.textContent = item.lastError || formatJsonBlock(item.responsePayload);
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('queueDetailsModal')).show();
+    };
+
+    async function loadQueue() {
+        const deviceId = activeDeviceId();
+        if (!deviceId && window.resolveActiveDeviceId) {
+            await window.resolveActiveDeviceId(false);
+        }
+
+        const { scope, status, limit } = selectedQueueFilters();
+        const url = `/api/queue?deviceId=${encodeURIComponent(activeDeviceId())}&scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(status)}&limit=${encodeURIComponent(limit)}&sort=${encodeURIComponent(queueSort.field)}&direction=${encodeURIComponent(queueSort.direction)}`;
+        const response = await fetch(url, { cache: 'no-store' });
+        const payload = await response.json();
+        if (!payload.success) {
+            throw new Error(payload.message || 'Failed to load queue');
+        }
+        if (sortableFields.has(payload.data?.sort)) {
+            queueSort.field = payload.data.sort;
+            queueSort.direction = payload.data.direction === 'asc' ? 'asc' : 'desc';
+            updateSortHeaders();
+        }
+        renderSummary(payload.data);
+        renderRows(payload.data.items || []);
+    }
+
+    window.refreshQueueManager = async function () {
+        const tbody = document.getElementById('qmRows');
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Loading queue data...</td></tr>';
+        try {
+            await loadQueue();
+        } catch (error) {
+            tbody.innerHTML = `<tr><td colspan="7" class="text-center text-danger py-4">${esc(error.message || 'Queue load failed')}</td></tr>`;
+        }
+    };
+
+    document.querySelectorAll('.qm-sort-btn[data-qm-sort]').forEach((button) => {
+        button.addEventListener('click', function () {
+            setQueueSort(this.dataset.qmSort);
+        });
+    });
+
+    document.getElementById('qmRows')?.addEventListener('click', function (event) {
+        if (event.target.closest('button, a, input, select')) return;
+        const row = event.target.closest('.queue-row[data-queue-id]');
+        if (row) showQueueItemDetails(row.dataset.queueId);
+    });
+
+    document.getElementById('qmRows')?.addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const row = event.target.closest('.queue-row[data-queue-id]');
+        if (!row) return;
+        event.preventDefault();
+        showQueueItemDetails(row.dataset.queueId);
+    });
+
+    window.clearQueueItem = async function (queueId) {
+        if (!queueId) return;
+        const ok = await askQueueConfirm('Remove this queue item from the dashboard queue?', {
+            title: 'Clear Queue Item',
+            confirmText: 'Clear',
+            confirmClass: 'btn btn-danger'
+        });
+        if (!ok) return;
+
+        const response = await fetch(`/api/queue/${encodeURIComponent(queueId)}?deviceId=${encodeURIComponent(activeDeviceId())}`, { method: 'DELETE' });
+        const payload = await response.json();
+        if (!payload.success) {
+            if (typeof showToast === 'function') showToast(payload.message || 'Failed to clear queue item', 'danger');
+            return;
+        }
+        if (typeof showToast === 'function') showToast('Queue item cleared', 'success');
+        refreshQueueManager();
+    };
+
+    window.clearFilteredQueue = async function () {
+        const { scope, status } = selectedQueueFilters();
+        const label = `${statusLabel(status)} ${scopeLabel(scope)}`;
+        const ok = await askQueueConfirm(`Clear ${label} for the active device? Active in-flight work will be kept.`, {
+            title: 'Clear Queue',
+            confirmText: 'Clear',
+            confirmClass: 'btn btn-danger'
+        });
+        if (!ok) return;
+
+        const response = await fetch('/api/queue/clear', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deviceId: activeDeviceId(), scope, status })
+        });
+        const payload = await response.json();
+        if (typeof showToast === 'function') {
+            showToast(payload.message || (payload.success ? 'Queue cleared' : 'Queue clear failed'), payload.success ? 'success' : 'danger');
+        }
+        if (payload.success) refreshQueueManager();
+    };
+
+    window.runQueueAction = async function (action) {
+        const map = {
+            'restart-device': 'Restart the whole device now?',
+            'restart-modem': 'Restart only the modem now?'
+        };
+        const ok = await askQueueConfirm(map[action] || 'Run device action?', {
+            title: 'Queue Action',
+            confirmText: 'Run',
+            confirmClass: 'btn btn-primary'
+        });
+        if (!ok) return;
+
+        const response = await fetch(`/api/queue/actions/${encodeURIComponent(action)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deviceId: activeDeviceId() })
+        });
+        const payload = await response.json();
+        if (typeof showToast === 'function') {
+            showToast(payload.message || (payload.success ? 'Action queued' : 'Action failed'), payload.success ? 'success' : 'danger');
+        }
+        if (payload.success) refreshQueueManager();
+    };
+
+    document.addEventListener('device:changed', function () {
+        refreshQueueManager();
+    });
+
+    updateSortHeaders();
+    refreshQueueManager();
+})();
+</script>

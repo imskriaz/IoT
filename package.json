@@ -1,0 +1,15 @@
+{
+  "name": "IoT",
+  "version": "2.0.0",
+  "description": "IoT platform - dashboard + firmware",
+  "private": true,
+  "scripts": {
+    "start":     "cd dashboard && node server.js",
+    "dev":       "cd dashboard && npx nodemon server.js",
+    "test":      "cd dashboard && npm test",
+    "android:build": "cd firmware/android && gradlew.bat :app:assembleRelease",
+    "android:install": "powershell -ExecutionPolicy Bypass -File firmware/android/install-apk.ps1",
+    "android:devices": "adb devices -l"
+  },
+  "workspaces": ["dashboard"]
+}

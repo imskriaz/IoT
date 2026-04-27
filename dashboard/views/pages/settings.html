@@ -1,0 +1,421 @@
+<% const canEditSystem = user && (user.role === 'admin' || user.role === 'superadmin'); %>
+
+<div class="system-settings-page">
+    <div class="system-settings-shell">
+        <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-4">
+            <div>
+                <h2 class="mb-1">
+                    <i class="bi bi-gear me-2"></i>System Settings
+                </h2>
+                <p class="text-muted mb-0">Dashboard runtime, broker connection, and maintenance controls.</p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <a href="/devices/settings" class="btn btn-outline-secondary">
+                    <i class="bi bi-sliders me-2"></i>Device Settings
+                </a>
+                <button class="btn btn-outline-secondary" type="button" onclick="loadSystemSettings(true)">
+                    <i class="bi bi-arrow-repeat me-2"></i>Refresh
+                </button>
+            </div>
+        </div>
+
+        <% if (!canEditSystem) { %>
+        <div class="alert alert-warning d-flex align-items-start gap-3" role="alert">
+            <i class="bi bi-lock fs-5 mt-1"></i>
+            <div>
+                <div class="fw-semibold">Read-only access</div>
+                <div class="small">Only admin users can change dashboard-wide system settings.</div>
+            </div>
+        </div>
+        <% } %>
+
+        <div class="row g-4">
+            <div class="col-12 col-xxl-8">
+                <section class="card system-panel mb-4">
+                    <div class="card-header bg-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5 class="mb-1"><i class="bi bi-speedometer2 me-2"></i>Dashboard Runtime</h5>
+                            <p class="small text-muted mb-0">Controls that affect this dashboard instance only.</p>
+                        </div>
+                        <span class="badge bg-secondary" id="systemSettingsLoadedBadge">Loading</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold" for="systemTimezone">Timezone</label>
+                                <div class="input-group">
+                                    <select class="form-select" id="systemTimezone" <%= canEditSystem ? '' : 'disabled' %>></select>
+                                    <button class="btn btn-outline-secondary" type="button" id="useLocalTimezoneBtn" <%= canEditSystem ? '' : 'disabled' %>>
+                                        <i class="bi bi-crosshair me-1"></i>Local
+                                    </button>
+                                </div>
+                                <div class="form-text" id="systemTimezoneSource">Source: loading</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold" for="systemPhoneCountryCode">Phone Country Code</label>
+                                <input type="text" class="form-control" id="systemPhoneCountryCode" inputmode="numeric" maxlength="8" placeholder="880" <%= canEditSystem ? '' : 'disabled' %>>
+                                <div class="form-text" id="systemPhoneCountryCodeSource">Used for dashboard phone-number formatting.</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold" for="systemLogLevel">Log Level</label>
+                                <select class="form-select" id="systemLogLevel" <%= canEditSystem ? '' : 'disabled' %>>
+                                    <option value="debug">Debug</option>
+                                    <option value="info">Info</option>
+                                    <option value="warn">Warn</option>
+                                    <option value="error">Error</option>
+                                </select>
+                                <div class="form-text" id="systemLogLevelSource">Source: loading</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold" for="deviceStatusRefreshSeconds">Status Refresh</label>
+                                <div class="input-group">
+                                    <input type="number" class="form-control" id="deviceStatusRefreshSeconds" min="5" max="3600" step="5" <%= canEditSystem ? '' : 'disabled' %>>
+                                    <span class="input-group-text">sec</span>
+                                </div>
+                                <div class="form-text" id="deviceStatusRefreshSource">Source: loading</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold" for="statusWatchIntervalSeconds">Watch Interval</label>
+                                <div class="input-group">
+                                    <input type="number" class="form-control" id="statusWatchIntervalSeconds" min="10" max="300" step="5" <%= canEditSystem ? '' : 'disabled' %>>
+                                    <span class="input-group-text">sec</span>
+                                </div>
+                                <div class="form-text" id="statusWatchIntervalSource">How often a visible dashboard asks the device to publish status.</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold" for="logRetentionDays">Log Retention</label>
+                                <div class="input-group">
+                                    <input type="number" class="form-control" id="logRetentionDays" min="1" max="3650" step="1" <%= canEditSystem ? '' : 'disabled' %>>
+                                    <span class="input-group-text">days</span>
+                                </div>
+                                <div class="form-text" id="logRetentionSource">Source: loading</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold" for="statusWatchTtlSeconds">Watch TTL</label>
+                                <div class="input-group">
+                                    <input type="number" class="form-control" id="statusWatchTtlSeconds" min="60" max="900" step="30" <%= canEditSystem ? '' : 'disabled' %>>
+                                    <span class="input-group-text">sec</span>
+                                </div>
+                                <div class="form-text" id="statusWatchTtlSource">How long the device keeps the temporary watch alive before it expires.</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold" for="statusWatchRefreshSeconds">Watch Renew</label>
+                                <div class="input-group">
+                                    <input type="number" class="form-control" id="statusWatchRefreshSeconds" min="30" max="600" step="30" <%= canEditSystem ? '' : 'disabled' %>>
+                                    <span class="input-group-text">sec</span>
+                                </div>
+                                <div class="form-text" id="statusWatchRefreshSource">How often the dashboard renews the watch while tabs are visible.</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold" for="systemPublicBaseUrl">Public Base URL</label>
+                                <input type="url" class="form-control" id="systemPublicBaseUrl" placeholder="https://dashboard.example.com" <%= canEditSystem ? '' : 'disabled' %>>
+                                <div class="form-text" id="systemPublicBaseUrlSource">Used when the dashboard must generate public links.</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold" for="systemOtaBaseUrl">OTA Base URL</label>
+                                <input type="url" class="form-control" id="systemOtaBaseUrl" placeholder="https://ota.example.com" <%= canEditSystem ? '' : 'disabled' %>>
+                                <div class="form-text" id="systemOtaBaseUrlSource">Override this if devices cannot reach the dashboard URL directly.</div>
+                            </div>
+                        </div>
+
+                        <div class="d-flex flex-wrap gap-2 mt-4">
+                            <button class="btn btn-primary" type="button" onclick="saveSystemSettings(this)" <%= canEditSystem ? '' : 'disabled' %>>
+                                <i class="bi bi-check-lg me-2"></i>Save Runtime
+                            </button>
+                            <button class="btn btn-outline-danger" type="button" onclick="restartDashboard(this)" <%= canEditSystem ? '' : 'disabled' %>>
+                                <i class="bi bi-arrow-clockwise me-2"></i>Restart Dashboard
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="card system-panel mb-4" id="mqtt-broker" data-mqtt-settings-panel>
+                    <div class="card-header bg-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5 class="mb-1"><i class="bi bi-broadcast-pin me-2"></i>MQTT Broker</h5>
+                            <p class="small text-muted mb-0" id="mqttStatusDetail">Dashboard broker connection and auth.</p>
+                        </div>
+                        <span class="badge bg-secondary" id="mqttConnectionStatus">Loading</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-warning d-none align-items-start gap-3 mb-3" id="mqttRedirectNotice" role="alert">
+                            <i class="bi bi-exclamation-triangle fs-5 mt-1"></i>
+                            <div>
+                                <div class="fw-semibold">Dashboard MQTT is down</div>
+                                <div class="small">Review the broker host, port, credentials, and TLS settings below, then save and test the connection.</div>
+                            </div>
+                        </div>
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold" for="mqttProtocol">Protocol</label>
+                                <select class="form-select" id="mqttProtocol" <%= canEditSystem ? '' : 'disabled' %>>
+                                    <option value="mqtt">mqtt</option>
+                                    <option value="mqtts">mqtts</option>
+                                    <option value="ws">ws</option>
+                                    <option value="wss">wss</option>
+                                </select>
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label fw-semibold" for="mqttHost">Host</label>
+                                <input type="text" class="form-control" id="mqttHost" placeholder="localhost" <%= canEditSystem ? '' : 'disabled' %>>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label fw-semibold" for="mqttPort">Port</label>
+                                <input type="number" class="form-control" id="mqttPort" min="1" max="65535" <%= canEditSystem ? '' : 'disabled' %>>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold" for="mqttUsername">Username</label>
+                                <input type="text" class="form-control" id="mqttUsername" autocomplete="off" <%= canEditSystem ? '' : 'disabled' %>>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold" for="mqttPassword">Password</label>
+                                <div class="input-group">
+                                    <input type="password" class="form-control" id="mqttPassword" autocomplete="new-password" placeholder="Leave blank to keep current" <%= canEditSystem ? '' : 'disabled' %>>
+                                    <button class="btn btn-outline-secondary" id="mqttPasswordToggle" type="button" onclick="toggleSystemPassword('mqttPassword')" <%= canEditSystem ? '' : 'disabled' %>>
+                                        <i class="bi bi-eye"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="col-md-8">
+                                <label class="form-label fw-semibold" for="mqttClientId">Client ID</label>
+                                <input type="text" class="form-control font-monospace" id="mqttClientId" <%= canEditSystem ? '' : 'disabled' %>>
+                            </div>
+                            <div class="col-md-4 d-flex align-items-end">
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox" id="mqttRejectUnauthorized" <%= canEditSystem ? '' : 'disabled' %>>
+                                    <label class="form-check-label" for="mqttRejectUnauthorized">Verify TLS certificate</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="d-flex flex-wrap gap-2 mt-4">
+                            <button class="btn btn-primary" type="button" onclick="saveMQTTSettings(this)" <%= canEditSystem ? '' : 'disabled' %>>
+                                <i class="bi bi-check-lg me-2"></i>Save MQTT
+                            </button>
+                            <button class="btn btn-outline-secondary" type="button" onclick="testMQTTConnection(this)" <%= canEditSystem ? '' : 'disabled' %>>
+                                <i class="bi bi-plug me-2"></i>Test MQTT
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="card system-panel">
+                    <div class="card-header bg-body">
+                        <h5 class="mb-1"><i class="bi bi-tools me-2"></i>Maintenance</h5>
+                        <p class="small text-muted mb-0">Logs and backups for the dashboard process.</p>
+                    </div>
+                    <div class="card-body">
+                        <div class="maintenance-block">
+                            <div class="maintenance-copy">
+                                <h6 class="mb-1">Logs</h6>
+                                <p class="small text-muted mb-0">Review dashboard logs and clear file plus database log history when needed.</p>
+                            </div>
+                            <div class="d-flex flex-wrap gap-2">
+                                <button class="btn btn-outline-secondary" type="button" onclick="viewLogs(this)">
+                                    <i class="bi bi-eye me-2"></i>View
+                                </button>
+                                <a class="btn btn-outline-secondary" href="/api/settings/logs/download">
+                                    <i class="bi bi-download me-2"></i>Download
+                                </a>
+                                <button class="btn btn-outline-danger" type="button" onclick="clearLogs(this)" <%= canEditSystem ? '' : 'disabled' %>>
+                                    <i class="bi bi-trash me-2"></i>Clear
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="maintenance-block mt-4">
+                            <div class="maintenance-copy">
+                                <h6 class="mb-1">Backups</h6>
+                                <p class="small text-muted mb-0">Recent database backups created by the dashboard.</p>
+                            </div>
+                            <div class="d-flex flex-wrap gap-2">
+                                <button class="btn btn-outline-primary" type="button" onclick="createBackup(this)" <%= canEditSystem ? '' : 'disabled' %>>
+                                    <i class="bi bi-plus-circle me-2"></i>Create Backup
+                                </button>
+                                <button class="btn btn-outline-secondary" type="button" onclick="loadBackups()">
+                                    <i class="bi bi-arrow-repeat me-2"></i>Refresh Backups
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive mt-3">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>File</th>
+                                        <th style="width:110px;">Size</th>
+                                        <th style="width:110px;"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="backupsTableBody">
+                                    <tr><td colspan="3" class="text-muted text-center py-3">Loading backups...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <div class="col-12 col-xxl-4">
+                <section class="card system-panel mb-4">
+                    <div class="card-header bg-body">
+                        <h5 class="mb-1"><i class="bi bi-pc-display me-2"></i>Instance Snapshot</h5>
+                        <p class="small text-muted mb-0">Current host and process information.</p>
+                    </div>
+                    <div class="card-body">
+                        <div class="system-kv">
+                            <span class="text-muted">Hostname</span>
+                            <code id="systemHostname">-</code>
+                        </div>
+                        <div class="system-kv">
+                            <span class="text-muted">Platform</span>
+                            <span id="systemPlatformBadge">-</span>
+                        </div>
+                        <div class="system-kv">
+                            <span class="text-muted">Node</span>
+                            <span id="systemNodeVersion">-</span>
+                        </div>
+                        <div class="system-kv">
+                            <span class="text-muted">CPU</span>
+                            <span id="systemCpu">-</span>
+                        </div>
+                        <div class="system-kv">
+                            <span class="text-muted">Memory</span>
+                            <span id="systemMemory">-</span>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="card system-panel">
+                    <div class="card-header bg-body">
+                        <h5 class="mb-1"><i class="bi bi-lock me-2"></i>Externally Locked Settings</h5>
+                        <p class="small text-muted mb-0">Info only. These values are controlled outside the dashboard and their inputs are disabled.</p>
+                    </div>
+                    <div class="card-body">
+                        <div id="activeOverrideList" class="override-list">
+                            <div class="text-muted">Loading locked settings...</div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="logsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-journal-text me-2"></i>Dashboard Logs</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <pre class="system-log-output mb-0" id="logsContent">Loading...</pre>
+            </div>
+            <div class="modal-footer">
+                <a class="btn btn-outline-secondary" href="/api/settings/logs/download">
+                    <i class="bi bi-download me-2"></i>Download
+                </a>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.system-settings-shell {
+    max-width: 1460px;
+}
+
+.system-panel .card-header,
+.system-panel .card-body {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+}
+
+.system-panel .form-label {
+    margin-bottom: 0.35rem;
+}
+
+#mqtt-broker {
+    scroll-margin-top: 5.5rem;
+}
+
+#mqtt-broker.system-panel--attention {
+    border-color: rgba(245, 158, 11, 0.85);
+    box-shadow: 0 0 0 0.2rem rgba(245, 158, 11, 0.16);
+}
+
+.maintenance-block {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.maintenance-copy {
+    max-width: 34rem;
+}
+
+.system-kv {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.7rem 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.system-kv:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+}
+
+.system-kv:first-child {
+    padding-top: 0;
+}
+
+.override-list {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.override-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.override-item:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+}
+
+.override-meta {
+    min-width: 0;
+}
+
+.override-meta code {
+    font-size: 0.82rem;
+}
+
+.system-log-output {
+    min-height: 420px;
+    padding: 1rem;
+    border-radius: 0.75rem;
+    background: #0f172a;
+    color: #dbeafe;
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+}
+
+@media (max-width: 767.98px) {
+    .system-kv,
+    .override-item {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
+</style>

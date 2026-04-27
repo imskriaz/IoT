@@ -1,0 +1,72 @@
+# Node / dashboard
+node_modules/
+dashboard/node_modules/
+dashboard/.env
+dashboard/logs/
+dashboard/backups/
+dashboard/data/
+dashboard/storage/
+dashboard/temp/
+dashboard/*.db
+dashboard/*.sqlite
+dashboard/*.sqlite3
+dashboard/tmp-dashboard*.cookies.txt
+
+# ESP-IDF / firmware build outputs
+firmware/espidf/**/build/
+firmware/espidf/**/build-*/
+firmware/espidf/**/sdkconfig
+firmware/espidf/**/sdkconfig.old
+firmware/espidf/**/managed_components/
+firmware/espidf/**/dependencies.lock
+firmware/espidf/**/.idf_component_manager/
+firmware/espidf/*-bk/
+
+# Arduino / firmware generated outputs
+firmware/arduino/**/build/
+firmware/arduino/**/.pio/
+firmware/arduino/**/CMakeFiles/
+firmware/arduino/**/sdkconfig
+firmware/arduino/**/sdkconfig.old
+
+# Generic binary/artifact outputs
+/build/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+firmware/android/.gradle/
+firmware/android/build/
+firmware/android/app/build/
+firmware/android/local.properties
+firmware/android/flutter_ui/.dart_tool/
+firmware/android/flutter_ui/.android/Flutter/build/
+*.bin
+*.elf
+*.map
+*.hex
+*.uf2
+*.obj
+*.o
+*.a
+*.log
+*.tmp
+*.cache
+
+# Python / local tooling
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local temp workspaces
+temp/
+.playwright-cli/
+.codex
+.toolchain

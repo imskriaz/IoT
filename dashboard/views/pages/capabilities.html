@@ -1,0 +1,135 @@
+<!-- Capability Editor -->
+<div class="d-flex align-items-center justify-content-between mb-4">
+    <div>
+        <h2 class="mb-1"><i class="bi bi-toggles me-2 text-primary"></i>Capability Editor</h2>
+        <p class="text-muted mb-0 small">Override hardware capability flags for each device</p>
+    </div>
+    <button class="btn btn-sm btn-outline-secondary" onclick="loadDevices()">
+        <i class="bi bi-arrow-repeat me-1"></i>Refresh
+    </button>
+</div>
+
+<div id="capabilitiesContainer">
+    <div class="text-center py-5">
+        <div class="spinner-border text-primary" role="status"></div>
+        <p class="mt-2 text-muted">Loading devices…</p>
+    </div>
+</div>
+
+<script>
+const CAP_FLAGS = [
+    { key: 'gps',      label: 'GPS',      icon: 'bi-geo-alt-fill' },
+    { key: 'battery',  label: 'Battery',  icon: 'bi-battery-charging' },
+    { key: 'sd',       label: 'SD Card',  icon: 'bi-sd-card' },
+    { key: 'camera',   label: 'Camera',   icon: 'bi-camera-video' },
+    { key: 'audio',    label: 'Audio',    icon: 'bi-mic-fill' },
+    { key: 'display',  label: 'Display',  icon: 'bi-display' },
+    { key: 'nfc',      label: 'NFC',      icon: 'bi-broadcast' },
+    { key: 'rfid',     label: 'RFID',     icon: 'bi-upc-scan' },
+    { key: 'touch',    label: 'Touch',    icon: 'bi-hand-index' },
+    { key: 'keyboard', label: 'Keyboard', icon: 'bi-keyboard' }
+];
+
+async function loadDevices() {
+    const container = document.getElementById('capabilitiesContainer');
+    container.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary" role="status"></div></div>';
+    try {
+        const r = await fetch('/api/devices?limit=100', {
+            cache: 'no-store',
+            credentials: 'same-origin',
+            headers: {
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
+            }
+        });
+        const d = await r.json();
+        if (!d.success || !d.devices?.length) {
+            container.innerHTML = '<div class="alert alert-info">No devices found.</div>';
+            return;
+        }
+        let html = '<div class="row g-3">';
+        for (const dev of d.devices) {
+            const caps = await fetchCaps(dev.id);
+            html += renderDeviceCard(dev, caps);
+        }
+        html += '</div>';
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = '<div class="alert alert-danger">Failed to load devices: ' + e.message + '</div>';
+    }
+}
+
+async function fetchCaps(deviceId) {
+    try {
+        const r = await fetch(`/api/devices/${deviceId}/capabilities`);
+        const d = await r.json();
+        return d.caps || {};
+    } catch { return {}; }
+}
+
+function renderDeviceCard(dev, caps) {
+    const flagsHtml = CAP_FLAGS.map(f => `
+        <div class="col-6 col-sm-4 col-lg-3">
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="cap_${dev.id}_${f.key}"
+                    ${caps[f.key] ? 'checked' : ''}
+                    onchange="updateCap('${dev.id}', '${f.key}', this.checked)">
+                <label class="form-check-label small" for="cap_${dev.id}_${f.key}">
+                    <i class="bi ${f.icon} me-1"></i>${f.label}
+                </label>
+            </div>
+        </div>
+    `).join('');
+
+    const statusBadge = dev.is_online
+        ? '<span class="badge bg-success ms-2">Online</span>'
+        : '<span class="badge bg-secondary ms-2">Offline</span>';
+
+    return `
+        <div class="col-12 col-lg-6">
+            <div class="card">
+                <div class="card-header py-2 d-flex align-items-center justify-content-between">
+                    <span class="fw-semibold">
+                        <i class="bi bi-cpu me-2 text-primary"></i>${dev.name || dev.id}
+                        ${statusBadge}
+                    </span>
+                    <small class="text-muted">${dev.id}</small>
+                </div>
+                <div class="card-body">
+                    <div id="capAlert_${dev.id}"></div>
+                    <div class="row g-2">${flagsHtml}</div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+async function updateCap(deviceId, key, value) {
+    const alertEl = document.getElementById(`capAlert_${deviceId}`);
+    try {
+        const r = await fetch(`/api/devices/${deviceId}/capabilities`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ [key]: value })
+        });
+        const d = await r.json();
+        if (d.success) {
+            if (alertEl) {
+                alertEl.innerHTML = '<div class="alert alert-success alert-sm py-1 px-2 small mb-2">Saved</div>';
+                setTimeout(() => { if (alertEl) alertEl.innerHTML = ''; }, 2000);
+            }
+        } else {
+            throw new Error(d.message || 'Failed');
+        }
+    } catch (e) {
+        if (alertEl) {
+            alertEl.innerHTML = `<div class="alert alert-danger alert-sm py-1 px-2 small mb-2">Error: ${e.message}</div>`;
+        }
+        // Revert checkbox
+        const cb = document.getElementById(`cap_${deviceId}_${key}`);
+        if (cb) cb.checked = !value;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', loadDevices);
+</script>

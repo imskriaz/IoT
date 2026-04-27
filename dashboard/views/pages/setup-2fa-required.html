@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Set Up 2FA — Required</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <style>
+        body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh;
+               display: flex; align-items: center; justify-content: center; margin: 0; padding: 20px; }
+        .setup-card { max-width: 460px; width: 100%; border: none; border-radius: 15px;
+                      box-shadow: 0 10px 40px rgba(0,0,0,0.15); }
+        .setup-header { text-align: center; padding: 28px 20px 20px;
+                        background: linear-gradient(135deg, #fd7e14 0%, #dc3545 100%);
+                        color: white; border-radius: 15px 15px 0 0; }
+        .setup-body { padding: 28px; background: white; border-radius: 0 0 15px 15px; }
+        #qrBox { display: none; }
+    </style>
+</head>
+<body>
+<div class="setup-card">
+    <div class="setup-header">
+        <i class="bi bi-shield-lock-fill" style="font-size:2.5rem;"></i>
+        <h4 class="mt-2 mb-0">Two-Factor Authentication Required</h4>
+        <p class="small mb-0 mt-1 opacity-75">Your role requires 2FA. Set it up to continue.</p>
+    </div>
+    <div class="setup-body">
+        <div id="alertBox" class="alert d-none"></div>
+
+        <!-- Step 1: Generate QR -->
+        <div id="stepQr">
+            <p class="text-muted small mb-3">Scan the QR code below with your authenticator app (Google Authenticator, Authy, etc.).</p>
+            <div class="text-center mb-3">
+                <button class="btn btn-primary" id="btnGenerate" onclick="generateQr()">
+                    <i class="bi bi-qr-code me-1"></i>Generate QR Code
+                </button>
+            </div>
+            <div id="qrBox" class="text-center mb-3">
+                <img id="qrImg" src="" alt="QR Code" class="img-fluid rounded mb-2" style="max-width:200px;">
+                <p class="small text-muted mb-1">Or enter this key manually:</p>
+                <code id="secretText" class="small"></code>
+            </div>
+        </div>
+
+        <!-- Step 2: Confirm code -->
+        <div id="stepConfirm" style="display:none;">
+            <p class="text-muted small mb-2">Enter the 6-digit code from your authenticator app to confirm setup.</p>
+            <div class="input-group mb-3">
+                <input type="text" class="form-control text-center font-monospace" id="totpCode"
+                       maxlength="6" placeholder="000000" inputmode="numeric" autocomplete="one-time-code">
+                <button class="btn btn-success" onclick="confirmCode()">
+                    <i class="bi bi-check-lg me-1"></i>Verify
+                </button>
+            </div>
+        </div>
+
+        <div class="text-center mt-2">
+            <a href="/auth/logout" class="text-muted small">Log out</a>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+function showAlert(msg, type = 'danger') {
+    const el = document.getElementById('alertBox');
+    el.className = `alert alert-${type}`;
+    el.textContent = msg;
+    el.classList.remove('d-none');
+}
+
+async function generateQr() {
+    document.getElementById('btnGenerate').disabled = true;
+    try {
+        const res  = await fetch('/auth/api/2fa/setup', { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Failed to generate');
+        document.getElementById('qrImg').src     = data.qr;
+        document.getElementById('secretText').textContent = data.secret;
+        document.getElementById('qrBox').style.display   = '';
+        document.getElementById('stepConfirm').style.display = '';
+    } catch (e) {
+        showAlert(e.message);
+        document.getElementById('btnGenerate').disabled = false;
+    }
+}
+
+async function confirmCode() {
+    const token = document.getElementById('totpCode').value.trim();
+    if (token.length !== 6) return showAlert('Enter the 6-digit code');
+    try {
+        // Confirm the TOTP secret
+        const r1 = await fetch('/auth/api/2fa/confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token })
+        });
+        const d1 = await r1.json();
+        if (!d1.success) throw new Error(d1.message || 'Invalid code');
+
+        // Mark forced setup complete
+        const r2 = await fetch('/auth/api/2fa/complete-required', { method: 'POST' });
+        const d2 = await r2.json();
+        if (!d2.success) throw new Error(d2.message);
+
+        showAlert('2FA enabled! Redirecting…', 'success');
+        setTimeout(() => { window.location = '/'; }, 1000);
+    } catch (e) {
+        showAlert(e.message);
+    }
+}
+
+document.getElementById('totpCode').addEventListener('keydown', e => {
+    if (e.key === 'Enter') confirmCode();
+});
+</script>
+</body>
+</html>

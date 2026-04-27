@@ -1,0 +1,141 @@
+menu "Unified Firmware Main"
+
+config UNIFIED_TASK_REGISTRY_CAPACITY
+    int "Task registry capacity"
+    range 8 64
+    default 24
+
+config UNIFIED_HEALTH_MODULE_CAPACITY
+    int "Health module registry capacity"
+    range 8 64
+    default 32
+
+config UNIFIED_TASK_STACK_SMALL
+    int "Small task stack size"
+    range 3072 8192
+    default 4096
+
+config UNIFIED_TASK_STACK_MEDIUM
+    int "Medium task stack size"
+    range 4096 12288
+    default 6144
+
+config UNIFIED_TASK_STACK_LARGE
+    int "Large task stack size"
+    range 6144 16384
+    default 8192
+
+config UNIFIED_TASK_STACK_XLARGE
+    int "Extra large task stack size"
+    range 8192 24576
+    default 12288
+
+config UNIFIED_HEALTH_INTERVAL_MS
+    int "Health interval ms"
+    range 1000 60000
+    default 5000
+
+config UNIFIED_DIAGNOSTICS_INTERVAL_MS
+    int "Diagnostics interval ms"
+    range 1000 60000
+    default 5000
+
+config UNIFIED_DEVICE_STATUS_INTERVAL_MS
+    int "Device status serial snapshot interval ms"
+    range 5000 300000
+    default 15000
+
+config UNIFIED_WIFI_DISABLE_POWER_SAVE
+    bool "Disable Wi-Fi modem sleep power save for stability"
+    default y
+
+config UNIFIED_MODEM_UART_PORT
+    int "Modem UART port number"
+    range 1 2
+    default 1
+
+config UNIFIED_MODEM_UART_BAUD_RATE
+    int "Modem UART baud rate"
+    range 9600 921600
+    default 115200
+
+config UNIFIED_MODEM_UART_RX_BUFFER
+    int "Modem UART RX buffer size"
+    range 256 4096
+    default 4096
+
+config UNIFIED_MODEM_AT_TIMEOUT_MS
+    int "Modem AT command timeout ms"
+    range 250 20000
+    default 3000
+
+config UNIFIED_MODEM_PROBE_INTERVAL_MS
+    int "Modem probe interval ms"
+    range 1000 60000
+    default 5000
+
+config UNIFIED_MODEM_EVENT_QUEUE_DEPTH
+    int "Modem event queue depth"
+    range 2 32
+    default 8
+
+config UNIFIED_STORAGE_RECORD_CAPACITY
+    int "Storage record spool capacity"
+    range 8 128
+    default 32
+
+config UNIFIED_STORAGE_MOUNT_RETRY_MS
+    int "Storage SD mount retry interval ms"
+    range 1000 60000
+    default 15000
+
+config UNIFIED_STORAGE_TASK_STACK_SIZE
+    int "Storage task stack size"
+    range 8192 24576
+    default 16384
+
+config UNIFIED_STORAGE_MAX_OPEN_FILES
+    int "Storage max open files"
+    range 2 16
+    default 8
+
+config UNIFIED_API_BRIDGE_HISTORY_DEPTH
+    int "API bridge recent action history depth"
+    range 4 32
+    default 8
+
+config UNIFIED_API_BRIDGE_PAYLOAD_LEN
+    int "API bridge payload buffer length"
+    range 256 4096
+    default 3072
+
+config UNIFIED_AUTOMATION_QUEUE_DEPTH
+    int "Automation bridge queue depth"
+    range 2 32
+    default 16
+
+config UNIFIED_AUTOMATION_TOPIC_LEN
+    int "Automation bridge topic buffer length"
+    range 64 256
+    default 128
+
+config UNIFIED_AUTOMATION_MESSAGE_LEN
+    int "Automation bridge message buffer length"
+    range 128 2048
+    default 2048
+
+config UNIFIED_TELEPHONY_POLL_INTERVAL_MS
+    int "Telephony poll interval ms"
+    range 1000 60000
+    default 5000
+
+config UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS
+    int "Telephony action timeout ms"
+    range 1000 120000
+    default 15000
+
+config UNIFIED_WIFI_DEFER_STARTUP_CONNECT
+    bool "Defer Wi-Fi startup connect until explicitly released"
+    default n
+
+endmenu

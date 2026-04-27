@@ -1,0 +1,670 @@
+<div class="container-fluid py-4">
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2 mb-3">
+        <div>
+            <h2 class="mb-1 fs-4"><i class="bi bi-info-circle me-2 text-primary"></i>Device About</h2>
+            <p class="text-muted small mb-0">Live firmware status, board profile, sensors, module health, pins, and IC inventory for the active device.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" id="refreshSpecsBtn">
+                <i class="bi bi-arrow-repeat me-1"></i>Refresh
+            </button>
+            <button class="btn btn-sm btn-outline-primary" id="exportSpecsBtn">
+                <i class="bi bi-download me-1"></i>Export JSON
+            </button>
+        </div>
+    </div>
+
+    <div id="aboutLoading" class="text-center py-5 text-muted">
+        <div class="spinner-border spinner-border-sm me-2"></div>Loading device report...
+    </div>
+
+    <div id="aboutError" class="alert alert-danger d-none"></div>
+
+    <div id="aboutContent" class="d-none">
+        <div class="row g-3 mb-3" id="aboutSummaryCards"></div>
+
+        <div class="row g-3">
+            <div class="col-lg-6">
+                <div class="card h-100">
+                    <div class="card-header fw-semibold"><i class="bi bi-cpu me-2"></i>Identity</div>
+                    <div class="card-body" id="identityTableWrap"></div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="card h-100">
+                    <div class="card-header fw-semibold"><i class="bi bi-broadcast me-2"></i>Live Connectivity</div>
+                    <div class="card-body" id="connectivityTableWrap"></div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="card h-100">
+                    <div class="card-header fw-semibold"><i class="bi bi-activity me-2"></i>Runtime &amp; Sensors</div>
+                    <div class="card-body" id="sensorTableWrap"></div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="card h-100">
+                    <div class="card-header fw-semibold"><i class="bi bi-tools me-2"></i>Build &amp; Telemetry Source</div>
+                    <div class="card-body" id="buildTableWrap"></div>
+                </div>
+            </div>
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header fw-semibold"><i class="bi bi-heart-pulse me-2"></i>Module Health</div>
+                    <div class="card-body" id="moduleHealthWrap"></div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="card h-100">
+                    <div class="card-header fw-semibold"><i class="bi bi-motherboard me-2"></i>Board Profile</div>
+                    <div class="card-body" id="boardTableWrap"></div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="card h-100">
+                    <div class="card-header fw-semibold"><i class="bi bi-stars me-2"></i>Capabilities</div>
+                    <div class="card-body">
+                        <div id="capabilityBadges" class="mb-3"></div>
+                        <div id="interfaceList" class="small text-muted"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header fw-semibold"><i class="bi bi-upc-scan me-2"></i>IC Inventory</div>
+                    <div class="card-body" id="icTableWrap"></div>
+                </div>
+            </div>
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header fw-semibold"><i class="bi bi-diagram-3 me-2"></i>Important Pins / Buses</div>
+                    <div class="card-body" id="pinTableWrap"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    const els = {
+        loading: document.getElementById('aboutLoading'),
+        error: document.getElementById('aboutError'),
+        content: document.getElementById('aboutContent'),
+        summary: document.getElementById('aboutSummaryCards'),
+        identity: document.getElementById('identityTableWrap'),
+        connectivity: document.getElementById('connectivityTableWrap'),
+        sensors: document.getElementById('sensorTableWrap'),
+        build: document.getElementById('buildTableWrap'),
+        moduleHealth: document.getElementById('moduleHealthWrap'),
+        board: document.getElementById('boardTableWrap'),
+        capabilities: document.getElementById('capabilityBadges'),
+        interfaces: document.getElementById('interfaceList'),
+        ics: document.getElementById('icTableWrap'),
+        pins: document.getElementById('pinTableWrap'),
+        refresh: document.getElementById('refreshSpecsBtn'),
+        export: document.getElementById('exportSpecsBtn')
+    };
+
+    let lastSnapshot = null;
+
+    function esc(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function getActiveDeviceId() {
+        if (typeof window.getActiveDeviceId === 'function') {
+            return window.getActiveDeviceId() || '';
+        }
+        return window.DEVICE_ID || localStorage.getItem('activeDeviceId') || '';
+    }
+
+    function formatDate(value) {
+        if (!value) return '-';
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? esc(value) : esc(date.toLocaleString());
+    }
+
+    function formatBoolean(value, labels) {
+        const next = labels || {};
+        if (value === true) return next.yes || 'Yes';
+        if (value === false) return next.no || 'No';
+        return next.unknown || 'Unknown';
+    }
+
+    function formatPercent(value) {
+        return value == null || value === '' ? '-' : `${Number(value).toFixed(0)}%`;
+    }
+
+    function formatSignal(value, dbm) {
+        if (value == null) return '-';
+        return dbm == null ? `${Number(value).toFixed(0)}%` : `${Number(value).toFixed(0)}% (${Number(dbm).toFixed(0)} dBm)`;
+    }
+
+    function formatWifiSignalValue(rssi, percent) {
+        if (rssi != null && rssi !== '') {
+            return `${Number(rssi).toFixed(0)} dBm`;
+        }
+        if (percent != null && percent !== '') {
+            return `${Number(percent).toFixed(0)}%`;
+        }
+        return '-';
+    }
+
+    function formatWifiSecurityLabel(value) {
+        const text = String(value || '').trim();
+        if (!text) return '';
+
+        const normalized = text.toLowerCase().replace(/[\s-]+/g, '_');
+        if (normalized === 'open') return 'Open';
+        if (normalized.includes('wpa2') && normalized.includes('wpa3')) return 'WPA2/WPA3';
+        if (normalized.includes('wpa') && normalized.includes('wpa2')) return 'WPA/WPA2';
+        if (normalized.includes('wpa3')) return 'WPA3';
+        if (normalized.includes('wpa2')) return 'WPA2';
+        if (normalized.includes('wep')) return 'WEP';
+        if (normalized.includes('wpa')) return 'WPA';
+        return text.toUpperCase();
+    }
+
+    function formatCellularNetworkTypeLabel(value) {
+        const text = String(value || '').trim();
+        if (!text) return '';
+
+        const normalized = text.toLowerCase();
+        if (normalized === 'cellular' || normalized === 'unknown' || normalized === 'offline' || normalized === 'no service') {
+            return '';
+        }
+        if (normalized.includes('5g') || normalized.includes('nr')) return '5G';
+        if (normalized.includes('lte') || normalized.includes('4g') || normalized.includes('cat-1') || normalized.includes('cat1')) return '4G/LTE';
+        if (normalized.includes('wcdma') || normalized.includes('umts') || normalized.includes('hspa') || normalized.includes('hsdpa') || normalized.includes('hsupa') || normalized.includes('3g')) return '3G';
+        if (normalized.includes('edge') || normalized.includes('gprs') || normalized.includes('gsm') || normalized.includes('2g')) return '2G';
+        return text.toUpperCase();
+    }
+
+    function formatVoltageMv(value) {
+        if (value == null || value === '') return '-';
+        const mv = Number(value);
+        if (!Number.isFinite(mv)) return esc(value);
+        return `${(mv / 1000).toFixed(3)} V (${mv.toFixed(0)} mV)`;
+    }
+
+    function formatTemperature(value) {
+        if (value == null || value === '') return 'Unknown';
+        const temp = Number(value);
+        return Number.isFinite(temp) ? `${temp.toFixed(1)} &deg;C` : esc(value);
+    }
+
+    function formatBytes(value) {
+        const num = Number(value);
+        if (!Number.isFinite(num) || num < 0) return '-';
+        if (num < 1024) return `${num} B`;
+        if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`;
+        if (num < 1024 * 1024 * 1024) return `${(num / (1024 * 1024)).toFixed(1)} MB`;
+        return `${(num / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    }
+
+    function formatWifiDisconnect(code, text) {
+        const numeric = Number(code || 0);
+        const label = String(text || '').trim();
+        if (!numeric && !label) return '-';
+        if (!label) return String(numeric);
+        return `${numeric} (${label})`;
+    }
+
+    function safeValue(value, fallback) {
+        return value == null || value === '' ? (fallback || '-') : esc(value);
+    }
+
+    function createStatusBadge(state, label) {
+        const map = {
+            ok: 'success',
+            warning: 'warning',
+            error: 'danger',
+            unsupported: 'secondary',
+            unknown: 'secondary'
+        };
+        const cls = map[state] || 'secondary';
+        return `<span class="badge bg-${cls}">${esc(label || state || 'unknown')}</span>`;
+    }
+
+    function renderTable(target, rows) {
+        const filtered = rows.filter(([, value]) => value !== null && value !== undefined && value !== '');
+        if (!filtered.length) {
+            target.innerHTML = '<div class="text-muted small">No data available yet.</div>';
+            return;
+        }
+        target.innerHTML = '<div class="table-responsive"><table class="table table-sm align-middle mb-0">'
+            + filtered.map(([label, value]) =>
+                `<tr><td class="text-muted small" style="width:38%">${esc(label)}</td><td class="small fw-semibold">${value}</td></tr>`
+            ).join('')
+            + '</table></div>';
+    }
+
+    function renderSummary(snapshot) {
+        const specPayload = snapshot.specsPayload || {};
+        const specs = specPayload.specs || {};
+        const device = specs.device || {};
+        const board = specs.board || {};
+        const live = specPayload.live || {};
+        const wifi = live.wifi || {};
+        const modem = snapshot.modemData || {};
+        const operatorLabel = live.operator || live.sim?.operatorName || live.sim?.operator || modem.mobile?.operatorName || modem.mobile?.operator || '';
+        const cellularNetworkType = formatCellularNetworkTypeLabel(live.network || modem.mobile?.networkType);
+        const wifiSecurity = formatWifiSecurityLabel(live.wifi?.security || modem.wifiClient?.security);
+        const moduleHealth = Array.isArray(specPayload.moduleHealth) ? specPayload.moduleHealth : [];
+        const healthyModules = moduleHealth.filter(entry => entry.state === 'ok').length;
+        const gps = snapshot.gpsData || {};
+        const storage = snapshot.storageData?.sd || {};
+        const offline = live.online === false;
+        const cards = [
+            ['Device', device.name || device.id || 'Unknown', device.id || ''],
+            ['Board', board.name || device.board || 'Unknown board', specPayload.metadata?.specSource || specs.detectionSource || 'unknown'],
+            ['Firmware', device.firmware || 'Unknown', specPayload.metadata?.gitHash || specPayload.metadata?.buildDate || ''],
+            ['Network', offline ? 'Offline' : (cellularNetworkType ? `Cellular (${cellularNetworkType})` : (live.network || modem.mobile?.networkType || 'Offline')), offline ? 'No recent heartbeat' : operatorLabel],
+            ['Wi-Fi', offline ? 'No recent heartbeat' : (wifi.connected ? ((wifiSecurity && wifi.ssid) ? `${wifi.ssid} (${wifiSecurity})` : (wifi.ssid || 'Connected')) : (wifi.apEnabled ? (wifi.apSsid || 'AP enabled') : 'Not connected')), offline ? (device.lastSeen ? `Last seen ${formatDate(device.lastSeen)}` : 'Waiting for next heartbeat') : (wifi.ipAddress || wifi.apIp || 'No Wi-Fi IP')],
+            ['Power', formatPercent(live.battery), formatVoltageMv(live.voltageMv)],
+            ['GPS', gps.fix ? 'Fix acquired' : 'No fix', gps.fix ? `${gps.satellites || 0} satellites` : (gps.error || 'Waiting for fix')],
+            ['Modules', `${healthyModules}/${moduleHealth.length || 0} healthy`, storage.mounted ? `SD free ${formatBytes(storage.free)}` : 'Storage pending']
+        ];
+
+        els.summary.innerHTML = cards.map(([label, value, sub]) => `
+            <div class="col-6 col-xl-3">
+                <div class="card h-100 border-0 bg-light">
+                    <div class="card-body py-3">
+                        <div class="text-muted small mb-1">${esc(label)}</div>
+                        <div class="fw-semibold">${esc(value)}</div>
+                        <div class="small text-muted mt-1">${esc(sub || '')}</div>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function renderCapabilities(specs) {
+        const caps = Array.isArray(specs.capabilities) ? specs.capabilities : [];
+        els.capabilities.innerHTML = caps.length
+            ? caps.map(cap => `<span class="badge bg-primary-subtle text-primary-emphasis border me-1 mb-1">${esc(cap)}</span>`).join('')
+            : '<span class="text-muted small">No capability flags reported.</span>';
+
+        const interfaces = Array.isArray(specs.interfaces) ? specs.interfaces : [];
+        els.interfaces.innerHTML = interfaces.length
+            ? '<ul class="mb-0 ps-3">' + interfaces.map(item => `<li>${esc(item)}</li>`).join('') + '</ul>'
+            : 'No hardware interface notes available.';
+    }
+
+    function renderInventory(specs) {
+        const items = Array.isArray(specs.ics) ? specs.ics : [];
+        if (!items.length) {
+            els.ics.innerHTML = '<div class="text-muted small">No IC inventory available for this device profile yet.</div>';
+            return;
+        }
+        els.ics.innerHTML = '<div class="table-responsive"><table class="table table-sm align-middle mb-0">'
+            + '<thead><tr><th>Ref</th><th>IC / Part</th><th>Role</th></tr></thead><tbody>'
+            + items.map(item => `<tr><td class="fw-semibold">${esc(item.ref || '-')}</td><td>${esc(item.model || '-')}</td><td>${esc(item.role || '-')}</td></tr>`).join('')
+            + '</tbody></table></div>';
+    }
+
+    function renderPins(specs) {
+        const pins = Array.isArray(specs.pins) ? specs.pins : [];
+        if (!pins.length) {
+            els.pins.innerHTML = '<div class="text-muted small">No board pin map available.</div>';
+            return;
+        }
+        els.pins.innerHTML = '<div class="table-responsive"><table class="table table-sm align-middle mb-0">'
+            + '<thead><tr><th>Function</th><th>Pin</th><th>Notes</th></tr></thead><tbody>'
+            + pins.map(item => `<tr><td class="fw-semibold">${esc(item.label || '-')}</td><td>${esc(item.pin ?? '-')}</td><td>${esc(item.notes || '-')}</td></tr>`).join('')
+            + '</tbody></table></div>';
+    }
+
+    function summarizeModuleDetail(entry, snapshot) {
+        const live = snapshot?.specsPayload?.live || {};
+        const modemData = snapshot?.modemData || {};
+        const gpsData = snapshot?.gpsData || {};
+        const storage = snapshot?.storageData?.sd || {};
+        const wifi = live.wifi || {};
+        const wifiClient = modemData.wifiClient || {};
+        const wifiHotspot = modemData.wifiHotspot || {};
+        const modemNetworkType = formatCellularNetworkTypeLabel(live.network || modemData.mobile?.networkType);
+        const wifiSecurity = formatWifiSecurityLabel(wifi.security || wifiClient.security);
+
+        switch (entry.moduleKey) {
+            case 'mqtt':
+                if (!live.online) return 'No recent heartbeat';
+                return entry.state === 'ok' ? 'Broker connected' : 'Broker disconnected';
+            case 'modem':
+                if (!live.online) return 'No recent heartbeat';
+                return [modemNetworkType ? `Cellular (${modemNetworkType})` : (live.network || modemData.mobile?.networkType), live.operator || live.sim?.operatorName || live.sim?.operator || modemData.mobile?.operatorName || modemData.mobile?.operator, formatSignal(live.signal, live.signalDbm)]
+                    .filter(Boolean)
+                    .join(' - ') || 'Online';
+            case 'wifi':
+                if (!live.online) return 'No recent heartbeat';
+                if (wifi.connected || wifiClient.connected) {
+                    return [wifiSecurity && (wifi.ssid || wifiClient.ssid) ? `${wifi.ssid || wifiClient.ssid} (${wifiSecurity})` : (wifi.ssid || wifiClient.ssid || 'Station connected'), wifi.ipAddress || wifiClient.ipAddress, wifi.rssi != null ? `${wifi.rssi} dBm` : null]
+                        .filter(Boolean)
+                        .join(' - ');
+                }
+                if (wifi.apEnabled || wifiHotspot.enabled) {
+                    const clients = wifi.clients ?? wifiHotspot.connectedClients ?? 0;
+                    return [wifi.apSsid || wifiHotspot.ssid || 'Hotspot active', wifi.apIp || wifiHotspot.ipAddress, `${clients} client${clients === 1 ? '' : 's'}`]
+                        .filter(Boolean)
+                        .join(' - ');
+                }
+                return 'Wi-Fi idle';
+            case 'gps':
+                if (gpsData.fix) {
+                    return [`${gpsData.satellites || 0} satellites`, gpsData.lat != null && gpsData.lng != null ? `${Number(gpsData.lat).toFixed(5)}, ${Number(gpsData.lng).toFixed(5)}` : null]
+                        .filter(Boolean)
+                        .join(' - ');
+                }
+                return gpsData.error || 'Waiting for fix';
+            case 'storage':
+                if (storage.mounted) {
+                    return [`Mounted`, `${formatBytes(storage.free)} free`, `${formatBytes(storage.used)} used`]
+                        .filter(Boolean)
+                        .join(' - ');
+                }
+                return storage.error || 'Storage not mounted';
+            default:
+                break;
+        }
+
+        if (entry.details && typeof entry.details === 'object') {
+            const details = entry.details;
+            const summary = [
+                details.ssid,
+                details.ipAddress || details.ip,
+                details.path,
+                details.files != null ? `${details.files} files` : null,
+                details.clients != null ? `${details.clients} clients` : null,
+                details.rssi != null ? `${details.rssi} dBm` : null
+            ].filter(Boolean);
+            if (summary.length) return summary.join(' - ');
+        }
+
+        return entry.message || 'Waiting for telemetry';
+    }
+
+    function renderModuleHealth(moduleHealth, snapshot) {
+        if (!Array.isArray(moduleHealth) || !moduleHealth.length) {
+            els.moduleHealth.innerHTML = '<div class="text-muted small">No module health entries reported yet.</div>';
+            return;
+        }
+
+        els.moduleHealth.innerHTML = '<div class="table-responsive"><table class="table table-sm align-middle mb-0">'
+            + '<thead><tr><th>Module</th><th>Status</th><th>Current State</th><th>Last Success</th><th>Last Failure</th></tr></thead><tbody>'
+            + moduleHealth.map(entry => {
+                const currentDetail = summarizeModuleDetail(entry, snapshot);
+                const secondaryMessage = entry.message && entry.message !== currentDetail ? entry.message : '';
+                return `
+                <tr>
+                    <td class="fw-semibold">${esc(entry.label || entry.moduleKey || '-')}</td>
+                    <td>${createStatusBadge(entry.state, entry.state === 'unsupported' ? 'pending' : entry.state)}</td>
+                    <td class="small">
+                        <div class="fw-semibold">${esc(currentDetail || 'Waiting for telemetry')}</div>
+                        ${secondaryMessage ? `<div class="text-muted mt-1">${esc(secondaryMessage)}</div>` : ''}
+                    </td>
+                    <td class="small">${entry.lastSuccessAt ? formatDate(entry.lastSuccessAt) : '-'}</td>
+                    <td class="small">${entry.lastFailureAt ? formatDate(entry.lastFailureAt) : '-'}</td>
+                </tr>
+            `;
+            }).join('')
+            + '</tbody></table></div>';
+    }
+
+    async function fetchJson(url) {
+        const response = await fetch(url, {
+            cache: 'no-store',
+            credentials: 'same-origin',
+            headers: {
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
+            }
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.message || `Request failed for ${url}`);
+        }
+        return data;
+    }
+
+    async function fetchOptional(url, fallback) {
+        try {
+            return await fetchJson(url);
+        } catch (_) {
+            return fallback;
+        }
+    }
+
+    function renderSnapshot(snapshot) {
+        const specPayload = snapshot.specsPayload || {};
+        const specs = specPayload.specs || {};
+        const device = specs.device || {};
+        const runtime = specs.runtime || {};
+        const board = specs.board || {};
+        const live = specPayload.live || {};
+        const liveWifi = live.wifi || {};
+        const modemData = snapshot.modemData || {};
+        const gpsData = snapshot.gpsData || {};
+        const storageData = snapshot.storageData || {};
+        const sd = storageData.sd || {};
+        const moduleHealth = Array.isArray(specPayload.moduleHealth) ? specPayload.moduleHealth : [];
+        const metadata = specPayload.metadata || {};
+        const system = modemData.system || {};
+        const wifiClient = modemData.wifiClient || {};
+        const wifiHotspot = modemData.wifiHotspot || {};
+        const modemNetworkType = formatCellularNetworkTypeLabel(live.network || modemData.mobile?.networkType);
+        const wifiSecurity = formatWifiSecurityLabel(liveWifi.security || wifiClient.security);
+        const offline = live.online === false;
+        const heartbeatNotice = offline ? 'No recent heartbeat' : '-';
+        const operatorLabel = live.operator || live.sim?.operatorName || live.sim?.operator || modemData.mobile?.operatorName || modemData.mobile?.operator || '';
+        const simNumber = live.sim?.number
+            || live.sim?.subscriberNumber
+            || live.simNumber
+            || live.subscriberNumber
+            || modemData.mobile?.simNumber
+            || modemData.mobile?.subscriberNumber
+            || modemData.mobile?.number
+            || '';
+        const hardwareId = runtime.imei
+            || live.imei
+            || live.androidId
+            || live.device?.androidId
+            || live.installId
+            || live.device?.installId
+            || live.modem?.imei
+            || modemData.mobile?.imei
+            || system.imei
+            || '';
+        const imsi = live.sim?.imsi || live.imsi || modemData.mobile?.imsi || system.imsi || '';
+        const iccid = live.sim?.iccid || live.iccid || modemData.mobile?.iccid || system.iccid || '';
+        const wifiMac = liveWifi.macAddress
+            || liveWifi.mac
+            || live.wifiMac
+            || wifiClient.macAddress
+            || wifiClient.mac
+            || system.wifiMac
+            || '';
+        const hotspotMac = liveWifi.apMac
+            || liveWifi.apMacAddress
+            || wifiHotspot.macAddress
+            || wifiHotspot.mac
+            || system.hotspotMac
+            || '';
+        const modemModel = live.modem?.model
+            || modemData.mobile?.modemModel
+            || modemData.mobile?.model
+            || system.modemModel
+            || '';
+        const mqttClientId = live.mqtt?.clientId || device.mqttClientId || system.mqttClientId || '';
+
+        renderSummary(snapshot);
+
+        renderTable(els.identity, [
+            ['Device ID', `<code>${esc(device.id || '')}</code>`],
+            ['Device name', safeValue(device.name)],
+            ['Location', safeValue(device.location)],
+            ['Type', safeValue(device.type)],
+            ['Hardware ID', safeValue(hardwareId)],
+            ['SIM / phone number', simNumber ? safeValue(simNumber) : 'Checking...'],
+            ['IMSI', safeValue(imsi)],
+            ['ICCID', safeValue(iccid)],
+            ['Wi-Fi MAC', safeValue(wifiMac)],
+            ['Hotspot MAC', safeValue(hotspotMac)],
+            ['Modem model', safeValue(modemModel)],
+            ['Created', formatDate(device.createdAt)],
+            ['Firmware version', safeValue(device.firmware)],
+            ['Board slug', safeValue(metadata.board || board.slug)],
+            ['MQTT client ID', safeValue(mqttClientId)],
+            ['MQTT host', safeValue(device.mqttHost)],
+            ['MQTT user', safeValue(device.mqttUser)],
+            ['APN', safeValue(device.apn)],
+            ['Local IP', safeValue(device.localIp)],
+            ['Last seen', formatDate(device.lastSeen)]
+        ]);
+
+        renderTable(els.connectivity, [
+            ['Device online', formatBoolean(device.online, { yes: 'Online', no: 'Offline' })],
+            ['Active path', offline ? heartbeatNotice : safeValue(live.activePath)],
+            ['Cellular network', offline ? heartbeatNotice : safeValue(modemNetworkType ? `Cellular (${modemNetworkType})` : (live.network || modemData.mobile?.networkType))],
+            ['Operator', offline ? heartbeatNotice : safeValue(operatorLabel)],
+            ['SIM Number', offline ? heartbeatNotice : (simNumber ? safeValue(simNumber) : 'Checking...')],
+            ['Cellular signal', offline ? heartbeatNotice : formatSignal(live.signal, live.signalDbm)],
+            ['Cellular IP', offline ? heartbeatNotice : safeValue(live.ip || modemData.mobile?.ipAddress)],
+            ['Wi-Fi mode', offline ? heartbeatNotice : safeValue(liveWifi.mode || wifiClient.mode || 'off')],
+            ['Wi-Fi connected', offline ? heartbeatNotice : formatBoolean(liveWifi.connected || wifiClient.connected, { yes: 'Connected', no: 'No station link' })],
+            ['Wi-Fi SSID', offline ? heartbeatNotice : safeValue((wifiSecurity && (liveWifi.ssid || wifiClient.ssid)) ? `${liveWifi.ssid || wifiClient.ssid} (${wifiSecurity})` : (liveWifi.ssid || wifiClient.ssid))],
+            ['Wi-Fi IP', offline ? heartbeatNotice : safeValue(liveWifi.ipAddress || wifiClient.ipAddress)],
+            ['Wi-Fi RSSI', offline ? heartbeatNotice : esc(formatWifiSignalValue(liveWifi.rssi, wifiClient.signalStrength))],
+            ['Wi-Fi disconnect reason', offline ? heartbeatNotice : esc(formatWifiDisconnect(liveWifi.lastDisconnectReason, liveWifi.lastDisconnectReasonText))],
+            ['Hotspot enabled', offline ? heartbeatNotice : formatBoolean(liveWifi.apEnabled || wifiHotspot.enabled, { yes: 'Enabled', no: 'Disabled' })],
+            ['Hotspot SSID', offline ? heartbeatNotice : safeValue(liveWifi.apSsid || wifiHotspot.ssid)],
+            ['Hotspot IP', offline ? heartbeatNotice : safeValue(liveWifi.apIp || wifiHotspot.ipAddress)],
+            ['Hotspot clients', offline ? heartbeatNotice : esc(String(liveWifi.clients ?? wifiHotspot.connectedClients ?? 0))],
+            ['GPS fix', formatBoolean(gpsData.fix, { yes: 'Fix acquired', no: 'No fix', unknown: gpsData.error || 'Unknown' })],
+            ['GPS satellites', gpsData.satellites == null ? '-' : esc(String(gpsData.satellites))],
+            ['GPS last fix', gpsData.lastFix ? formatDate(gpsData.lastFix) : (gpsData.error ? esc(gpsData.error) : '-')],
+            ['Storage mounted', formatBoolean(sd.mounted, { yes: 'Mounted', no: sd.error || 'Not mounted' })],
+            ['Storage free', sd.mounted ? formatBytes(sd.free) : '-'],
+            ['MQTT session', offline ? heartbeatNotice : formatBoolean(live.mqtt?.connected, { yes: live.mqtt?.subscribed ? 'Connected + subscribed' : 'Connected', no: 'Disconnected' })],
+            ['Sync state', offline ? heartbeatNotice : formatBoolean(live.sync?.inSync, { yes: 'In sync', no: 'Drift detected', unknown: '-' })]
+        ]);
+
+        renderTable(els.sensors, [
+            ['Battery SOC', formatPercent(runtime.battery)],
+            ['Battery voltage', formatVoltageMv(runtime.voltageMv || system.voltage_mV)],
+            ['Charging now', formatBoolean(runtime.charging, { yes: 'Yes', no: 'No', unknown: 'Unknown (telemetry pending)' })],
+            ['Temperature', formatTemperature(runtime.temperature)],
+            ['Fuel gauge IC', safeValue(system.fuelGaugeIc || 'MAX17048G')],
+            ['Charging IC', safeValue(system.chargingIc || 'ETA6098')],
+            ['Solar charging IC', safeValue(system.solarChargingIc || 'CN3791')],
+            ['Hardware ID', safeValue(hardwareId)],
+            ['Uptime', safeValue(runtime.uptime)],
+            ['Module telemetry', moduleHealth.length ? `${moduleHealth.length} modules tracked` : 'Waiting for module reports']
+        ]);
+
+        renderTable(els.build, [
+            ['Spec source', safeValue(metadata.specSource || specs.detectionSource)],
+            ['Capabilities reported', specPayload.caps ? 'Yes' : 'No'],
+            ['Profile probed', metadata.probed ? 'Yes' : 'No'],
+            ['Profile probed at', formatDate(metadata.probedAt)],
+            ['Profile updated at', formatDate(metadata.updatedAt)],
+            ['Build date', safeValue(metadata.buildDate)],
+            ['Build time', safeValue(metadata.buildTime)],
+            ['Git hash', safeValue(metadata.gitHash)],
+            ['Firmware Wi-Fi data', offline ? 'No recent heartbeat' : (liveWifi.mode ? 'Runtime heartbeat' : 'Waiting for firmware heartbeat')],
+            ['GPS telemetry source', gpsData.error ? esc(gpsData.error) : 'On-demand firmware query'],
+            ['Storage telemetry source', sd.error ? esc(sd.error) : 'On-demand firmware query'],
+            ['MQTT reconnect count', offline ? heartbeatNotice : (live.mqtt?.reconnectCount == null ? '-' : esc(String(live.mqtt.reconnectCount)))],
+            ['MQTT publishes / failures', offline ? heartbeatNotice : (live.mqtt ? esc(`${live.mqtt.publishedCount || 0} / ${live.mqtt.publishFailures || 0}`) : '-')],
+            ['Dashboard ack age', offline ? heartbeatNotice : (live.sync?.dashboardAckAgeMs == null ? '-' : esc(`${live.sync.dashboardAckAgeMs} ms`))],
+            ['Desired / applied sync version', offline ? heartbeatNotice : (live.sync ? esc(`${live.sync.desiredVersion || 0} / ${live.sync.appliedVersion || 0}`) : '-')],
+            ['Storage queue / drops', live.storage ? esc(`${live.storage.queueDepth || 0} / ${live.storage.dropped || 0}`) : '-'],
+            ['Storage mode', !live.storage ? '-' : (live.storage.bufferedOnly ? 'Buffered only' : (live.storage.mounted ? 'Mounted' : 'Unavailable'))],
+            ['Runtime heap / PSRAM', !live.systemRuntime ? '-' : esc(`${live.systemRuntime.freeHeap ?? 0} / ${live.systemRuntime.freePsram ?? 0}`)],
+            ['Largest free block', live.systemRuntime?.largestFreeBlock == null ? '-' : esc(String(live.systemRuntime.largestFreeBlock))],
+            ['Last reboot reason', safeValue(live.systemRuntime?.rebootReason)],
+            ['Degraded reason', safeValue(live.systemRuntime?.degradedReason)],
+            ['Call transport', offline ? heartbeatNotice : formatBoolean(live.transport?.mqttCommandAccepting, { yes: live.transport?.voiceSessionActive ? 'Ready, voice active' : 'Ready', no: live.transport?.reason || 'Blocked' })]
+        ]);
+
+        renderTable(els.board, [
+            ['Board', safeValue(board.name || device.board)],
+            ['Vendor', safeValue(board.vendor)],
+            ['Revision', safeValue(board.revision)],
+            ['Family', safeValue(board.family)],
+            ['Chip / SoC', safeValue(board.chip)],
+            ['CPU', safeValue(board.cpu)],
+            ['Flash', safeValue(board.flash)],
+            ['PSRAM', safeValue(board.psram)],
+            ['Detection source', safeValue(specs.detectionSource || metadata.specSource)],
+            ['Notes', safeValue(board.notes)]
+        ]);
+
+        renderModuleHealth(moduleHealth, snapshot);
+        renderCapabilities(specs);
+        renderInventory(specs);
+        renderPins(specs);
+    }
+
+    async function loadSpecs() {
+        const deviceId = getActiveDeviceId();
+        els.loading.classList.remove('d-none');
+        els.error.classList.add('d-none');
+        els.content.classList.add('d-none');
+
+        if (!deviceId) {
+            els.loading.classList.add('d-none');
+            els.error.classList.remove('d-none');
+            els.error.textContent = 'No active device selected.';
+            return;
+        }
+
+        try {
+            const [specsPayload, modemPayload, gpsPayload, storagePayload] = await Promise.all([
+                fetchJson(`/api/devices/${encodeURIComponent(deviceId)}/specs`),
+                fetchOptional(`/api/modem/status?deviceId=${encodeURIComponent(deviceId)}`, { data: {} }),
+                fetchOptional(`/api/location/status?deviceId=${encodeURIComponent(deviceId)}`, { data: {} }),
+                fetchOptional(`/api/storage/info?deviceId=${encodeURIComponent(deviceId)}`, { data: { sd: {} } })
+            ]);
+
+            lastSnapshot = {
+                deviceId,
+                fetchedAt: new Date().toISOString(),
+                specsPayload,
+                modemData: modemPayload.data || {},
+                gpsData: gpsPayload.data || {},
+                storageData: storagePayload.data || {}
+            };
+
+            renderSnapshot(lastSnapshot);
+            els.loading.classList.add('d-none');
+            els.content.classList.remove('d-none');
+        } catch (error) {
+            els.loading.classList.add('d-none');
+            els.error.classList.remove('d-none');
+            els.error.textContent = error.message || 'Failed to load device report.';
+        }
+    }
+
+    function exportSnapshot() {
+        if (!lastSnapshot) return;
+        const blob = new Blob([JSON.stringify(lastSnapshot, null, 2)], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${lastSnapshot.deviceId || 'device'}-about-report.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    els.refresh?.addEventListener('click', loadSpecs);
+    els.export?.addEventListener('click', exportSnapshot);
+    window.addEventListener('device:changed', loadSpecs);
+    loadSpecs();
+})();
+</script>

@@ -1,0 +1,118 @@
+<div class="container-fluid py-4">
+    <%- include('../partials/cap-banner.html', { cap: 'nfc', label: 'NFC module (PN532 or compatible)' }) %>
+    <div class="row mb-3">
+        <div class="col">
+            <h4 class="mb-0"><i class="bi bi-broadcast-pin me-2 text-primary"></i>NFC Read / Write</h4>
+            <small class="text-muted">Read and write NFC tags via device</small>
+        </div>
+        <div class="col-auto">
+            <span class="badge bg-secondary" id="nfcStatus">Idle</span>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <!-- Read -->
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header fw-semibold"><i class="bi bi-reception-4 me-2"></i>Read Tag</div>
+                <div class="card-body">
+                    <p class="text-muted small">Place NFC tag near the device antenna, then click Read.</p>
+                    <button class="btn btn-primary w-100 mb-3" onclick="nfcRead()">
+                        <i class="bi bi-arrow-down-circle me-1"></i>Start Reading
+                    </button>
+                    <div id="nfcReadResult" class="bg-light rounded p-3 font-monospace small" style="min-height:80px;white-space:pre-wrap;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Write -->
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header fw-semibold"><i class="bi bi-pencil-square me-2"></i>Write Tag</div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Type</label>
+                        <select id="nfcWriteType" class="form-select">
+                            <option value="text">Plain Text (NDEF)</option>
+                            <option value="url">URL (NDEF)</option>
+                            <option value="raw">Raw Hex</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Data</label>
+                        <textarea id="nfcWriteData" class="form-control" rows="3" placeholder="Enter data to write..."></textarea>
+                    </div>
+                    <button class="btn btn-warning w-100" onclick="nfcWrite()">
+                        <i class="bi bi-arrow-up-circle me-1"></i>Write to Tag
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Log -->
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header fw-semibold d-flex justify-content-between">
+                    <span><i class="bi bi-clock-history me-2"></i>NFC Event Log</span>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('nfcLog').innerHTML=''">Clear</button>
+                </div>
+                <div id="nfcLog" class="card-body font-monospace small" style="max-height:200px;overflow-y:auto;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const DEVICE_ID = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
+
+function nfcRead() {
+    document.getElementById('nfcStatus').textContent = 'Reading…';
+    document.getElementById('nfcStatus').className = 'badge bg-warning';
+    fetch('/api/gpio/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId: DEVICE_ID, command: 'nfc-read', params: {} })
+    }).then(r => r.json()).then(d => {
+        document.getElementById('nfcStatus').textContent = 'Idle';
+        document.getElementById('nfcStatus').className = 'badge bg-secondary';
+        if (d.success) {
+            document.getElementById('nfcReadResult').textContent = JSON.stringify(d.data || d, null, 2);
+            nfcLog('READ', d.data);
+        } else {
+            showToast(d.error || 'Read failed', 'danger');
+        }
+    }).catch(() => { showToast('Request failed', 'danger'); });
+}
+
+function nfcWrite() {
+    const data = document.getElementById('nfcWriteData').value.trim();
+    const type = document.getElementById('nfcWriteType').value;
+    if (!data) return showToast('Enter data to write', 'warning');
+    fetch('/api/gpio/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId: DEVICE_ID, command: 'nfc-write', params: { type, data } })
+    }).then(r => r.json()).then(d => {
+        showToast(d.success ? 'Written successfully' : (d.error || 'Write failed'), d.success ? 'success' : 'danger');
+        if (d.success) nfcLog('WRITE', { type, data });
+    }).catch(() => showToast('Request failed', 'danger'));
+}
+
+function nfcLog(dir, payload) {
+    const log = document.getElementById('nfcLog');
+    const entry = document.createElement('div');
+    entry.className = 'mb-1';
+    entry.textContent = `[${new Date().toLocaleTimeString()}] ${dir}: ${JSON.stringify(payload)}`;
+    log.prepend(entry);
+}
+
+if (window.socket) {
+    socket.on('nfc:read', data => {
+        if (data.deviceId !== DEVICE_ID) return;
+        document.getElementById('nfcReadResult').textContent = JSON.stringify(data, null, 2);
+        nfcLog('READ', data);
+        document.getElementById('nfcStatus').textContent = 'Tag detected';
+        document.getElementById('nfcStatus').className = 'badge bg-success';
+    });
+}
+</script>
