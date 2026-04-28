@@ -3,7 +3,7 @@
 const { applyModuleRulesToCapabilities } = require('../utils/moduleRules');
 
 describe('moduleRules', () => {
-    test('hides calls when live talk is not complete even if dial/control/status exist', () => {
+    test('shows calls when the ESP32 dial path is ready without live talk support', () => {
         const status = {
             online: true,
             mqtt_connected: true,
@@ -11,9 +11,8 @@ describe('moduleRules', () => {
             telephony_supported: true,
             telephony_enabled: true,
             modem_registered: true,
-            call_phone_permission: true,
-            answer_phone_calls_permission: true,
-            read_call_log_permission: true,
+            call_dial_supported: true,
+            call_control_supported: false,
             call_live_talk_supported: false
         };
 
@@ -22,9 +21,9 @@ describe('moduleRules', () => {
             rawStatus: status
         });
 
-        expect(caps.calls).toBe(false);
-        expect(caps.modules.calls.available).toBe(false);
-        expect(caps.modules.calls.reason).toMatch(/live talk/i);
+        expect(caps.calls).toBe(true);
+        expect(caps.modules.calls.available).toBe(true);
+        expect(caps.modules.calls.reason).toMatch(/dial path/i);
     });
 
     test('shows SMS only when MQTT, telephony, send, and receive are ready', () => {
@@ -40,6 +39,34 @@ describe('moduleRules', () => {
         };
 
         const caps = applyModuleRulesToCapabilities({ sms: true, modem: true }, status, {
+            mqttConnected: true,
+            rawStatus: status
+        });
+
+        expect(caps.sms).toBe(true);
+        expect(caps.modules.sms.available).toBe(true);
+    });
+
+    test('shows ESP32 SMS from firmware support flags and nested module caps', () => {
+        const status = {
+            online: true,
+            mqtt_connected: true,
+            mqtt_subscribed: true,
+            telephony_supported: true,
+            telephony_enabled: true,
+            modem_registered: true,
+            sms_supported: true,
+            caps: {
+                modules: {
+                    sms: {
+                        available: true,
+                        complete: true
+                    }
+                }
+            }
+        };
+
+        const caps = applyModuleRulesToCapabilities({ modem: true }, status, {
             mqttConnected: true,
             rawStatus: status
         });

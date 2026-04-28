@@ -108,10 +108,14 @@ function explicitModule(status, context, key) {
         status?.moduleRules,
         status?.module_rules,
         status?.features,
+        status?.caps?.modules,
+        status?.caps,
         raw?.modules,
         raw?.moduleRules,
         raw?.module_rules,
-        raw?.features
+        raw?.features,
+        raw?.caps?.modules,
+        raw?.caps
     ];
     for (const source of sources) {
         if (!isObject(source)) continue;
@@ -205,7 +209,7 @@ function resolveRule(key, caps = {}, status = {}, context = {}) {
     const online = status?.online !== false;
     const transports = resolveTransportState(status, context);
     const telephony = resolveTelephonyState(status, context);
-    const explicit = explicitModule(status, context, normalized);
+    const explicit = explicitModule(status, context, normalized) || (isObject(caps.modules) ? caps.modules[normalized] : null);
     const explicitAvailable = firstBoolean(explicit?.available, explicit?.complete, explicit?.ready, explicit?.supported);
     const cap = Boolean(caps[normalized] || (normalized === 'storage' && caps.sd));
     const mqttRequired = !['mqtt', 'internet', 'battery'].includes(normalized);
@@ -238,19 +242,16 @@ function resolveRule(key, caps = {}, status = {}, context = {}) {
             break;
         }
         case 'sms': {
-            const sendReady = readBoolean(status, context, ['send_sms_permission', 'sms.sendReady', 'sms_send_supported', 'sms_ready']) === true;
-            const receiveReady = readBoolean(status, context, ['receive_sms_permission', 'sms.receiveReady', 'sms_receive_supported', 'sms_ready']) === true;
+            const sendReady = readBoolean(status, context, ['send_sms_permission', 'sms.sendReady', 'sms_send_supported', 'sms_supported', 'sms_ready']) === true;
+            const receiveReady = readBoolean(status, context, ['receive_sms_permission', 'sms.receiveReady', 'sms_receive_supported', 'sms_supported', 'sms_ready']) === true;
             available = telephony.ready && mqttReady && sendReady && receiveReady;
-            reason = available ? 'SMS send and receive path ready' : 'SMS requires telephony, MQTT, send permission, and receive permission';
+            reason = available ? 'SMS send and receive path ready' : 'SMS requires telephony, MQTT, and SMS support';
             break;
         }
         case 'calls': {
             const dialReady = readBoolean(status, context, ['call_dial_supported', 'call_phone_permission', 'call.dialSupported']) === true;
-            const controlReady = readBoolean(status, context, ['call_control_supported', 'answer_phone_calls_permission', 'call.controlSupported']) === true;
-            const statusReady = readBoolean(status, context, ['call_status_supported', 'read_call_log_permission', 'call.statusSupported']) === true;
-            const liveTalkReady = readBoolean(status, context, ['call_live_talk_supported', 'voice_live_talk_supported', 'call.liveTalkSupported']) === true;
-            available = telephony.ready && mqttReady && dialReady && controlReady && statusReady && liveTalkReady;
-            reason = available ? 'Call dial, control, status, and live talk path ready' : 'Calls require dial, answer/end, status feed, and live talk support';
+            available = telephony.ready && mqttReady && dialReady;
+            reason = available ? 'Call dial path ready' : 'Calls require telephony, MQTT, and dial support';
             break;
         }
         case 'contacts': {
