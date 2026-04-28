@@ -20,13 +20,13 @@ const { captureRawBody, createErrorHandler } = require('./middleware/errorHandle
 const { getEffectiveSystemSettings, normalizeStatusWatchSettings } = require('./services/systemSettingsService');
 const packageService = require('./services/packageService');
 const paymentGatewayService = require('./services/paymentGatewayService');
+const { backfillSmsConversations } = require('./services/smsConversations');
 const authMiddleware = require('./middleware/auth');
 const ASSET_VERSION = Date.now().toString(36);
 
 // Import services
 const mqttService = require('./services/mqttService');
 const modemService = require('./services/modemService');
-const MQTTHandlers = require('./services/mqttHandlers');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -44,7 +44,18 @@ const automationEngine = require('./services/automationEngine');
 
 // Swagger UI (available in all environments; auth-guarded below)
 const swaggerUi   = require('swagger-ui-express');
-const swaggerSpec = require('./config/swagger');
+let swaggerSpecCache = null;
+const swaggerOptions = {
+    customSiteTitle: 'ESP32 Dashboard API',
+    swaggerOptions: { persistAuthorization: true }
+};
+
+function getSwaggerSpec() {
+    if (!swaggerSpecCache) {
+        swaggerSpecCache = require('./config/swagger');
+    }
+    return swaggerSpecCache;
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -80,9 +91,11 @@ function isBrokenPipeError(error) {
 
 // ==================== DATABASE INITIALIZATION ====================
 let db;
+let mqttHandlers = null;
+let runtimeServicesInitialized = false;
 (async () => {
     try {
-        db = await initializeDatabase();
+        db = await initializeDatabase({ backfillSmsConversations: false });
         app.locals.db = db;
         try {
             const effectiveSystem = await getEffectiveSystemSettings(db);
@@ -104,12 +117,97 @@ let db;
         ];
 
         await Promise.all(dirs.map(dir => fs.promises.mkdir(dir, { recursive: true })));
+        scheduleStartupSmsConversationBackfill(db);
 
     } catch (error) {
         logger.error('❌ Failed to initialize database:', error);
         process.exit(1);
     }
 })();
+
+function initializeRuntimeServices() {
+    if (runtimeServicesInitialized) return;
+    runtimeServicesInitialized = true;
+
+    try {
+        // ==================== WEBHOOK SERVICE ====================
+        const WebhookService = require('./services/webhookService');
+        const webhookService = new WebhookService(app);
+        app.locals.webhookService = webhookService;
+
+        const pushNotificationService = require('./services/pushNotificationService');
+        pushNotificationService.app = app;
+        app.locals.pushNotificationService = pushNotificationService;
+        global.pushNotificationService = pushNotificationService;
+
+        // ==================== SCHEDULED SMS PROCESSOR ====================
+        const { startScheduledSmsProcessor } = require('./routes/sms');
+        backgroundTimers.push(startScheduledSmsProcessor(app));
+
+        // ==================== N8N INTEGRATION SERVICE ====================
+        const N8nService = require('./services/n8nService');
+        const n8nService = new N8nService(app);
+        app.locals.n8nService = n8nService;
+
+        // ==================== MQTT HANDLERS INITIALIZATION ====================
+        const MQTTHandlers = require('./services/mqttHandlers');
+        mqttHandlers = new MQTTHandlers(mqttService, io, app);
+        mqttHandlers.initialize();
+        app.locals.mqttHandlers = mqttHandlers;
+        global.mqttHandlers = mqttHandlers;
+
+        // ==================== AUTOMATION ENGINE INITIALIZATION ====================
+        // db may not be ready yet (async init above); pass a proxy accessor so the
+        // engine picks up the db reference once it is available.
+        const dbProxy = new Proxy({}, {
+            get(_, prop) {
+                const dbInst = app.locals.db;
+                if (!dbInst) return undefined;
+                const val = dbInst[prop];
+                return typeof val === 'function' ? val.bind(dbInst) : val;
+            }
+        });
+        automationEngine.init(dbProxy, mqttService, io);
+        app.locals.automationEngine = automationEngine;
+        global.automationEngine = automationEngine;
+
+        // ==================== USB SERIAL BRIDGE ====================
+        // Optional fallback channel when MQTT/4G is unavailable.
+        // Enable by setting SERIAL_PORT and SERIAL_BRIDGE_ENABLED=true in .env
+        if (process.env.SERIAL_PORT) {
+            const serialBridge = require('./services/serialBridgeService');
+            app.locals.serialBridge = serialBridge;
+            if (process.env.SERIAL_BRIDGE_ENABLED === 'true') {
+                serialBridge.start(app).catch(err => logger.warn('[SerialBridge] Start error:', err.message));
+            }
+        }
+    } catch (error) {
+        logger.error('❌ Failed to initialize runtime services:', error);
+    }
+}
+
+function scheduleStartupSmsConversationBackfill(dbInst) {
+    const timer = setTimeout(async () => {
+        try {
+            if (!dbInst) return;
+            const pending = await dbInst.get(
+                `SELECT id
+                 FROM sms
+                 WHERE COALESCE(device_id, '') != ''
+                   AND (conversation_id IS NULL OR conversation_id = 0)
+                 LIMIT 1`
+            );
+            if (!pending) return;
+            logger.info('Starting background SMS conversation backfill');
+            await backfillSmsConversations(dbInst);
+            logger.info('Background SMS conversation backfill completed');
+        } catch (error) {
+            logger.warn('Background SMS conversation backfill skipped:', error.message);
+        }
+    }, 5000);
+    timer.unref?.();
+    backgroundTimers.push(timer);
+}
 
 // ==================== GLOBAL VARIABLES ====================
 global.app = app;
@@ -685,59 +783,6 @@ io.on('connection', (socket) => {
     }));
 });
 
-// ==================== WEBHOOK SERVICE ====================
-const WebhookService = require('./services/webhookService');
-const webhookService = new WebhookService(app);
-app.locals.webhookService = webhookService;
-
-const pushNotificationService = require('./services/pushNotificationService');
-pushNotificationService.app = app;
-app.locals.pushNotificationService = pushNotificationService;
-global.pushNotificationService = pushNotificationService;
-
-// ==================== SCHEDULED SMS PROCESSOR ====================
-const { startScheduledSmsProcessor } = require('./routes/sms');
-backgroundTimers.push(startScheduledSmsProcessor(app));
-
-// ==================== N8N INTEGRATION SERVICE ====================
-const N8nService = require('./services/n8nService');
-const n8nService = new N8nService(app);
-app.locals.n8nService = n8nService;
-
-// ==================== MQTT HANDLERS INITIALIZATION ====================
-const mqttHandlers = new MQTTHandlers(mqttService, io, app);
-mqttHandlers.initialize();
-app.locals.mqttHandlers = mqttHandlers;
-global.mqttHandlers = mqttHandlers;
-
-// ==================== AUTOMATION ENGINE INITIALIZATION ====================
-// db may not be ready yet (async init above); pass a proxy accessor so the
-// engine picks up the db reference once it is available.
-(function initAutomationEngine() {
-    const dbProxy = new Proxy({}, {
-        get(_, prop) {
-            const dbInst = app.locals.db;
-            if (!dbInst) return undefined;
-            const val = dbInst[prop];
-            return typeof val === 'function' ? val.bind(dbInst) : val;
-        }
-    });
-    automationEngine.init(dbProxy, mqttService, io);
-    app.locals.automationEngine = automationEngine;
-    global.automationEngine = automationEngine;
-})();
-
-// ==================== USB SERIAL BRIDGE ====================
-// Optional fallback channel when MQTT/4G is unavailable.
-// Enable by setting SERIAL_PORT and SERIAL_BRIDGE_ENABLED=true in .env
-if (process.env.SERIAL_PORT) {
-    const serialBridge = require('./services/serialBridgeService');
-    app.locals.serialBridge = serialBridge;
-    if (process.env.SERIAL_BRIDGE_ENABLED === 'true') {
-        serialBridge.start(app).catch(err => logger.warn('[SerialBridge] Start error:', err.message));
-    }
-}
-
 // ==================== DAILY AUTO-BACKUP ====================
 // Runs once per day. Only executes if auto_backup setting is enabled in DB.
 (function scheduleAutoBackup() {
@@ -816,11 +861,10 @@ try {
     app.use('/api', authMiddleware, apiRoutes);
     app.use('/api/mqtt', authMiddleware, mqttRoutes);
     app.use('/admin', authMiddleware, usersRoute);
-    app.get('/api-docs.json', authMiddleware, (_req, res) => res.json(swaggerSpec));
-    app.use('/api-docs', authMiddleware, swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-        customSiteTitle: 'ESP32 Dashboard API',
-        swaggerOptions: { persistAuthorization: true }
-    }));
+    app.get('/api-docs.json', authMiddleware, (_req, res) => res.json(getSwaggerSpec()));
+    app.use('/api-docs', authMiddleware, swaggerUi.serve, (req, res, next) => {
+        swaggerUi.setup(getSwaggerSpec(), swaggerOptions)(req, res, next);
+    });
     app.use('/api/device-groups', authMiddleware, deviceGroupsRoute);
     app.use('/api/keys', authMiddleware, apiKeysRoute);
     app.use('/api/webhooks', authMiddleware, webhooksRoute);
@@ -898,6 +942,9 @@ const PORT = process.env.PORT || 3001;
 try {
     server.listen(PORT, '0.0.0.0', () => {
         logger.debug(`Server listening on http://localhost:${PORT}`);
+        const runtimeInitTimer = setTimeout(initializeRuntimeServices, 500);
+        runtimeInitTimer.unref?.();
+        backgroundTimers.push(runtimeInitTimer);
     });
 
     server.on('error', (error) => {
@@ -958,8 +1005,10 @@ async function gracefulShutdown() {
 
     // Disconnect MQTT
     try {
-        mqttHandlers.disconnect();
-        logger.info('✅ MQTT disconnected');
+        if (mqttHandlers) {
+            mqttHandlers.disconnect();
+            logger.info('✅ MQTT disconnected');
+        }
     } catch (_) {}
 
     // Stop accepting new HTTP connections (existing ones already destroyed above)

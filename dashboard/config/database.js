@@ -85,7 +85,8 @@ function wrapDb(rawDb) {
     };
 }
 
-async function initializeDatabase() {
+async function initializeDatabase(options = {}) {
+    const runSmsBackfill = options.backfillSmsConversations !== false;
     let rawDb = null;
     try {
         rawDb = new BetterSqlite3(dbPath);
@@ -951,6 +952,9 @@ async function initializeDatabase() {
         await db.exec(`
             CREATE INDEX IF NOT EXISTS idx_sms_device_timestamp ON sms(device_id, timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_sms_conversation ON sms(conversation_id, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_sms_unassigned_conversation
+                ON sms(device_id, id)
+                WHERE conversation_id IS NULL OR conversation_id = 0;
             CREATE INDEX IF NOT EXISTS idx_sms_batch ON sms(batch_id);
             CREATE INDEX IF NOT EXISTS idx_sms_conversations_device ON sms_conversations(device_id, last_message_at DESC);
             CREATE INDEX IF NOT EXISTS idx_sms_conversations_key ON sms_conversations(device_id, conversation_key);
@@ -1526,12 +1530,12 @@ async function initializeDatabase() {
         const adminUsername = process.env.ADMIN_USERNAME || legacySuperUsername || 'admin';
         const adminPassword = process.env.ADMIN_PASSWORD || process.env.SUPER_PASS || 'admin123';
         const adminUser = await db.get('SELECT * FROM users WHERE username = ?', [adminUsername]);
-        const hashedAdminPassword = await bcrypt.hash(adminPassword, 10);
         const adminDisplayName = process.env.ADMIN_NAME || process.env.SUPER_NAME || 'System Administrator';
         const adminEmail = process.env.ADMIN_EMAIL || process.env.SUPER_EMAIL || '';
         const hasConfiguredAdminPassword = Boolean(process.env.ADMIN_PASSWORD || process.env.SUPER_PASS);
 
         if (!adminUser) {
+            const hashedAdminPassword = await bcrypt.hash(adminPassword, 10);
             const result = await db.run(
                 'INSERT INTO users (username, password, name, email, role, is_active, is_protected, must_change_password) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                 [
@@ -1561,9 +1565,10 @@ async function initializeDatabase() {
             const updateParams = ['superadmin', adminDisplayName, adminEmail];
 
             if (hasConfiguredAdminPassword) {
+                const passwordAlreadyMatches = await bcrypt.compare(adminPassword, adminUser.password || '').catch(() => false);
                 updateFields.push('password = ?');
                 updateFields.push('must_change_password = 0');
-                updateParams.push(hashedAdminPassword);
+                updateParams.push(passwordAlreadyMatches ? adminUser.password : await bcrypt.hash(adminPassword, 10));
             }
 
             updateParams.push(adminUsername);
@@ -1641,7 +1646,9 @@ async function initializeDatabase() {
             }
         }
 
-        await backfillSmsConversations(db);
+        if (runSmsBackfill) {
+            await backfillSmsConversations(db);
+        }
         return db;
 
     } catch (error) {
