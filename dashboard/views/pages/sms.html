@@ -286,6 +286,7 @@
                             </div>
                         </div>
                     </form>
+                    <div class="sms-chat-system-notice d-none" id="smsChatSystemNotice"></div>
                     <div class="sms-chat-help">
                         Instant uses MQTT runtime. Scheduled SMS stays dashboard-owned until dispatch.
                         <span data-sms-http-required="true" data-sms-http-display="inline">Attachments preview only until MMS transport is enabled.</span>
@@ -1487,6 +1488,11 @@ document.addEventListener('DOMContentLoaded', function() {
     box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
 }
 
+.sms-chat-compose-shell.sms-chat-compose-disabled {
+    border-color: rgba(108, 117, 125, 0.2);
+    background: rgba(248, 249, 250, 0.92);
+}
+
 .sms-header-icon-btn {
     width: 2rem;
     height: 2rem;
@@ -1932,6 +1938,16 @@ document.addEventListener('DOMContentLoaded', function() {
     font-size: 0.7rem;
     line-height: 1.2;
     color: var(--bs-secondary-color);
+}
+
+.sms-chat-system-notice {
+    border: 1px solid rgba(108, 117, 125, 0.22);
+    border-radius: 0.75rem;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.78rem;
+    line-height: 1.25;
+    color: var(--bs-secondary-color);
+    background: rgba(108, 117, 125, 0.08);
 }
 
 [data-bs-theme="dark"] .sms-chat-footer {

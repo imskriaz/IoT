@@ -21,6 +21,13 @@ function parseCapabilities(row = {}) {
     caps.intercom = Boolean(caps.intercom && caps.camera && caps.audio);
     if (row.board && !caps.board) caps.board = row.board;
 
+    const inferred = inferCapabilitiesFromStatus(caps);
+    for (const [key, value] of Object.entries(inferred)) {
+        if (value === true && typeof caps[key] !== 'boolean') {
+            caps[key] = true;
+        }
+    }
+
     if (typeof caps.gpio !== 'boolean') {
         const boardToken = String(row.board || row.type || caps.board || '').trim().toLowerCase();
         const bridgeToken = String(caps.bridge || '').trim().toLowerCase();
@@ -122,17 +129,36 @@ function inferCapabilitiesFromStatus(status = {}) {
         }
     }
 
-    if (firstBoolean(status?.send_sms_permission, status?.sms_ready, status?.sms?.sendReady) === true
-        && firstBoolean(status?.receive_sms_permission, status?.sms_ready, status?.sms?.receiveReady) === true) {
+    if (firstBoolean(
+        status?.send_sms_permission,
+        status?.receive_sms_permission,
+        status?.sms_ready,
+        status?.smsReady,
+        status?.sms_supported,
+        status?.smsSupported,
+        status?.sms_send_supported,
+        status?.sms_receive_supported,
+        status?.sms?.ready,
+        status?.sms?.supported,
+        status?.sms?.sendReady,
+        status?.sms?.receiveReady
+    ) === true || status?.sms_poll_count != null || status?.sms_last_detail) {
         caps.sms = true;
     }
-    if (firstBoolean(status?.call_supported, status?.callSupported) === true) {
+    if (firstBoolean(
+        status?.call_supported,
+        status?.callSupported,
+        status?.call_dial_supported,
+        status?.callDialSupported,
+        status?.call?.supported,
+        status?.call?.dialSupported
+    ) === true) {
         caps.calls = true;
     }
-    if (firstBoolean(status?.contacts_supported, status?.contact_sync_supported, status?.read_contacts_permission) === true) {
+    if (firstBoolean(status?.contacts_supported, status?.contact_sync_supported, status?.read_contacts_permission, status?.contacts?.supported) === true) {
         caps.contacts = true;
     }
-    if (firstBoolean(status?.ussd_supported, status?.ussdSupported) === true) {
+    if (firstBoolean(status?.ussd_supported, status?.ussdSupported, status?.ussd_ready, status?.ussdReady, status?.ussd?.supported, status?.ussd?.ready) === true) {
         caps.ussd = true;
     }
 

@@ -1337,7 +1337,7 @@ class MQTTHandlers {
                 satellites: data.satellites ?? null
             }).catch(() => {});
 
-            // Fire webhooks + n8n (non-blocking, not debounced — fires on every fix)
+            // Fire webhooks (non-blocking, not debounced — fires on every fix)
             this.fireEvent('gps.location', deviceId, data);
 
             // Debounce Socket.IO emit: at most once per second per device
@@ -1509,6 +1509,7 @@ class MQTTHandlers {
                         device_id: deviceId,
                         from_number: isOutgoing ? null : decodedFrom,
                         to_number: isOutgoing ? decodedTo : (decodedTo || null),
+                        message: decodedMessage,
                         type: isOutgoing ? 'outgoing' : 'incoming'
                     });
 
@@ -2420,12 +2421,11 @@ class MQTTHandlers {
     }
 
     /**
-     * Fire an event through both webhookService and n8nService (non-blocking).
+     * Fire an event through automation and webhook services (non-blocking).
      */
     fireEvent(event, deviceId, payload) {
         this.app.locals.automationEngine?.onEvent?.(event, payload, deviceId);
         this.app.locals.webhookService?.fire(event, deviceId, payload).catch(() => {});
-        this.app.locals.n8nService?.fire(event, deviceId, payload).catch(() => {});
     }
 
     /**

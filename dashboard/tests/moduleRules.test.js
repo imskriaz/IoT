@@ -75,6 +75,72 @@ describe('moduleRules', () => {
         expect(caps.modules.sms.available).toBe(true);
     });
 
+    test('shows ESP32 communication menus from telephony modem even when feature flags are omitted', () => {
+        const status = {
+            online: true,
+            mqtt_connected: true,
+            mqtt_subscribed: true,
+            telephony_supported: true,
+            telephony_enabled: true,
+            modem_registered: true,
+            modem_operator: 'robi axiata',
+            imei: '862596081929782'
+        };
+
+        const caps = applyModuleRulesToCapabilities({ modem: true, sms: true, calls: true, ussd: true }, status, {
+            mqttConnected: true,
+            rawStatus: status
+        });
+
+        expect(caps.sms).toBe(true);
+        expect(caps.calls).toBe(true);
+        expect(caps.ussd).toBe(true);
+        expect(caps.modules.sms.available).toBe(true);
+        expect(caps.modules.calls.available).toBe(true);
+        expect(caps.modules.ussd.available).toBe(true);
+    });
+
+    test('keeps SMS visible for stored ESP32 status snapshots with sms_ready evidence', () => {
+        const status = {
+            online: true,
+            mqtt_connected: 'true',
+            mqtt_subscribed: 1,
+            telephony_supported: 'true',
+            telephony_enabled: 'true',
+            modem_registered: 'true',
+            sms_ready: 'true',
+            sms_poll_count: 283
+        };
+
+        const caps = applyModuleRulesToCapabilities({ modem: true }, status, {
+            mqttConnected: true,
+            rawStatus: status
+        });
+
+        expect(caps.sms).toBe(true);
+        expect(caps.modules.sms.available).toBe(true);
+    });
+
+    test('honors explicit unsupported SMS reports', () => {
+        const status = {
+            online: true,
+            mqtt_connected: true,
+            mqtt_subscribed: true,
+            telephony_supported: true,
+            telephony_enabled: true,
+            modem_registered: true,
+            sms_supported: false
+        };
+
+        const caps = applyModuleRulesToCapabilities({ modem: true, sms: true }, status, {
+            mqttConnected: true,
+            rawStatus: status
+        });
+
+        expect(caps.sms).toBe(false);
+        expect(caps.modules.sms.available).toBe(false);
+    });
+
     test('hides HTTP or stream features until a complete transport-specific path is reported', () => {
         const status = {
             online: true,

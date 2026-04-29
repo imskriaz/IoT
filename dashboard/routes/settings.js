@@ -319,7 +319,7 @@ router.put('/', adminMiddleware, [
         const db = req.app.locals.db;
 
         // Restrict to known safe keys to prevent arbitrary writes
-        const ALLOWED_KEYS = ['require_2fa_roles', 'n8n_enabled', 'n8n_webhook_url', 'n8n_events'];
+        const ALLOWED_KEYS = ['require_2fa_roles'];
         if (!ALLOWED_KEYS.includes(key)) {
             return res.status(400).json({ success: false, message: `Setting '${key}' cannot be updated via this endpoint` });
         }
@@ -330,11 +330,6 @@ router.put('/', adminMiddleware, [
             [val, (req.user || req.session.user).id, key]
         );
         logger.info(`Setting '${key}' updated by ${(req.user || req.session.user).username}`);
-
-        // Bust n8n config cache when integration settings change
-        if (key.startsWith('n8n_')) {
-            req.app.locals.n8nService?.invalidateCache();
-        }
 
         res.json({ success: true });
     } catch (error) {

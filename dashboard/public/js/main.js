@@ -2954,7 +2954,9 @@ function isCapabilityComplete(caps, key) {
 
     if (caps.modules && typeof caps.modules === 'object') {
         if (caps.modules[moduleKey]) {
-            return Boolean(caps.modules[moduleKey].available || caps.modules[moduleKey].complete);
+            if (caps.modules[moduleKey].available || caps.modules[moduleKey].complete) return true;
+            if (caps[normalized] === true || caps[moduleKey] === true) return true;
+            return false;
         }
         if (COMPLETE_GATED_CAPS.has(normalized)) {
             return false;

@@ -1,14 +1,19 @@
 'use strict';
 
-const { formatPhoneNumber, getPhoneLookupKeys } = require('../utils/phoneNumber');
+const { formatPhoneNumber, getPhoneLookupKeys, normalizePhoneDigits } = require('../utils/phoneNumber');
+const {
+    getSmsSenderDisplayName,
+    looksLikeShiftedNibbleString
+} = require('../utils/smsUnicode');
 
 function getConversationCounterpart(row) {
     const outgoing = String(row?.type || '').toLowerCase() === 'outgoing';
     return String(outgoing ? (row?.to_number || row?.from_number || '') : (row?.from_number || row?.to_number || '')).trim();
 }
 
-function normalizeConversationParticipant(number) {
+function normalizeConversationParticipant(number, options = {}) {
     const raw = String(number || '').trim();
+    const message = options && typeof options === 'object' ? options.message : '';
     if (!raw) {
         return {
             number: 'service-inbox',
@@ -17,11 +22,12 @@ function normalizeConversationParticipant(number) {
         };
     }
 
-    if (/[*#]/.test(raw)) {
+    const rawDigits = normalizePhoneDigits(raw);
+    if (/[*#]/.test(raw) || looksLikeShiftedNibbleString(raw) || (rawDigits.length > 0 && rawDigits.length < 10)) {
         return {
             number: raw,
             key: `service:${raw.toLowerCase()}`,
-            title: raw
+            title: getSmsSenderDisplayName(raw, message)
         };
     }
 
@@ -39,7 +45,7 @@ function normalizeConversationParticipant(number) {
         return {
             number: raw,
             key: `service:${raw.toLowerCase()}`,
-            title: raw
+            title: getSmsSenderDisplayName(raw, message)
         };
     }
 
@@ -61,11 +67,11 @@ function buildMessagePreview(message) {
 }
 
 async function ensureSmsConversation(db, { deviceId, participantNumber, title = null }) {
-    const normalized = normalizeConversationParticipant(participantNumber);
+    const normalized = normalizeConversationParticipant(participantNumber, { message: title });
     const primaryNumber = normalized.number;
     const conversationKey = normalized.key;
     if (!db || !deviceId || !primaryNumber || !conversationKey) return null;
-    const normalizedTitle = normalizeConversationParticipant(title).title;
+    const normalizedTitle = normalizeConversationParticipant(title, { message: title }).title;
     const safeTitle = normalizedTitle === primaryNumber ? title || normalized.title : normalized.title;
 
     const existing = await db.get(
@@ -148,10 +154,11 @@ async function attachSmsToConversation(db, smsRow) {
     if (!db || !smsRow?.id || !smsRow?.device_id) return null;
 
     const participantNumber = getConversationCounterpart(smsRow);
+    const displayTitle = getSmsSenderDisplayName(participantNumber, smsRow.message);
     const conversationId = await ensureSmsConversation(db, {
         deviceId: smsRow.device_id,
         participantNumber,
-        title: participantNumber
+        title: displayTitle
     });
 
     if (!conversationId) return null;
@@ -208,7 +215,7 @@ async function backfillSmsConversations(db) {
     if (!db) return;
 
     const rows = await db.all(
-        `SELECT id, device_id, from_number, to_number, type
+        `SELECT id, device_id, from_number, to_number, message, type
          FROM sms
          WHERE COALESCE(device_id, '') != ''
            AND COALESCE(conversation_id, 0) = 0
@@ -229,10 +236,11 @@ async function backfillSmsConversations(db) {
 
         let conversationId = conversationCache.get(conversationKey);
         if (!conversationId) {
+            const displayTitle = getSmsSenderDisplayName(participantNumber, row.message);
             conversationId = await ensureSmsConversation(db, {
                 deviceId: row.device_id,
                 participantNumber,
-                title: participantNumber
+                title: displayTitle
             });
             if (!conversationId) continue;
             conversationCache.set(conversationKey, conversationId);

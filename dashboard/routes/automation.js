@@ -4,7 +4,10 @@ const router = express.Router();
 const logger = require('../utils/logger');
 const { DEFAULT_DEVICE_ID } = require('../config/device');
 const { resolveDeviceId } = require('../utils/deviceResolver');
-const automationEngine = require('../services/automationEngine');
+
+function getAutomationEngine(req) {
+    return req.app.locals.automationEngine || require('../services/automationEngine');
+}
 
 // ─── List flows ───────────────────────────────────────────────
 router.get('/flows', async (req, res) => {
@@ -48,7 +51,7 @@ router.post('/flows', async (req, res) => {
              VALUES (?, ?, ?, ?, ?, ?)`,
             [name.slice(0,200), description.slice(0,500), JSON.stringify(nodes), JSON.stringify(edges), enabled ? 1 : 0, deviceId]
         );
-        automationEngine.invalidateCache();
+        getAutomationEngine(req).invalidateCache();
         const flow = await db.get('SELECT * FROM automation_flows WHERE id = ?', [result.lastID]) || {
             id: result.lastID,
             name: name.slice(0, 200),
@@ -86,7 +89,7 @@ router.put('/flows/:id', async (req, res) => {
                 req.params.id
             ]
         );
-        automationEngine.invalidateCache();
+        getAutomationEngine(req).invalidateCache();
         const flow = await db.get('SELECT * FROM automation_flows WHERE id = ?', [req.params.id]);
         try { flow.nodes = JSON.parse(flow.nodes); } catch { flow.nodes = []; }
         try { flow.edges = JSON.parse(flow.edges); } catch { flow.edges = []; }
@@ -106,7 +109,7 @@ router.patch('/flows/:id/toggle', async (req, res) => {
         if (!flow) return res.status(404).json({ success: false, message: 'Flow not found' });
         const newEnabled = flow.enabled ? 0 : 1;
         await db.run('UPDATE automation_flows SET enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?', [newEnabled, req.params.id]);
-        automationEngine.invalidateCache();
+        getAutomationEngine(req).invalidateCache();
         res.json({ success: true, enabled: !!newEnabled });
     } catch (e) {
         logger.error('PATCH /api/automation/flows/:id/toggle error:', e);
@@ -119,7 +122,7 @@ router.delete('/flows/:id', async (req, res) => {
     try {
         const db = req.app.locals.db;
         await db.run('DELETE FROM automation_flows WHERE id = ?', [req.params.id]);
-        automationEngine.invalidateCache();
+        getAutomationEngine(req).invalidateCache();
         if (global.io) global.io.emit('automation:flow:deleted', { id: parseInt(req.params.id) });
         res.json({ success: true });
     } catch (e) {
@@ -131,7 +134,7 @@ router.delete('/flows/:id', async (req, res) => {
 // ─── Manual test run ─────────────────────────────────────────
 router.post('/flows/:id/run', async (req, res) => {
     try {
-        const result = await automationEngine.testRun(parseInt(req.params.id), req.body || {});
+        const result = await getAutomationEngine(req).testRun(parseInt(req.params.id), req.body || {});
         res.json({ success: true, ...result });
     } catch (e) {
         logger.error('POST /api/automation/flows/:id/run error:', e);

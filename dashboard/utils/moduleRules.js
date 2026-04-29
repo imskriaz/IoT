@@ -54,9 +54,24 @@ function isObject(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function coerceBoolean(value) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        if (value === 1) return true;
+        if (value === 0) return false;
+    }
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (['true', 'yes', 'y', '1', 'on', 'ready', 'supported', 'ok', 'enabled'].includes(normalized)) return true;
+        if (['false', 'no', 'n', '0', 'off', 'unsupported', 'disabled', 'missing'].includes(normalized)) return false;
+    }
+    return null;
+}
+
 function firstBoolean(...values) {
     for (const value of values) {
-        if (typeof value === 'boolean') return value;
+        const coerced = coerceBoolean(value);
+        if (coerced !== null) return coerced;
     }
     return null;
 }
@@ -119,10 +134,76 @@ function explicitModule(status, context, key) {
     ];
     for (const source of sources) {
         if (!isObject(source)) continue;
-        const value = source[normalized] || source[key];
+        const value = Object.prototype.hasOwnProperty.call(source, normalized)
+            ? source[normalized]
+            : source[key];
         if (isObject(value)) return value;
+        const booleanValue = coerceBoolean(value);
+        if (booleanValue !== null) return { available: booleanValue, supported: booleanValue };
     }
     return null;
+}
+
+function hasAnyTrue(status, context, paths) {
+    return readBoolean(status, context, paths) === true;
+}
+
+function hasAnyFalse(status, context, paths) {
+    return readBoolean(status, context, paths) === false;
+}
+
+function hasSmsRuntimeEvidence(status = {}, context = {}) {
+    return hasAnyTrue(status, context, [
+        'sms.ready',
+        'sms.supported',
+        'sms.enabled',
+        'smsReady',
+        'smsSupported',
+        'sms_ready',
+        'sms_supported',
+        'sms_send_supported',
+        'sms_receive_supported',
+        'send_sms_permission',
+        'receive_sms_permission',
+        'android.permissions.sms',
+        'permissions.sms'
+    ]) || [
+        'sms_poll_count',
+        'sms_sent_count',
+        'sms_received_count',
+        'sms_failure_count',
+        'sms.lastDetail',
+        'sms_last_detail'
+    ].some(path => readValue(status, context, [path]) !== undefined);
+}
+
+function hasCallRuntimeEvidence(status = {}, context = {}) {
+    return hasAnyTrue(status, context, [
+        'calls.ready',
+        'calls.supported',
+        'call.ready',
+        'call.supported',
+        'call.dialSupported',
+        'callReady',
+        'callSupported',
+        'call_supported',
+        'call_dial_supported',
+        'call_phone_permission',
+        'phone_call_permission',
+        'android.permissions.phone',
+        'permissions.phone'
+    ]) || readValue(status, context, ['call.status', 'call_status', 'call.active', 'call_active']) !== undefined;
+}
+
+function hasUssdRuntimeEvidence(status = {}, context = {}) {
+    return hasAnyTrue(status, context, [
+        'ussd.ready',
+        'ussd.supported',
+        'ussdReady',
+        'ussdSupported',
+        'ussd_ready',
+        'ussd_supported'
+    ]) || readValue(status, context, ['ussd.lastDetail', 'ussd_last_detail', 'ussd_session_state']) !== undefined;
 }
 
 function resolveTransportState(status = {}, context = {}) {
@@ -242,16 +323,31 @@ function resolveRule(key, caps = {}, status = {}, context = {}) {
             break;
         }
         case 'sms': {
-            const sendReady = readBoolean(status, context, ['send_sms_permission', 'sms.sendReady', 'sms_send_supported', 'sms_supported', 'sms_ready']) === true;
-            const receiveReady = readBoolean(status, context, ['receive_sms_permission', 'sms.receiveReady', 'sms_receive_supported', 'sms_supported', 'sms_ready']) === true;
-            available = telephony.ready && mqttReady && sendReady && receiveReady;
-            reason = available ? 'SMS send and receive path ready' : 'SMS requires telephony, MQTT, and SMS support';
+            const smsExplicitlyUnsupported = hasAnyFalse(status, context, [
+                'sms.supported',
+                'smsSupported',
+                'sms_supported',
+                'sms.enabled',
+                'smsEnabled',
+                'sms_enabled'
+            ]);
+            const smsCapable = Boolean(cap || explicitAvailable === true || hasSmsRuntimeEvidence(status, context) || telephony.ready);
+            available = telephony.ready && mqttReady && smsCapable && !smsExplicitlyUnsupported;
+            reason = available ? 'SMS path ready' : 'SMS requires telephony and MQTT control';
             break;
         }
         case 'calls': {
-            const dialReady = readBoolean(status, context, ['call_dial_supported', 'call_phone_permission', 'call.dialSupported']) === true;
-            available = telephony.ready && mqttReady && dialReady;
-            reason = available ? 'Call dial path ready' : 'Calls require telephony, MQTT, and dial support';
+            const callsExplicitlyUnsupported = hasAnyFalse(status, context, [
+                'calls.supported',
+                'call.supported',
+                'callSupported',
+                'call_supported',
+                'call.dialSupported',
+                'call_dial_supported'
+            ]);
+            const callsCapable = Boolean(cap || explicitAvailable === true || hasCallRuntimeEvidence(status, context) || telephony.ready);
+            available = telephony.ready && mqttReady && callsCapable && !callsExplicitlyUnsupported;
+            reason = available ? 'Call dial path ready' : 'Calls require telephony and MQTT control';
             break;
         }
         case 'contacts': {
@@ -261,9 +357,17 @@ function resolveRule(key, caps = {}, status = {}, context = {}) {
             break;
         }
         case 'ussd': {
-            const ussdReady = readBoolean(status, context, ['ussd_supported', 'ussd.supported']) === true;
-            available = telephony.ready && mqttReady && ussdReady;
-            reason = available ? 'USSD command and response path ready' : 'USSD requires telephony and MQTT command/response support';
+            const ussdExplicitlyUnsupported = hasAnyFalse(status, context, [
+                'ussd.supported',
+                'ussdSupported',
+                'ussd_supported',
+                'ussd.enabled',
+                'ussdEnabled',
+                'ussd_enabled'
+            ]);
+            const ussdCapable = Boolean(cap || explicitAvailable === true || hasUssdRuntimeEvidence(status, context) || telephony.ready);
+            available = telephony.ready && mqttReady && ussdCapable && !ussdExplicitlyUnsupported;
+            reason = available ? 'USSD path ready' : 'USSD requires telephony and MQTT control';
             break;
         }
         case 'wifi': {

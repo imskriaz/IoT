@@ -2,7 +2,8 @@
 
 const {
     inferCapabilitiesFromStatus,
-    mergeCapabilities
+    mergeCapabilities,
+    parseCapabilities
 } = require('../utils/deviceCapabilities');
 
 describe('deviceCapabilities', () => {
@@ -71,6 +72,31 @@ describe('deviceCapabilities', () => {
             sms: false,
             calls: false,
             ussd: false
+        }));
+    });
+
+    test('normalizes stored ESP32 status JSON into communication capabilities', () => {
+        const caps = parseCapabilities({
+            board: 'Waveshare ESP32-S3-A7670E-4G',
+            capabilities: JSON.stringify({
+                active_path: 'modem',
+                mqtt_connected: true,
+                mqtt_subscribed: true,
+                modem_registered: true,
+                telephony_supported: true,
+                telephony_enabled: true,
+                sms_ready: true,
+                sms_poll_count: 283,
+                imei: '862596081929782'
+            })
+        });
+
+        expect(caps).toEqual(expect.objectContaining({
+            modem: true,
+            sms: true,
+            calls: true,
+            ussd: true,
+            internet: true
         }));
     });
 });

@@ -785,6 +785,40 @@ describe('sms route queue-first delivery', () => {
         );
     });
 
+    test('conversation summaries mark service senders read-only with inferred display names', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue({ count: 1 }),
+            all: jest.fn().mockResolvedValue([
+                {
+                    conversation_id: 40,
+                    device_id: 'device-10',
+                    thread_number: '+8802291126936',
+                    display_from: '2<2?<9>112693<<6',
+                    message: 'visit https://cutt.ly/myRobiOffer',
+                    timestamp: '2026-04-12T10:05:00.000Z',
+                    status: 'received',
+                    unread_count: 1,
+                    total_count: 3,
+                    last_direction: 'incoming'
+                }
+            ])
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/conversations?deviceId=device-10&limit=20');
+
+        expect(res.status).toBe(200);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            conversation_id: 40,
+            display_from: 'Robi',
+            sender_is_phone: false,
+            replyable: false
+        }));
+    });
+
     test('conversation fallback stays slot-scoped in SIM-scoped mode', async () => {
         const smsRows = [
             {

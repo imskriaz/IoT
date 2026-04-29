@@ -12,7 +12,12 @@ const {
 } = require('../utils/phoneNumber');
 const { DEFAULT_DEVICE_ID } = require('../config/device');
 const { resolveDeviceId } = require('../utils/deviceResolver');
-const { decodeSmsRecord } = require('../utils/smsUnicode');
+const {
+    decodeSmsRecord,
+    getSmsSenderDisplayName,
+    isSmsSenderReplyable,
+    looksLikeShiftedNibbleString
+} = require('../utils/smsUnicode');
 const { validateSmsMessageSize } = require('../utils/smsLimits');
 const smsCache = require('../services/smsCache');
 const { createRateLimiter } = require('../utils/rateLimiter');
@@ -249,6 +254,32 @@ function buildSmsConversationSummaries(rows) {
         }));
 }
 
+function normalizeSmsConversationRow(row) {
+    if (!row || typeof row !== 'object') return row;
+    const titleSource = String(row.display_from || row.title || '').trim();
+    const numberSource = String(row.thread_number || row.primary_number || '').trim();
+    const displaySource = titleSource || numberSource;
+    const displayFrom = getSmsSenderDisplayName(displaySource, row.sender_context || row.message);
+    const titleLooksSystem = Boolean(titleSource && looksLikeShiftedNibbleString(titleSource));
+    const senderIsPhone = !titleLooksSystem && isSmsSenderReplyable(numberSource || displaySource);
+
+    return {
+        ...row,
+        display_from: displayFrom,
+        sender_is_phone: senderIsPhone,
+        replyable: senderIsPhone
+    };
+}
+
+function isSmsThreadReplyable(messages, fallbackNumber = '') {
+    const list = Array.isArray(messages) ? messages : [];
+    const incoming = list.filter((message) => String(message?.type || '').toLowerCase() !== 'outgoing');
+    if (incoming.length) {
+        return incoming.some((message) => message?.sender_is_phone === true);
+    }
+    return list.some((message) => isSmsSenderReplyable(message?.to_number || message?.from_number)) || isSmsSenderReplyable(fallbackNumber);
+}
+
 /**
  * @swagger
  * tags:
@@ -435,6 +466,11 @@ router.get('/thread', async (req, res) => {
 
         const messages = rows.map(decodeSmsRecord).reverse();
         const resolvedNumber = number || String(messages[messages.length - 1]?.to_number || messages[messages.length - 1]?.from_number || '').trim();
+        const displayName = getSmsSenderDisplayName(
+            messages.find((message) => String(message?.type || '').toLowerCase() !== 'outgoing')?.from_number || resolvedNumber,
+            messages[messages.length - 1]?.message || ''
+        );
+        const replyable = isSmsThreadReplyable(messages, resolvedNumber);
 
         res.json({
             success: true,
@@ -443,6 +479,8 @@ router.get('/thread', async (req, res) => {
                 deviceId,
                 simSlot: simScope.simSlot,
                 number: resolvedNumber,
+                displayName,
+                replyable,
                 conversationId: conversationId || Number(messages[0]?.conversation_id || 0) || null,
                 count: messages.length
             }
@@ -475,6 +513,28 @@ router.get('/conversations', async (req, res) => {
                            primary_number AS thread_number,
                            COALESCE(title, primary_number) AS display_from,
                            last_message_preview AS message,
+                           COALESCE((
+                               SELECT s.message
+                               FROM sms s
+                               WHERE s.conversation_id = sms_conversations.id
+                                 AND (
+                                    LOWER(COALESCE(s.message, '')) LIKE '%robi%'
+                                    OR COALESCE(s.message, '') LIKE '%রবি%'
+                                    OR LOWER(COALESCE(s.message, '')) LIKE '%airtel%'
+                                    OR COALESCE(s.message, '') LIKE '%এয়ারটেল%'
+                                    OR COALESCE(s.message, '') LIKE '%এয়ারটেল%'
+                                    OR LOWER(COALESCE(s.message, '')) LIKE '%banglalink%'
+                                    OR COALESCE(s.message, '') LIKE '%বাংলালিংক%'
+                                    OR LOWER(COALESCE(s.message, '')) LIKE '%grameenphone%'
+                                    OR COALESCE(s.message, '') LIKE '%গ্রামীণফোন%'
+                                    OR LOWER(COALESCE(s.message, '')) LIKE '%bkash%'
+                                    OR COALESCE(s.message, '') LIKE '%বিকাশ%'
+                                    OR LOWER(COALESCE(s.message, '')) LIKE '%nagad%'
+                                    OR COALESCE(s.message, '') LIKE '%নগদ%'
+                                 )
+                               ORDER BY datetime(s.timestamp) DESC, s.id DESC
+                               LIMIT 1
+                           ), last_message_preview) AS sender_context,
                            last_message_at AS timestamp,
                            unread_count,
                            message_count AS total_count,
@@ -485,6 +545,7 @@ router.get('/conversations', async (req, res) => {
                     ORDER BY datetime(last_message_at) DESC, id DESC
                     LIMIT ?
                 `, [deviceId, limit]);
+                conversations = conversations.map(normalizeSmsConversationRow);
 
                 total = await db.get(
                     'SELECT COUNT(*) AS count FROM sms_conversations WHERE device_id = ?',
@@ -514,7 +575,7 @@ router.get('/conversations', async (req, res) => {
                 LIMIT ?
             `, [...params, scanLimit]);
             const allConversations = buildSmsConversationSummaries(rows);
-            conversations = allConversations.slice(0, limit).map((row) => ({
+            conversations = allConversations.slice(0, limit).map((row) => normalizeSmsConversationRow({
                 ...row,
                 conversation_id: hasSimScope(simScope) ? null : (row.conversation_id || null)
             }));
@@ -650,6 +711,7 @@ router.post('/bulk-import', [
                     device_id: deviceId || null,
                     from_number: from || (type === 'outgoing' ? 'self' : 'unknown'),
                     to_number: to || null,
+                    message,
                     type
                 });
             } else skipped++;

@@ -9,7 +9,6 @@ const {
 } = require('../services/smsConversations');
 const { formatPhoneNumber } = require('../utils/phoneNumber');
 const { syncDeviceSimInventory } = require('../services/simInventoryService');
-const { updateLatestActiveCall, normalizeCallStatus } = require('../services/mqttHandlers');
 const { extractSimScope } = require('../utils/simScope');
 const {
     isRegisteredDevice,
@@ -17,6 +16,14 @@ const {
 } = require('../utils/unregisteredDevices');
 
 const lastCallSnapshotKeyByDevice = new Map();
+let mqttHandlerUtils = null;
+
+function getMqttHandlerUtils() {
+    if (!mqttHandlerUtils) {
+        mqttHandlerUtils = require('../services/mqttHandlers');
+    }
+    return mqttHandlerUtils;
+}
 
 function clean(value) {
     return String(value || '').trim();
@@ -69,7 +76,7 @@ function emitDevice(deviceId, eventName, payload) {
 
 function extractCallStatusPayload(payload = {}) {
     const nested = payload.call && typeof payload.call === 'object' ? payload.call : {};
-    const status = normalizeCallStatus(nested.status || payload.call_status || payload.status);
+    const status = getMqttHandlerUtils().normalizeCallStatus(nested.status || payload.call_status || payload.status);
     if (!status) {
         return null;
     }
@@ -177,7 +184,7 @@ router.post('/status', requireBoundDevice, async (req, res) => {
             const snapshotKey = callSnapshotKey(callStatus);
             if (lastCallSnapshotKeyByDevice.get(deviceId) !== snapshotKey) {
                 lastCallSnapshotKeyByDevice.set(deviceId, snapshotKey);
-                await updateLatestActiveCall(db, deviceId, callStatus).catch((error) => {
+                await getMqttHandlerUtils().updateLatestActiveCall(db, deviceId, callStatus).catch((error) => {
                     logger.error('android bridge HTTP call status update error:', error);
                 });
                 if (!callStatus.sync && callStatus.status === 'ringing' && callStatus.direction === 'incoming') {
@@ -220,7 +227,7 @@ router.post('/status', requireBoundDevice, async (req, res) => {
                 }).simSlot
             };
             fallbackStatus.simSlot = fallbackStatus.sim_slot;
-            const changes = await updateLatestActiveCall(db, deviceId, fallbackStatus).catch((error) => {
+            const changes = await getMqttHandlerUtils().updateLatestActiveCall(db, deviceId, fallbackStatus).catch((error) => {
                 logger.error('android bridge HTTP inactive call reconciliation error:', error);
                 return 0;
             });
@@ -298,6 +305,7 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
                 device_id: deviceId,
                 from_number: isOutgoing ? null : from,
                 to_number: isOutgoing ? to : (to || null),
+                message: content,
                 type: isOutgoing ? 'outgoing' : 'incoming'
             });
             emitDevice(deviceId, 'sms:received', {

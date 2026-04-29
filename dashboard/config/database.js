@@ -1631,10 +1631,7 @@ async function initializeDatabase(options = {}) {
             ['log_retention_days',      '30',                   'number',  'system',        'Days to keep logs'],
             ['backup_retention_count',  '10',                   'number',  'backup',        'Number of backups to keep'],
             ['mqtt_reconnect_interval', '5',                    'number',  'mqtt',          'MQTT reconnect interval in seconds'],
-            ['require_2fa_roles',       '[]',                   'json',    'security',      'Roles that must have 2FA enabled (JSON array, e.g. ["admin","superadmin"])'],
-            ['n8n_enabled',            'false',                'boolean', 'integrations',  'Forward device events to n8n workflow'],
-            ['n8n_webhook_url',        '',                     'string',  'integrations',  'n8n webhook URL to receive events'],
-            ['n8n_events',             '[]',                   'json',    'integrations',  'Events to forward to n8n (empty = all)']
+            ['require_2fa_roles',       '[]',                   'json',    'security',      'Roles that must have 2FA enabled (JSON array, e.g. ["admin","superadmin"])']
         ];
         for (const s of systemSettings) {
             const exists = await db.get('SELECT key FROM settings WHERE key = ?', [s[0]]);
@@ -1645,6 +1642,7 @@ async function initializeDatabase(options = {}) {
                 );
             }
         }
+        await db.run("DELETE FROM settings WHERE key IN ('n8n_enabled', 'n8n_webhook_url', 'n8n_events')");
 
         if (runSmsBackfill) {
             await backfillSmsConversations(db);

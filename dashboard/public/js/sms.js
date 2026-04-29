@@ -19,6 +19,7 @@
         number: '',
         conversationId: null,
         title: '',
+        replyable: true,
         messages: []
     };
     let smsAttachment = null;
@@ -1638,6 +1639,53 @@
         return String(number || '').trim();
     }
 
+    function isReplyableValue(value) {
+        return !(value === false || value === 0 || String(value).trim().toLowerCase() === 'false');
+    }
+
+    function setChatComposerBlocked(blocked, title = threadState.title || threadState.number) {
+        const shell = document.querySelector('.sms-chat-compose-shell');
+        const notice = document.getElementById('smsChatSystemNotice');
+        const help = document.querySelector('.sms-chat-help');
+        const controls = [
+            'smsChatMessage',
+            'smsAttachBtn',
+            'smsChatAddRecipientBtn',
+            'smsChatRecipientEntry',
+            'smsChatRecipientApplyBtn',
+            'smsChatSendBtn',
+            'smsChatScheduleConfirmBtn',
+            'smsChatScheduleCancelBtn'
+        ];
+        const sendToggle = document.querySelector('.sms-send-toggle');
+
+        if (shell) shell.classList.toggle('sms-chat-compose-disabled', blocked);
+        if (notice) {
+            notice.classList.toggle('d-none', !blocked);
+            notice.textContent = blocked
+                ? `${title || 'This sender'} is a service sender. Replies are disabled for system SMS.`
+                : '';
+        }
+        if (help) help.classList.toggle('d-none', blocked);
+        controls.forEach(function (id) {
+            const el = document.getElementById(id);
+            if (el) el.disabled = blocked;
+        });
+        if (sendToggle) sendToggle.disabled = blocked;
+        if (blocked) {
+            const chatTo = document.getElementById('smsChatTo');
+            const message = document.getElementById('smsChatMessage');
+            if (chatTo) setPhoneFieldValue('smsChatTo', '');
+            if (message) message.value = '';
+            resetSmsAttachment();
+            updateSmsComposeCounter('smsChatMessage', {
+                countId: 'smsChatCharCount',
+                byteId: 'smsChatByteCount',
+                partsId: 'smsChatParts'
+            });
+        }
+    }
+
     function buildComposerFollowUpThread(number, options = {}) {
         const target = getThreadActionNumber(number);
         if (!target) {
@@ -1732,6 +1780,7 @@
         threadState.number = '';
         threadState.conversationId = null;
         threadState.title = '';
+        threadState.replyable = true;
         threadState.messages = [];
         if (threadRefreshTimer) clearTimeout(threadRefreshTimer);
         updateThreadActionButtons('');
@@ -1759,7 +1808,8 @@
                 lastTimestamp: '',
                 unread: 0,
                 total: 0,
-                lastDirection: isOut ? 'outgoing' : 'incoming'
+                lastDirection: isOut ? 'outgoing' : 'incoming',
+                replyable: sms.replyable !== false && sms.sender_is_phone !== false
             };
             existing.total += 1;
             if (!isOut && !sms.read) existing.unread += 1;
@@ -1768,6 +1818,7 @@
                 existing.lastMessage = summarizeMessagePreview(sms.message || '');
                 existing.lastTimestamp = sms.timestamp || '';
                 existing.lastDirection = isOut ? 'outgoing' : 'incoming';
+                existing.replyable = sms.replyable !== false && sms.sender_is_phone !== false;
             }
             map.set(number, existing);
         });
@@ -1794,7 +1845,8 @@
                 unread: Number(row.unread_count || 0),
                 total: Number(row.total_count || 0),
                 lastDirection: row.last_direction || (isOut ? 'outgoing' : 'incoming'),
-                lastStatus: row.status || ''
+                lastStatus: row.status || '',
+                replyable: isReplyableValue(row.replyable) && row.sender_is_phone !== false
             };
         }).filter((thread) => thread.number);
     }
@@ -1894,6 +1946,10 @@
     function openComposeForNumber(number) {
         const target = getThreadActionNumber(number);
         if (!target) return;
+        if (threadState.replyable === false && target === threadState.number) {
+            showToast('System SMS cannot be replied to.', 'warning');
+            return;
+        }
 
         setPhoneFieldValue('smsChatTo', target);
         const chatMessage = document.getElementById('smsChatMessage');
@@ -2038,20 +2094,23 @@
         }
     }
 
-    function updateThreadActionButtons(number) {
+    function updateThreadActionButtons(number, options = {}) {
         const target = getThreadActionNumber(number);
+        const replyable = options.replyable !== undefined ? isReplyableValue(options.replyable) : threadState.replyable !== false;
+        const blockReply = Boolean(target || threadState.conversationId) && !replyable;
         const callBtn = document.getElementById('smsChatCallBtn') || document.getElementById('smsThreadCallBtn');
         const replyBtn = document.getElementById('smsThreadReplyBtn');
         const menuButtons = ['smsChatThreadMenuBtn', 'smsThreadMenuBtn'];
         const chatTo = document.getElementById('smsChatTo');
 
         if (callBtn) {
-            callBtn.disabled = !target;
+            callBtn.disabled = !target || blockReply;
             callBtn.dataset.number = target;
         }
         if (replyBtn) {
-            replyBtn.disabled = !target;
+            replyBtn.disabled = !target || blockReply;
             replyBtn.dataset.number = target;
+            replyBtn.title = blockReply ? 'System SMS cannot be replied to' : 'Reply';
         }
         menuButtons.forEach(function (id) {
             const button = document.getElementById(id);
@@ -2060,9 +2119,10 @@
             button.dataset.number = target;
             button.dataset.conversationId = threadState.conversationId || '';
         });
-        if (chatTo && target) {
+        if (chatTo && target && !blockReply) {
             setPhoneFieldValue('smsChatTo', target);
         }
+        setChatComposerBlocked(blockReply);
     }
 
     function markThreadMessagesRead(messages) {
@@ -2205,6 +2265,7 @@
         const target = getThreadActionNumber(number);
         const conversationId = Math.max(0, Number(options.conversationId) || 0) || null;
         const title = String(options.title || '').trim() || target;
+        const initialReplyable = options.replyable === undefined ? true : isReplyableValue(options.replyable);
         if (!target && !conversationId) return Promise.resolve();
         const requestDeviceId = getSmsActiveDeviceId();
         const requestToken = ++smsThreadToken;
@@ -2213,7 +2274,8 @@
         threadState.number = target;
         threadState.conversationId = conversationId;
         threadState.title = title;
-        updateThreadActionButtons(target);
+        threadState.replyable = initialReplyable;
+        updateThreadActionButtons(target, { replyable: initialReplyable });
         updateThreadPermalink(target, conversationId, title);
         syncConversationSelection(target, conversationId);
         syncThreadUrl(target, historyMode, conversationId, title);
@@ -2247,9 +2309,12 @@
                     return;
                 }
                 const resolvedConversationId = Math.max(0, Number(data?.meta?.conversationId) || 0) || conversationId || null;
+                const resolvedReplyable = data?.meta?.replyable === undefined ? initialReplyable : isReplyableValue(data.meta.replyable);
                 threadState.messages = Array.isArray(data.data) ? data.data : [];
                 threadState.conversationId = resolvedConversationId;
-                threadState.title = title || String(data?.meta?.number || target || '').trim();
+                threadState.title = String(data?.meta?.displayName || '').trim() || title || String(data?.meta?.number || target || '').trim();
+                threadState.replyable = resolvedReplyable;
+                updateThreadActionButtons(target, { replyable: resolvedReplyable });
                 renderThreadMessages(threadState.messages, target, threadState.title);
                 syncConversationSelection(target, resolvedConversationId);
                 syncThreadUrl(target, 'replace', resolvedConversationId, threadState.title);
@@ -2320,6 +2385,7 @@
                         data-thread-conversation-id="${thread.conversationId || ''}"
                         data-thread-last-direction="${esc(thread.lastDirection || '')}"
                         data-thread-last-status="${esc(thread.lastStatus || '')}"
+                        data-thread-replyable="${thread.replyable === false ? 'false' : 'true'}"
                         data-thread-title="${esc(thread.title || thread.number)}">
                     <div class="d-flex justify-content-between align-items-start gap-2 conversation-item-top">
                         <div class="min-w-0">
@@ -2337,6 +2403,7 @@
                                         data-thread-menu-toggle="1"
                                         data-thread-number="${esc(thread.number)}"
                                         data-thread-conversation-id="${thread.conversationId || ''}"
+                                        data-thread-replyable="${thread.replyable === false ? 'false' : 'true'}"
                                         data-thread-title="${esc(thread.title || thread.number)}"
                                         aria-expanded="false"
                                         aria-label="Thread menu">
@@ -2370,6 +2437,7 @@
             loadSmsThread(conversations[0].number, {
                 conversationId: conversations[0].conversationId,
                 title: conversations[0].title,
+                replyable: conversations[0].replyable,
                 showModal: false,
                 silent: true
             });
@@ -2813,13 +2881,16 @@
                 const number = String(item.dataset.threadNumber || '').trim();
                 const conversationId = Math.max(0, Number(item.dataset.threadConversationId) || 0) || null;
                 const title = String(item.dataset.threadTitle || '').trim();
+                const replyable = isReplyableValue(item.dataset.threadReplyable);
                 if (!number && !conversationId) return;
                 threadState.number = number;
                 threadState.conversationId = conversationId;
                 threadState.title = title || number;
+                threadState.replyable = replyable;
                 loadSmsThread(number, {
                     conversationId,
                     title,
+                    replyable,
                     showModal: false,
                     historyMode: 'push'
                 });
@@ -2965,6 +3036,9 @@
         if (focusComposerBtn && focusComposerBtn.dataset.focusBound !== '1') {
             focusComposerBtn.dataset.focusBound = '1';
             focusComposerBtn.addEventListener('click', function () {
+                if (threadState.replyable === false && (threadState.number || threadState.conversationId)) {
+                    clearThreadSelection({ historyMode: 'replace' });
+                }
                 const chatTo = document.getElementById('smsChatTo');
                 const chatMessage = document.getElementById('smsChatMessage');
                 if (chatTo && !chatTo.value) {
@@ -3416,6 +3490,11 @@
 
     function handleChatSendSms(e) {
         e.preventDefault();
+
+        if (threadState.replyable === false && (threadState.number || threadState.conversationId)) {
+            showToast('System SMS cannot be replied to.', 'warning');
+            return;
+        }
 
         const phoneValidation = validatePhoneField('smsChatTo', { allowShortCode: true });
         const recipients = Array.isArray(phoneValidation.values) ? phoneValidation.values : [phoneValidation.value].filter(Boolean);

@@ -42,6 +42,16 @@ describe('sms conversation participant normalization', () => {
             title: '*123#'
         });
     });
+
+    test('keeps malformed carrier senders as service conversations with inferred names', () => {
+        expect(normalizeConversationParticipant('3=:24;82=8<3=86<2:41', {
+            message: 'visit https://cutt.ly/myRobiOffer'
+        })).toEqual({
+            number: '3=:24;82=8<3=86<2:41',
+            key: 'service:3=:24;82=8<3=86<2:41',
+            title: 'Robi'
+        });
+    });
 });
 
 describe('sms conversation backfill', () => {
@@ -121,6 +131,34 @@ describe('sms conversation backfill', () => {
             primary_number: 'service-inbox',
             conversation_key: 'service:inbox',
             title: 'Service messages'
+        });
+    });
+
+    test('backfills shifted carrier sender without turning embedded digits into a fake phone number', async () => {
+        const sender = '3=:24;82=8<3=86<2:41';
+        const inserted = await db.run(
+            `INSERT INTO sms (device_id, from_number, to_number, message, timestamp, type, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [deviceId, sender, '', 'visit https://cutt.ly/myRobiOffer', '2026-04-16 10:10:00', 'incoming', 'received']
+        );
+
+        await backfillSmsConversations(db);
+
+        const message = await db.get(
+            'SELECT conversation_id FROM sms WHERE id = ?',
+            [inserted.lastID]
+        );
+        const conversation = await db.get(
+            `SELECT primary_number, conversation_key, title
+             FROM sms_conversations
+             WHERE id = ?`,
+            [message.conversation_id]
+        );
+
+        expect(conversation).toEqual({
+            primary_number: sender,
+            conversation_key: `service:${sender.toLowerCase()}`,
+            title: 'Robi'
         });
     });
 });

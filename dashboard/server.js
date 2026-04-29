@@ -40,7 +40,6 @@ const deviceGroupsRoute = require('./routes/deviceGroups');
 const apiKeysRoute = require('./routes/apiKeys');
 const webhooksRoute = require('./routes/webhooks');
 const automationRoute = require('./routes/automation');
-const automationEngine = require('./services/automationEngine');
 
 // Swagger UI (available in all environments; auth-guarded below)
 const swaggerUi   = require('swagger-ui-express');
@@ -144,11 +143,6 @@ function initializeRuntimeServices() {
         const { startScheduledSmsProcessor } = require('./routes/sms');
         backgroundTimers.push(startScheduledSmsProcessor(app));
 
-        // ==================== N8N INTEGRATION SERVICE ====================
-        const N8nService = require('./services/n8nService');
-        const n8nService = new N8nService(app);
-        app.locals.n8nService = n8nService;
-
         // ==================== MQTT HANDLERS INITIALIZATION ====================
         const MQTTHandlers = require('./services/mqttHandlers');
         mqttHandlers = new MQTTHandlers(mqttService, io, app);
@@ -159,6 +153,7 @@ function initializeRuntimeServices() {
         // ==================== AUTOMATION ENGINE INITIALIZATION ====================
         // db may not be ready yet (async init above); pass a proxy accessor so the
         // engine picks up the db reference once it is available.
+        const automationEngine = require('./services/automationEngine');
         const dbProxy = new Proxy({}, {
             get(_, prop) {
                 const dbInst = app.locals.db;
