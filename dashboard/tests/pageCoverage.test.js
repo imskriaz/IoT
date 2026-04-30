@@ -492,6 +492,51 @@ describe('sidebar navigation coverage', () => {
         expect(js).toContain('buildDeviceAwareHref');
     });
 
+    test('header module-health renders device modules and excludes modem services', () => {
+        const js = fs.readFileSync(mainJsPath, 'utf8');
+        const moduleHealth = fs.readFileSync(path.join(__dirname, '..', 'utils', 'moduleHealth.js'), 'utf8');
+
+        expect(js).toContain("const preferred = ['mqtt', 'modem', 'internet', 'wifi'");
+        expect(js).not.toContain("const preferred = ['mqtt', 'modem', 'internet', 'sms'");
+        expect(moduleHealth).toContain("internet: { label: 'Internet', capability: 'internet' }");
+        expect(moduleHealth).not.toContain("sms: { label: 'SMS', capability: 'sms' }");
+        expect(moduleHealth).not.toContain("calls: { label: 'Calls', capability: 'calls' }");
+        expect(moduleHealth).not.toContain("ussd: { label: 'USSD', capability: 'ussd' }");
+    });
+
+    test('sidebar metrics strip is pinned below the scrolling navigation', () => {
+        const sidebarHtml = fs.readFileSync(path.join(__dirname, '..', 'views', 'partials', 'sidebar.html'), 'utf8');
+        const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'app.css'), 'utf8');
+
+        expect(sidebarHtml).toContain('id="sidebarMetricsStrip"');
+        expect(css).toContain('.sidebar-content > .nav');
+        expect(css).toContain('overflow-y: auto');
+        expect(css).toContain('#sidebarMetricsStrip');
+        expect(css).toContain('margin-top: auto !important');
+    });
+
+    test('sms new compose action opens the modal composer', () => {
+        const html = fs.readFileSync(smsPagePath, 'utf8');
+        const js = fs.readFileSync(smsJsPath, 'utf8');
+
+        expect(html).toContain('id="smsFocusComposerBtn"');
+        expect(html).toContain('id="composeSmsModal"');
+        expect(html).toContain('id="modalTo"');
+        expect(html).toContain('id="modalRecipientModeSingle"');
+        expect(html).toContain('id="modalRecipientModeMultiple"');
+        expect(html).toContain('id="modalRecipientModeUpload"');
+        expect(html).toContain('id="modalScheduleEnabled"');
+        expect(html).toContain('id="modalBulkRecipients"');
+        expect(html).toContain('id="modalScheduleImportFile"');
+        expect(html).toContain('id="smsOpenScheduleListBtn"');
+        expect(html).toContain('id="smsConversationPullBtn"');
+        expect(html).toContain('id="smsThreadBackBtn"');
+        expect(js).toContain('function openComposeSmsModal(options = {})');
+        expect(js).toContain("openComposeSmsModal({ reset: true, to: '', message: '' });");
+        expect(js).toContain('function updateMobileConversationMode()');
+        expect(js).not.toContain('focusChatRecipientEditor();\n                } else if (chatMessage)');
+    });
+
     test('dashboard quick actions include SIM number detection and refresh on USSD response', () => {
         const html = fs.readFileSync(indexPath, 'utf8');
         const js = fs.readFileSync(mainJsPath, 'utf8');

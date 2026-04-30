@@ -2660,7 +2660,7 @@ function renderSidebarModuleHealth(moduleHealth) {
         return;
     }
 
-    const preferred = ['mqtt', 'modem', 'internet', 'sms', 'calls', 'contacts', 'ussd', 'wifi', 'gps', 'storage', 'display', 'camera', 'webcam', 'audio', 'intercom', 'nfc', 'rfid', 'touch', 'keyboard'];
+    const preferred = ['mqtt', 'modem', 'internet', 'wifi', 'gps', 'storage', 'display', 'camera', 'webcam', 'audio', 'intercom', 'nfc', 'rfid', 'touch', 'keyboard'];
     const sorted = preferred
         .map((key) => moduleHealth.find((entry) => entry.moduleKey === key))
         .filter(Boolean)

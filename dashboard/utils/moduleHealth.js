@@ -62,10 +62,6 @@ const MODULE_DEFINITIONS = {
     mqtt: { label: 'MQTT' },
     modem: { label: 'Modem' },
     internet: { label: 'Internet', capability: 'internet' },
-    sms: { label: 'SMS', capability: 'sms' },
-    calls: { label: 'Calls', capability: 'calls' },
-    contacts: { label: 'Contacts', capability: 'contacts' },
-    ussd: { label: 'USSD', capability: 'ussd' },
     wifi: { label: 'Wi-Fi', capability: 'wifi' },
     gps: { label: 'GPS', capability: 'gps' },
     storage: { label: 'Storage', capability: 'storage' },
@@ -80,6 +76,7 @@ const MODULE_DEFINITIONS = {
 
 function isSupported(moduleKey, caps = {}) {
     if (moduleKey === 'mqtt' || moduleKey === 'modem') return true;
+    if (moduleKey === 'internet') return Boolean(caps.internet || caps.wifi || caps.modem);
     if (moduleKey === 'storage') return Boolean(caps.storage || caps.sd);
     return Boolean(caps[MODULE_DEFINITIONS[moduleKey]?.capability || moduleKey]);
 }
@@ -277,6 +274,55 @@ function getBaseEntry(moduleKey, caps = {}, mqttConnected = false, live = {}) {
                 simReady: sim.ready ?? null,
                 registered
             } : null
+        };
+    }
+
+    if (moduleKey === 'internet') {
+        const wifi = live.wifi || {};
+        const sim = live.sim || {};
+        const activePath = String(live.activePath || live.active_path || '').trim().toLowerCase();
+        const wifiOnline = wifi.connected === true || Boolean(wifi.ipAddress) || activePath === 'wifi';
+        const modemOnline = live.online !== false && (
+            activePath === 'modem'
+            || Boolean(live.ip)
+            || Boolean(live.modem_data_ip)
+            || Boolean(live.modem_ip_address)
+            || Boolean(sim.dataIp)
+            || sim.registered === true
+        );
+        const onlinePath = wifiOnline ? 'Wi-Fi' : (modemOnline ? 'Modem' : '');
+
+        if (!supported) {
+            return {
+                moduleKey,
+                label: definition.label,
+                supported: false,
+                state: 'unsupported',
+                message: 'No Wi-Fi or modem module reported',
+                lastSuccessAt: null,
+                lastFailureAt: null,
+                updatedAt: null,
+                details: null
+            };
+        }
+
+        return {
+            moduleKey,
+            label: definition.label,
+            supported: true,
+            state: onlinePath ? 'ok' : (live.online ? 'warning' : 'error'),
+            message: onlinePath
+                ? `Online through ${onlinePath}`
+                : (live.online ? 'Waiting for Wi-Fi or modem data path' : 'No recent heartbeat'),
+            lastSuccessAt: onlinePath ? (live.lastSeen || null) : null,
+            lastFailureAt: onlinePath ? null : (live.lastSeen || null),
+            updatedAt: live.lastSeen || null,
+            details: {
+                activePath: activePath || null,
+                wifiOnline,
+                modemOnline,
+                ip: live.ip || wifi.ipAddress || sim.dataIp || null
+            }
         };
     }
 

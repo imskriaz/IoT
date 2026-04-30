@@ -6,137 +6,53 @@
         <p class="text-muted mb-0" id="smsSyncOverlayText">Please wait while messages are copied from the phone.</p>
     </div>
 </div>
-<div class="sms-compact d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4 gap-3">
+<div class="sms-page-shell">
+<div class="sms-compact sms-page-topbar d-flex justify-content-between align-items-center mb-2 gap-2">
     <div>
-        <h2 class="mb-1">
+        <h2 class="mb-0">
             <i class="bi bi-chat-dots me-2"></i>SMS Management
         </h2>
-        <p class="text-muted mb-0">Send and receive messages, manage contacts</p>
     </div>
-    <div class="d-flex gap-2">
-        <button class="btn btn-outline-primary" type="button" onclick="openContactsModal('smsChatTo')">
-            <i class="bi bi-person-lines-fill me-2"></i>
-            <span class="d-none d-md-inline">Contacts</span>
+    <div class="d-flex gap-2 sms-page-actions">
+        <button class="btn btn-outline-secondary" type="button" data-bs-toggle="offcanvas" data-bs-target="#smsDetailsPanel" aria-controls="smsDetailsPanel">
+            <i class="bi bi-info-circle me-1"></i><span class="d-none d-md-inline">Details</span>
         </button>
-        <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#scheduleModal">
+        <button class="btn btn-outline-secondary" type="button" id="smsOpenScheduleListBtn" data-bs-toggle="modal" data-bs-target="#scheduleModal">
             <i class="bi bi-clock me-1"></i><span class="d-none d-lg-inline">Schedule</span>
         </button>
-        <a href="/api/sms/export/csv" class="btn btn-outline-secondary" id="smsExportCsvLink" download>
-            <i class="bi bi-download me-1"></i><span class="d-none d-md-inline">Export CSV</span>
-        </a>
-        <button class="btn btn-primary" type="button" id="smsFocusComposerBtn">
-            <i class="bi bi-plus-circle me-2"></i>
-            <span class="d-none d-md-inline">New SMS</span>
-        </button>
-    </div>
-</div>
-<div class="d-flex justify-content-between align-items-center mb-2">
-    <small class="text-muted">Tip: <kbd>/</kbd> search, <kbd>C</kbd> compose, <kbd>?</kbd> shortcuts</small>
-    <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="modal" data-bs-target="#smsShortcutsModal" aria-label="Open SMS keyboard shortcuts">
-        <i class="bi bi-keyboard me-1"></i>Shortcuts
-    </button>
-</div>
-
-<!-- Stats Cards -->
-<div class="sms-compact row g-2 mb-3 sms-stats-row">
-    <div class="col-6 col-sm-3">
-        <div class="card bg-primary bg-opacity-10 border-0">
-            <div class="card-body">
-                <div class="d-flex align-items-center">
-                    <div class="flex-shrink-0">
-                        <i class="bi bi-envelope fs-2 text-primary"></i>
-                    </div>
-                    <div class="flex-grow-1 ms-3">
-                        <h6 class="mb-1">Total</h6>
-                        <h4 id="smsTotalCount" class="mb-0"><%= pagination.totalItems %></h4>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-sm-3">
-        <div class="card bg-success bg-opacity-10 border-0">
-            <div class="card-body">
-                <div class="d-flex align-items-center">
-                    <div class="flex-shrink-0">
-                        <i class="bi bi-send fs-2 text-success"></i>
-                    </div>
-                    <div class="flex-grow-1 ms-3">
-                        <h6 class="mb-1">Outgoing</h6>
-                        <h4 id="smsSentCount" class="mb-0"><%= messages.filter(m => m.type === 'outgoing').length %></h4>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-sm-3">
-        <div class="card bg-info bg-opacity-10 border-0">
-            <div class="card-body">
-                <div class="d-flex align-items-center">
-                    <div class="flex-shrink-0">
-                        <i class="bi bi-inbox fs-2 text-info"></i>
-                    </div>
-                    <div class="flex-grow-1 ms-3">
-                        <h6 class="mb-1">Received</h6>
-                        <h4 id="smsInboxCount" class="mb-0"><%= messages.filter(m => m.type !== 'outgoing').length %></h4>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-sm-3">
-        <div class="card bg-warning bg-opacity-10 border-0">
-            <div class="card-body">
-                <div class="d-flex align-items-center">
-                    <div class="flex-shrink-0">
-                        <i class="bi bi-envelope-open fs-2 text-warning"></i>
-                    </div>
-                    <div class="flex-grow-1 ms-3">
-                        <h6 class="mb-1">Unread</h6>
-                        <h4 id="smsUnreadCount" class="mb-0"><%= unreadCount %></h4>
-                    </div>
-                </div>
-            </div>
-        </div>
     </div>
 </div>
 
-<!-- Search Bar -->
-<div class="sms-compact card mb-4 sticky-top" style="top: 58px; z-index: 1020;">
-    <div class="card-body">
-        <div class="row g-2">
-            <div class="col-12 col-md-8">
-                <div class="input-group">
-                    <span class="input-group-text bg-white">
-                        <i class="bi bi-search"></i>
-                    </span>
-                    <input type="text" class="form-control" id="searchSms" placeholder="Search conversations...">
-                </div>
-            </div>
-            <div class="col-6 col-md-2">
-                <select class="form-select" id="filterType">
-                    <option value="all">All Conversations</option>
-                    <option value="unread">Unread Only</option>
-                </select>
-            </div>
-            <div class="col-6 col-md-2">
-                <select class="form-select" id="sortOrder">
-                    <option value="newest">Newest First</option>
-                    <option value="oldest">Oldest First</option>
-                </select>
-            </div>
+<div class="offcanvas offcanvas-end" tabindex="-1" id="smsDetailsPanel" aria-labelledby="smsDetailsPanelTitle">
+    <div class="offcanvas-header">
+        <div>
+            <h5 class="offcanvas-title" id="smsDetailsPanelTitle"><i class="bi bi-chat-dots me-2"></i>SMS Management</h5>
+            <div class="small text-muted">Send, receive, schedule, and export SMS for the selected device.</div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+    </div>
+    <div class="offcanvas-body">
+        <div class="d-grid gap-2 mb-3">
+            <a href="/api/sms/export/csv" class="btn btn-outline-secondary text-start" id="smsExportCsvLink" download>
+                <i class="bi bi-download me-2"></i>Export CSV
+            </a>
+            <button class="btn btn-outline-secondary text-start" type="button" data-bs-toggle="modal" data-bs-target="#smsShortcutsModal">
+                <i class="bi bi-keyboard me-2"></i>Shortcuts
+            </button>
+        </div>
+        <div class="small text-muted">
+            <div class="fw-semibold text-body mb-2">Keyboard</div>
+            <div class="d-flex justify-content-between py-1 border-bottom"><span>Focus search</span><kbd>/</kbd></div>
+            <div class="d-flex justify-content-between py-1 border-bottom"><span>Compose SMS</span><kbd>C</kbd></div>
+            <div class="d-flex justify-content-between py-1 border-bottom"><span>Open shortcuts</span><kbd>?</kbd></div>
+            <div class="d-flex justify-content-between py-1"><span>Mark all read</span><span><kbd>Shift</kbd> + <kbd>R</kbd></span></div>
         </div>
     </div>
-</div>
-<div class="d-flex flex-wrap gap-2 mb-3" id="quickFilterChips" aria-label="Quick message filters">
-    <button class="btn btn-sm btn-outline-secondary active" data-quick-filter="all">All</button>
-    <button class="btn btn-sm btn-outline-secondary" data-quick-filter="unread">Unread</button>
-    <button class="btn btn-sm btn-outline-secondary" data-quick-filter="today">Today</button>
 </div>
 
 <!-- Conversation Workspace -->
 <div class="sms-compact row g-2 mb-3" id="smsConversationWorkspace">
-    <div class="col-12 col-sm-5 col-lg-4">
+    <div class="col-12 col-md-5 col-lg-4 sms-conversation-pane">
         <div class="card h-100 sms-conversation-card">
             <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center gap-2">
                 <div>
@@ -144,15 +60,53 @@
                     <small class="text-muted" id="smsConversationMeta">Loading latest threads...</small>
                 </div>
                 <div class="d-flex align-items-center gap-2">
-                    <span class="badge bg-warning text-dark d-none" id="scheduledBadge">0</span>
-                    <button class="btn btn-sm btn-outline-secondary rounded-circle sms-header-icon-btn" type="button" data-bs-toggle="modal" data-bs-target="#scheduleModal" title="Open schedule planner" aria-label="Open schedule planner">
-                        <i class="bi bi-calendar-plus"></i>
+                    <button class="btn btn-sm btn-outline-primary sms-conversation-pull-btn" type="button" id="smsConversationPullBtn" onclick="pullDeviceMessages(this)" title="Pull messages" aria-label="Pull messages">
+                        <i class="bi bi-cloud-arrow-down"></i>
                     </button>
+                    <button class="badge bg-warning text-dark d-none border-0" type="button" id="scheduledBadge" data-bs-toggle="modal" data-bs-target="#scheduleModal">0</button>
                     <button class="btn btn-sm btn-outline-secondary" type="button" onclick="markAllAsRead()">
                         <i class="bi bi-envelope-open me-1"></i><span class="d-none d-lg-inline">Read all</span>
                     </button>
-                    <button class="btn btn-sm btn-outline-primary" type="button" id="smsPullMessagesBtn" onclick="pullDeviceMessages(this)">
-                        <i class="bi bi-cloud-arrow-down me-1"></i><span class="d-none d-lg-inline">Pull messages</span>
+                    <button class="btn btn-sm btn-primary" type="button" id="smsFocusComposerBtn">
+                        <i class="bi bi-plus-circle me-1"></i><span class="d-none d-lg-inline">New SMS</span>
+                    </button>
+                </div>
+            </div>
+            <div class="sms-conversation-tools">
+                <div class="sms-conversation-search-row">
+                    <div class="input-group input-group-sm sms-conversation-search">
+                        <span class="input-group-text bg-white">
+                            <i class="bi bi-search"></i>
+                        </span>
+                        <input type="text" class="form-control" id="searchSms" placeholder="Search conversations...">
+                    </div>
+                    <select class="form-select form-select-sm sms-conversation-sort" id="sortOrder" aria-label="Sort conversations">
+                        <option value="newest">Newest</option>
+                        <option value="oldest">Oldest</option>
+                    </select>
+                    <select class="d-none" id="filterType" aria-hidden="true" tabindex="-1">
+                        <option value="all">All</option>
+                        <option value="inbox">Received</option>
+                        <option value="sent">Sent</option>
+                        <option value="unread">Unread</option>
+                    </select>
+                </div>
+                <div class="sms-filter-tabs" id="quickFilterChips" aria-label="Conversation filters">
+                    <button class="btn btn-sm btn-outline-secondary active" data-quick-filter="all">
+                        <span>All</span>
+                        <span class="sms-tab-count" id="smsTotalCount"><%= pagination.totalItems %></span>
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" data-quick-filter="inbox">
+                        <span>Received</span>
+                        <span class="sms-tab-count" id="smsInboxCount"><%= messages.filter(m => m.type !== 'outgoing').length %></span>
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" data-quick-filter="sent">
+                        <span>Sent</span>
+                        <span class="sms-tab-count" id="smsSentCount"><%= messages.filter(m => m.type === 'outgoing').length %></span>
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" data-quick-filter="unread">
+                        <span>Unread</span>
+                        <span class="sms-tab-count" id="smsUnreadCount"><%= unreadCount %></span>
                     </button>
                 </div>
             </div>
@@ -167,12 +121,17 @@
             </div>
         </div>
     </div>
-    <div class="col-12 col-sm-7 col-lg-8">
+    <div class="col-12 col-md-7 col-lg-8 sms-chat-pane">
         <div class="card h-100 sms-chat-card">
             <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center gap-2 flex-wrap sms-chat-topbar">
-                <div>
-                    <h5 class="mb-0 sms-chat-number" id="smsChatNumber"><i class="bi bi-chat-square-text me-2"></i>Select a conversation</h5>
-                    <small class="text-muted" id="smsChatMeta">Messages will appear here.</small>
+                <div class="d-flex align-items-center gap-2 min-w-0">
+                    <button type="button" class="btn btn-sm btn-outline-secondary rounded-circle sms-thread-back-btn" id="smsThreadBackBtn" aria-label="Back to conversations">
+                        <i class="bi bi-arrow-left"></i>
+                    </button>
+                    <div class="min-w-0">
+                    <h5 class="mb-0 sms-chat-number" id="smsChatNumber">Select a conversation</h5>
+                    <small class="text-muted" id="smsChatMeta"></small>
+                    </div>
                 </div>
                 <div class="d-flex align-items-center gap-2">
                     <span class="badge bg-light text-dark border" id="smsChatCount">0 messages</span>
@@ -296,6 +255,7 @@
         </div>
     </div>
 </div>
+</div>
 
 <!-- Schedule SMS Modal -->
 <div class="modal fade" id="scheduleModal" tabindex="-1">
@@ -412,10 +372,8 @@
         <div class="modal-content">
             <div class="modal-header">
                 <div>
-                    <h5 class="modal-title" id="smsThreadTitle">
-                        <i class="bi bi-chat-square-text me-2"></i>Conversation
-                    </h5>
-                    <small class="text-muted" id="smsThreadMeta">Loading thread...</small>
+                    <h5 class="modal-title" id="smsThreadTitle">Conversation</h5>
+                    <small class="text-muted" id="smsThreadMeta"></small>
                 </div>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
@@ -1130,23 +1088,52 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>
             <div class="modal-body">
                 <form id="composeSmsForm">
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">To</label>
-                        <div class="d-flex gap-2">
+                    <div class="mb-3 sms-compose-recipient-area">
+                        <label class="form-label fw-bold">Recipients</label>
+                        <div class="btn-group w-100 sms-recipient-mode-toggle mb-2" role="group" aria-label="Recipient input mode">
+                            <input type="radio" class="btn-check" name="modalRecipientMode" id="modalRecipientModeSingle" value="single" autocomplete="off" checked>
+                            <label class="btn btn-outline-primary" for="modalRecipientModeSingle">
+                                <i class="bi bi-person me-1"></i>Single
+                            </label>
+                            <input type="radio" class="btn-check" name="modalRecipientMode" id="modalRecipientModeMultiple" value="multiple" autocomplete="off">
+                            <label class="btn btn-outline-primary" for="modalRecipientModeMultiple">
+                                <i class="bi bi-people me-1"></i>Multiple
+                            </label>
+                            <input type="radio" class="btn-check" name="modalRecipientMode" id="modalRecipientModeUpload" value="upload" autocomplete="off">
+                            <label class="btn btn-outline-primary" for="modalRecipientModeUpload">
+                                <i class="bi bi-file-earmark-spreadsheet me-1"></i>Upload
+                            </label>
+                        </div>
+                        <div class="sms-recipient-mode-pane" id="modalSingleRecipientPane">
                             <input type="tel" class="form-control" id="modalTo" name="to" data-intl-tel-input
                                    placeholder="Choose country or type number" required>
-                            <button class="btn btn-outline-primary flex-shrink-0" type="button" id="pickContactBtn" onclick="openContactsModal('modalTo')">
-                                <i class="bi bi-person-lines-fill"></i> Contacts
-                            </button>
+                            <div class="sms-recipient-pills d-none mt-2" id="modalRecipientPills" aria-live="polite"></div>
+                            <div class="small text-muted mt-1" id="modalRecipientMeta">1 recipient will use the normal SMS thread.</div>
                         </div>
-                        <div class="sms-recipient-pills d-none mt-2" id="modalRecipientPills" aria-live="polite"></div>
-                        <div class="form-text">
-                            <i class="bi bi-info-circle me-1"></i>
-                            Paste one or many numbers. Separate entries with comma, semicolon, or new line. Short service codes are also allowed.
+                        <div class="sms-recipient-mode-pane d-none" id="modalMultipleRecipientPane">
+                            <textarea class="form-control form-control-sm" id="modalBulkRecipients" rows="3" placeholder="+8801..., +8801..."></textarea>
+                            <div class="d-flex justify-content-between align-items-center gap-2 mt-2">
+                                <small class="text-muted">Comma, semicolon, or new line separated.</small>
+                                <button type="button" class="btn btn-sm btn-outline-primary" id="modalApplyBulkRecipientsBtn">
+                                    <i class="bi bi-check2 me-1"></i>Apply
+                                </button>
+                            </div>
                         </div>
-                        <div class="small text-muted mt-1" id="modalRecipientMeta">1 recipient will use the normal SMS thread.</div>
+                        <div class="sms-recipient-mode-pane d-none" id="modalUploadRecipientPane">
+                            <div class="input-group input-group-sm">
+                                <input type="file" class="form-control" id="modalScheduleImportFile" accept=".csv,.tsv,text/csv,text/plain">
+                                <button type="button" class="btn btn-outline-primary" id="modalScheduleImportBtn">
+                                    <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                                    <i class="bi bi-upload me-1"></i>Upload
+                                </button>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center mt-2 gap-2">
+                                <small class="text-muted">CSV from Excel: phone, message, send_at, sim_slot.</small>
+                                <button type="button" class="btn btn-sm btn-link p-0" onclick="downloadSmsScheduleTemplate()">Template</button>
+                            </div>
+                        </div>
                     </div>
-                    <div class="mb-3">
+                    <div class="mb-3 sms-compose-manual-section">
                         <label class="form-label fw-bold">Message</label>
                         <textarea class="form-control" id="modalMessage" name="message" rows="4"
                                   placeholder="Type your message here..." required></textarea>
@@ -1162,9 +1149,20 @@ document.addEventListener('DOMContentLoaded', function() {
                             </span>
                         </div>
                     </div>
+                    <div class="mb-3 sms-compose-manual-section">
+                        <div class="form-check form-switch mb-2">
+                            <input class="form-check-input" type="checkbox" role="switch" id="modalScheduleEnabled">
+                            <label class="form-check-label fw-bold" for="modalScheduleEnabled">Schedule message</label>
+                        </div>
+                        <div class="d-none" id="modalScheduleRow">
+                            <label class="form-label fw-bold" for="modalScheduleAt">Send at</label>
+                            <input type="datetime-local" class="form-control" id="modalScheduleAt">
+                            <div class="form-text">Scheduled SMS stays dashboard-owned until dispatch.</div>
+                        </div>
+                    </div>
 
                     <!-- SMS Templates -->
-                    <div class="mb-3">
+                    <div class="mb-3 sms-compose-manual-section">
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <label class="form-label fw-bold mb-0">Templates</label>
                             <button type="button" class="btn btn-sm btn-outline-success" onclick="saveCurrentAsTemplate()">
@@ -1183,7 +1181,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 </button>
                 <button type="button" class="btn btn-primary" id="modalSendBtn">
                     <span class="spinner-border spinner-border-sm d-none" role="status"></span>
-                    <i class="bi bi-send me-2"></i>Send Message
+                    <i class="bi bi-send me-2"></i><span id="modalSendBtnLabel">Send Message</span>
                 </button>
             </div>
         </div>
@@ -1362,8 +1360,8 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .sms-compact .message-item .message-text {
-    font-size: 0.82rem;
-    line-height: 1.3;
+    font-size: 0.88rem;
+    line-height: 1.36;
 }
 
 .sms-compact .message-item small {
@@ -1375,27 +1373,122 @@ document.addEventListener('DOMContentLoaded', function() {
     font-size: 0.84rem;
 }
 
-.sms-stats-row .card-body {
-    padding: 0.6rem 0.75rem;
+.sms-page-shell {
+    min-height: calc(100vh - var(--header-height) - 1.3rem);
+    display: flex;
+    flex-direction: column;
 }
 
-.sms-stats-row h6 {
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
+body.no-app-header .sms-page-shell {
+    min-height: calc(100vh - 1.3rem);
 }
 
-.sms-stats-row h4 {
-    font-size: 1.15rem;
+#smsConversationWorkspace {
+    flex: 1 1 auto;
+    min-height: 0;
+    align-items: stretch;
+    margin-bottom: 0 !important;
 }
 
-.sms-stats-row .fs-2 {
-    font-size: 1.3rem !important;
+#smsConversationWorkspace > [class*="col-"] {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.sms-page-topbar h2 {
+    font-size: 1.18rem;
+}
+
+.sms-page-actions .btn {
+    min-height: 2rem;
+    padding: 0.24rem 0.58rem;
+}
+
+.sms-conversation-card,
+.sms-chat-card {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
 }
 
 .sms-conversation-list {
-    max-height: 68vh;
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
     overflow-y: auto;
+}
+
+.sms-conversation-tools {
+    display: flex;
+    flex-direction: column;
+    gap: 0.38rem;
+    padding: 0.42rem 0.55rem;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.075);
+    background: rgba(248, 249, 250, 0.68);
+}
+
+.sms-conversation-search-row {
+    display: flex;
+    align-items: center;
+    gap: 0.38rem;
+}
+
+.sms-conversation-search {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.sms-conversation-search .input-group-text,
+.sms-conversation-search .form-control,
+.sms-conversation-sort {
+    min-height: 1.95rem;
+    font-size: 0.8rem;
+}
+
+.sms-conversation-search .input-group-text {
+    padding-left: 0.5rem;
+    padding-right: 0.45rem;
+}
+
+.sms-conversation-sort {
+    width: 6.6rem;
+    flex: 0 0 6.6rem;
+    padding-left: 0.5rem;
+    padding-right: 1.75rem;
+}
+
+.sms-filter-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0.28rem;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+.sms-filter-tabs .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.28rem;
+    min-height: 1.55rem;
+    padding: 0.12rem 0.42rem;
+    border-radius: 999px;
+    line-height: 1.1;
+    white-space: nowrap;
+}
+
+.sms-tab-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.12rem;
+    height: 1.12rem;
+    padding: 0 0.3rem;
+    border-radius: 999px;
+    background: rgba(108, 117, 125, 0.14);
+    font-size: 0.68rem;
+    font-weight: 700;
 }
 
 .sms-conversation-state {
@@ -1438,12 +1531,9 @@ document.addEventListener('DOMContentLoaded', function() {
     max-width: 20rem;
 }
 
-.sms-conversation-card,
-.sms-chat-card {
-    min-height: 62vh;
-}
-
 .sms-chat-body {
+    flex: 1 1 auto;
+    min-height: 0;
     padding: 0.5rem !important;
     background:
         radial-gradient(circle at 12px 12px, rgba(13, 110, 253, 0.07) 2px, transparent 2px),
@@ -1452,26 +1542,54 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .sms-chat-thread {
-    min-height: 42vh;
-    max-height: 54vh;
+    min-height: 0;
+    height: 100%;
+    max-height: none;
     overflow-y: auto;
     padding: 0.25rem;
 }
 
 .sms-chat-topbar h5 {
-    font-size: 1rem;
+    font-size: 1.06rem;
 }
 
 .sms-chat-number {
-    max-width: min(70vw, 34rem);
+    max-width: min(56vw, 34rem);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
+.sms-thread-back-btn {
+    display: none;
+    width: 2rem;
+    height: 2rem;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.sms-recipient-mode-toggle .btn {
+    padding-top: 0.34rem;
+    padding-bottom: 0.34rem;
+}
+
+.sms-compose-recipient-area {
+    padding: 0.65rem;
+    border: 1px solid rgba(13, 110, 253, 0.16);
+    border-radius: 0.55rem;
+    background: rgba(13, 110, 253, 0.03);
+}
+
+.sms-recipient-mode-pane textarea {
+    resize: vertical;
+    min-height: 4.75rem;
+}
+
 .sms-chat-footer {
     border-top: 1px solid rgba(0, 0, 0, 0.08);
-    padding: 0.4rem 0.55rem !important;
+    padding: 0.28rem 0.42rem !important;
     background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(247, 250, 252, 0.96) 100%);
 }
@@ -1479,13 +1597,13 @@ document.addEventListener('DOMContentLoaded', function() {
 .sms-chat-compose-shell {
     display: flex;
     flex-direction: column;
-    gap: 0.38rem;
+    gap: 0.24rem;
     position: relative;
-    padding: 0.42rem;
+    padding: 0.34rem 0.38rem;
     border: 1px solid rgba(13, 110, 253, 0.1);
-    border-radius: 1rem;
+    border-radius: 0.72rem;
     background: rgba(255, 255, 255, 0.92);
-    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.045);
 }
 
 .sms-chat-compose-shell.sms-chat-compose-disabled {
@@ -1503,21 +1621,22 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .sms-recipient-row {
-    min-height: 2rem;
+    min-height: 1.55rem;
     position: relative;
+    padding-right: 5.9rem;
 }
 
 .sms-chat-recipient-strip {
     display: flex;
-    align-items: flex-start;
-    gap: 0.4rem;
-    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    flex-direction: row;
     min-width: 0;
 }
 
 .sms-chat-recipient-label {
     flex: 0 0 auto;
-    font-size: 0.7rem;
+    font-size: 0.64rem;
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -1528,8 +1647,9 @@ document.addEventListener('DOMContentLoaded', function() {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.35rem;
+    gap: 0.25rem;
     width: 100%;
+    min-width: 0;
 }
 
 .sms-chat-form {
@@ -1549,9 +1669,9 @@ document.addEventListener('DOMContentLoaded', function() {
 .sms-recipient-editor {
     display: flex;
     align-items: center;
-    gap: 0.35rem;
+    gap: 0.25rem;
     position: absolute;
-    top: calc(100% + 0.42rem);
+    top: calc(100% + 0.25rem);
     left: 0;
     right: 0;
     z-index: 24;
@@ -1583,10 +1703,19 @@ document.addEventListener('DOMContentLoaded', function() {
 .sms-chat-summary-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.6rem;
-    min-height: 1rem;
-    padding-top: 0.1rem;
+    justify-content: flex-end;
+    gap: 0.35rem;
+    min-height: 0;
+    padding-top: 0;
+    position: absolute;
+    top: 0.42rem;
+    right: 0.5rem;
+    max-width: 5.5rem;
+    pointer-events: none;
+}
+
+.sms-chat-summary-row #smsChatRecipientMeta {
+    display: none;
 }
 
 .sms-chat-mode-row {
@@ -1639,9 +1768,9 @@ document.addEventListener('DOMContentLoaded', function() {
 .sms-recipient-add-pill {
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
-    min-height: 1.9rem;
-    padding: 0.22rem 0.6rem;
+    gap: 0.25rem;
+    min-height: 1.55rem;
+    padding: 0.14rem 0.46rem;
     border-radius: 999px;
     border-color: rgba(13, 110, 253, 0.18) !important;
     color: var(--bs-primary);
@@ -1667,20 +1796,22 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .sms-chat-send-mode-meta {
-    font-size: 0.72rem;
+    font-size: 0.68rem;
+    line-height: 1;
+    white-space: nowrap;
 }
 
 .sms-send-group .btn {
-    min-height: 2.15rem;
+    min-height: 1.95rem;
 }
 
 .sms-send-primary {
-    min-width: 2.55rem;
+    min-width: 2.35rem;
 }
 
 .sms-send-toggle {
-    padding-left: 0.48rem;
-    padding-right: 0.48rem;
+    padding-left: 0.38rem;
+    padding-right: 0.38rem;
 }
 
 .sms-send-mode-menu .dropdown-item.active,
@@ -1693,19 +1824,19 @@ document.addEventListener('DOMContentLoaded', function() {
     flex: 1 1 16rem;
     width: auto;
     min-width: 0;
-    min-height: 2.15rem;
+    min-height: 1.95rem;
     max-height: 5rem;
     resize: none;
-    border-radius: 1.1rem;
-    padding: 0.44rem 0.78rem;
+    border-radius: 0.95rem;
+    padding: 0.32rem 0.65rem;
     line-height: 1.28;
     border-color: rgba(13, 110, 253, 0.12);
     box-shadow: none;
 }
 
 .sms-icon-btn {
-    width: 2.15rem;
-    height: 2.15rem;
+    width: 1.95rem;
+    height: 1.95rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1743,8 +1874,9 @@ document.addEventListener('DOMContentLoaded', function() {
 .sms-recipient-pills {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.35rem;
+    gap: 0.25rem;
     align-items: center;
+    min-width: 0;
 }
 
 .sms-recipient-placeholder {
@@ -1756,9 +1888,9 @@ document.addEventListener('DOMContentLoaded', function() {
 .sms-recipient-pill {
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
+    gap: 0.25rem;
     max-width: 100%;
-    padding: 0.22rem 0.52rem;
+    padding: 0.14rem 0.42rem;
     border: 1px solid rgba(13, 110, 253, 0.16);
     border-radius: 999px;
     background: rgba(13, 110, 253, 0.065);
@@ -1893,7 +2025,12 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .sms-bubble-meta {
-    font-size: 0.72rem;
+    font-size: 0.76rem;
+}
+
+.sms-message-text {
+    font-size: 0.94rem;
+    line-height: 1.42;
 }
 
 .sms-media-card,
@@ -1935,16 +2072,19 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .sms-chat-help {
-    font-size: 0.7rem;
-    line-height: 1.2;
+    font-size: 0.66rem;
+    line-height: 1.12;
     color: var(--bs-secondary-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .sms-chat-system-notice {
     border: 1px solid rgba(108, 117, 125, 0.22);
     border-radius: 0.75rem;
     padding: 0.45rem 0.6rem;
-    font-size: 0.78rem;
+    font-size: 0.74rem;
     line-height: 1.25;
     color: var(--bs-secondary-color);
     background: rgba(108, 117, 125, 0.08);
@@ -1958,6 +2098,15 @@ document.addEventListener('DOMContentLoaded', function() {
     background: rgba(44, 48, 53, 0.94);
     border-color: rgba(110, 168, 254, 0.16);
     box-shadow: 0 12px 26px rgba(0, 0, 0, 0.22);
+}
+
+[data-bs-theme="dark"] .sms-conversation-tools {
+    background: rgba(31, 36, 41, 0.74);
+    border-bottom-color: rgba(110, 168, 254, 0.14);
+}
+
+[data-bs-theme="dark"] .sms-tab-count {
+    background: rgba(255, 255, 255, 0.12);
 }
 
 [data-bs-theme="dark"] .sms-recipient-editor {
@@ -2113,15 +2262,19 @@ document.addEventListener('DOMContentLoaded', function() {
     color: #fff;
 }
 
+#quickFilterChips .btn.active .sms-tab-count {
+    background: rgba(255, 255, 255, 0.22);
+    color: #fff;
+}
+
 @media (min-width: 576px) {
-    .sms-conversation-card,
-    .sms-chat-card {
-        min-height: calc(100vh - 15rem);
+    .sms-page-shell {
+        min-height: calc(100vh - var(--header-height) - 1.3rem);
     }
 
     .sms-chat-thread,
     .sms-conversation-list {
-        max-height: calc(100vh - 23rem);
+        max-height: none;
     }
 }
 
@@ -2130,37 +2283,24 @@ document.addEventListener('DOMContentLoaded', function() {
         margin-bottom: 1rem !important;
     }
 
-    .sms-stats-row {
-        margin-bottom: 0.85rem !important;
-    }
-
-    .sms-stats-row .card-body {
-        padding: 0.5rem 0.65rem;
-    }
-
-    .sms-stats-row h4 {
-        font-size: 1rem;
-    }
-
-    .sms-conversation-card,
-    .sms-chat-card {
-        min-height: 0;
+    .sms-page-shell {
+        min-height: calc(100vh - var(--header-height) - 1rem);
     }
 
     .sms-chat-thread {
-        min-height: 18rem;
-        max-height: 22rem;
+        min-height: 0;
+        max-height: none;
     }
 
     .sms-chat-compose-shell {
-        padding: 0.38rem;
-        border-radius: 0.9rem;
+        padding: 0.34rem 0.38rem;
+        border-radius: 0.72rem;
     }
 
     .sms-chat-recipient-strip {
-        align-items: flex-start;
-        flex-direction: column;
-        gap: 0.22rem;
+        align-items: center;
+        flex-direction: row;
+        gap: 0.35rem;
     }
 
     .sms-chat-mode-row {
@@ -2190,9 +2330,9 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     .sms-chat-summary-row {
-        align-items: flex-start;
-        flex-direction: column;
-        gap: 0.2rem;
+        align-items: center;
+        flex-direction: row;
+        gap: 0.35rem;
     }
 
     .sms-chat-mode-row {
@@ -2220,6 +2360,48 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 @media (max-width: 575.98px) {
+    .sms-page-topbar {
+        align-items: flex-start !important;
+        flex-direction: column;
+    }
+
+    .sms-page-actions {
+        width: 100%;
+    }
+
+    .sms-page-actions .btn {
+        flex: 1 1 0;
+        justify-content: center;
+    }
+
+    .sms-page-shell {
+        min-height: calc(100vh - var(--header-height) - 0.9rem);
+    }
+
+    .sms-conversation-search-row {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .sms-conversation-sort {
+        width: 100%;
+        flex-basis: auto;
+    }
+
+    .sms-recipient-row {
+        padding-right: 0;
+    }
+
+    .sms-chat-recipient-strip {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.18rem;
+    }
+
+    .sms-chat-summary-row {
+        display: none;
+    }
+
     .sms-chat-form {
         flex-wrap: wrap;
         row-gap: 0.34rem;
@@ -2240,6 +2422,36 @@ document.addEventListener('DOMContentLoaded', function() {
 
     .sms-recipient-row {
         align-items: flex-start !important;
+    }
+}
+
+@media (max-width: 767.98px) {
+    .sms-page-topbar {
+        display: none !important;
+    }
+
+    .sms-page-shell {
+        min-height: calc(100vh - var(--header-height) - 0.9rem);
+    }
+
+    #smsConversationWorkspace:not(.sms-mobile-thread-open) .sms-chat-pane {
+        display: none;
+    }
+
+    #smsConversationWorkspace.sms-mobile-thread-open .sms-conversation-pane {
+        display: none;
+    }
+
+    .sms-thread-back-btn {
+        display: inline-flex;
+    }
+
+    .sms-chat-topbar {
+        flex-wrap: nowrap !important;
+    }
+
+    .sms-chat-number {
+        max-width: calc(100vw - 12rem);
     }
 }
 </style>

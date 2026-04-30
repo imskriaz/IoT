@@ -741,7 +741,14 @@ describe('sms route queue-first delivery', () => {
         const db = {
             run: jest.fn(),
             get: jest.fn().mockResolvedValue({ count: 2 }),
-            all: jest.fn().mockResolvedValue(conversationRows)
+            all: jest.fn().mockImplementation((sql) => {
+                if (String(sql).includes('FROM contacts')) {
+                    return Promise.resolve([
+                        { name: 'Riaz', phone_number: '+8801628301525' }
+                    ]);
+                }
+                return Promise.resolve(conversationRows);
+            })
         };
 
         const router = require('../routes/sms');
@@ -760,6 +767,9 @@ describe('sms route queue-first delivery', () => {
             expect.objectContaining({
                 conversation_id: 33,
                 thread_number: '+8801628301525',
+                display_from: 'Riaz',
+                contact_name: 'Riaz',
+                contact_phone: '+8801628301525',
                 total_count: 3,
                 unread_count: 2,
                 last_direction: 'incoming'

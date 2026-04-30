@@ -48,7 +48,7 @@ describe('sms conversation participant normalization', () => {
             message: 'visit https://cutt.ly/myRobiOffer'
         })).toEqual({
             number: '3=:24;82=8<3=86<2:41',
-            key: 'service:3=:24;82=8<3=86<2:41',
+            key: 'service:robi',
             title: 'Robi'
         });
     });
@@ -157,8 +157,71 @@ describe('sms conversation backfill', () => {
 
         expect(conversation).toEqual({
             primary_number: sender,
-            conversation_key: `service:${sender.toLowerCase()}`,
+            conversation_key: 'service:robi',
             title: 'Robi'
         });
+    });
+
+    test('keeps multipart continuation rows from the same service sender in one inferred conversation', async () => {
+        const sender = '3=:24;82=8<3=86<2:41';
+        await db.run(
+            `INSERT INTO sms (device_id, from_number, to_number, message, timestamp, type, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [deviceId, sender, '', 'Robi offer starts here', '2026-04-16 10:15:00', 'incoming', 'received']
+        );
+        await db.run(
+            `INSERT INTO sms (device_id, from_number, to_number, message, timestamp, type, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [deviceId, sender, '', ', continuation without sender name', '2026-04-16 10:15:08', 'incoming', 'received']
+        );
+
+        await backfillSmsConversations(db);
+
+        const conversations = await db.all(
+            `SELECT conversation_key, title, message_count
+             FROM sms_conversations
+             WHERE device_id = ?`,
+            [deviceId]
+        );
+
+        expect(conversations).toEqual([
+            expect.objectContaining({
+                conversation_key: 'service:robi',
+                title: 'Robi',
+                message_count: 2
+            })
+        ]);
+    });
+
+    test('moves earlier generic multipart row when a following segment identifies the service sender', async () => {
+        const genericSender = '2=7;83=3<77;5<?6';
+        const namedSender = '7=2797=<><343<3>53';
+        await db.run(
+            `INSERT INTO sms (device_id, from_number, to_number, message, timestamp, type, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [deviceId, genericSender, '', 'সুপার ডিল first segment', '2026-04-16 10:20:00', 'incoming', 'received']
+        );
+        await db.run(
+            `INSERT INTO sms (device_id, from_number, to_number, message, timestamp, type, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [deviceId, namedSender, '', 'visit https://cutt.ly/myRobiOffer', '2026-04-16 10:20:09', 'incoming', 'received']
+        );
+
+        await backfillSmsConversations(db);
+
+        const conversations = await db.all(
+            `SELECT conversation_key, title, message_count
+             FROM sms_conversations
+             WHERE device_id = ?`,
+            [deviceId]
+        );
+
+        expect(conversations).toEqual([
+            expect.objectContaining({
+                conversation_key: 'service:robi',
+                title: 'Robi',
+                message_count: 2
+            })
+        ]);
     });
 });

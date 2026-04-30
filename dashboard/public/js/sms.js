@@ -567,6 +567,7 @@
         attachRecipientInputHandlers();
         attachChatRecipientControls();
         attachChatSendModeControls();
+        attachThreadListeners();
         updateSmsExportLink();
         syncSmsHttpRequiredUi();
         prefillComposeFromQuery();
@@ -1604,7 +1605,7 @@
         const payload = normalizeStructuredMessage(sms);
         const parts = [];
         if (payload.text) {
-            parts.push(`<div class="text-break">${esc(payload.text)}</div>`);
+            parts.push(`<div class="sms-message-text text-break">${esc(payload.text)}</div>`);
         }
         payload.contacts.forEach(function (contact) {
             parts.push(renderContactCard(contact));
@@ -1644,6 +1645,7 @@
     }
 
     function setChatComposerBlocked(blocked, title = threadState.title || threadState.number) {
+        const footer = document.querySelector('.sms-chat-footer');
         const shell = document.querySelector('.sms-chat-compose-shell');
         const notice = document.getElementById('smsChatSystemNotice');
         const help = document.querySelector('.sms-chat-help');
@@ -1659,12 +1661,14 @@
         ];
         const sendToggle = document.querySelector('.sms-send-toggle');
 
+        if (footer) {
+            footer.classList.toggle('d-none', blocked);
+            footer.setAttribute('aria-hidden', blocked ? 'true' : 'false');
+        }
         if (shell) shell.classList.toggle('sms-chat-compose-disabled', blocked);
         if (notice) {
-            notice.classList.toggle('d-none', !blocked);
-            notice.textContent = blocked
-                ? `${title || 'This sender'} is a service sender. Replies are disabled for system SMS.`
-                : '';
+            notice.classList.add('d-none');
+            notice.textContent = '';
         }
         if (help) help.classList.toggle('d-none', blocked);
         controls.forEach(function (id) {
@@ -1776,6 +1780,12 @@
         });
     }
 
+    function updateMobileConversationMode() {
+        const workspace = document.getElementById('smsConversationWorkspace');
+        if (!workspace) return;
+        workspace.classList.toggle('sms-mobile-thread-open', Boolean(threadState.number || threadState.conversationId));
+    }
+
     function clearThreadSelection(options = {}) {
         threadState.number = '';
         threadState.conversationId = null;
@@ -1788,6 +1798,7 @@
         updateThreadPermalink('', null, '');
         syncConversationSelection('', null);
         syncThreadUrl('', options.historyMode || 'replace', null, '');
+        updateMobileConversationMode();
     }
 
     function getThreadNumberFromSms(sms) {
@@ -1839,7 +1850,9 @@
             return {
                 number,
                 conversationId: Math.max(0, Number(row.conversation_id) || 0) || null,
-                title: isOut ? number : (row.display_from || number),
+                title: row.contact_name || (isOut ? number : (row.display_from || number)),
+                contactName: String(row.contact_name || '').trim(),
+                contactPhone: String(row.contact_phone || '').trim(),
                 lastMessage: summarizeMessagePreview(row.message || ''),
                 lastTimestamp: row.timestamp || '',
                 unread: Number(row.unread_count || 0),
@@ -1951,28 +1964,155 @@
             return;
         }
 
-        setPhoneFieldValue('smsChatTo', target);
-        const chatMessage = document.getElementById('smsChatMessage');
-        if (chatMessage) {
-            chatMessage.focus();
-            return;
-        }
-
-        setPhoneFieldValue('modalTo', target);
-
         const threadModalEl = document.getElementById('smsThreadModal');
         const threadModal = threadModalEl ? bootstrap.Modal.getInstance(threadModalEl) : null;
         if (threadModal) {
             threadModal.hide();
             setTimeout(() => {
-                const composeModal = new bootstrap.Modal(document.getElementById('composeSmsModal'));
-                composeModal.show();
+                openComposeSmsModal({ to: target });
             }, 180);
             return;
         }
 
-        const composeModal = new bootstrap.Modal(document.getElementById('composeSmsModal'));
-        composeModal.show();
+        openComposeSmsModal({ to: target });
+    }
+
+    function openComposeSmsModal(options = {}) {
+        const modalEl = document.getElementById('composeSmsModal');
+        if (!modalEl) return;
+        const reset = options.reset !== false;
+        const form = document.getElementById('composeSmsForm');
+        if (reset && form) form.reset();
+        if (reset) {
+            const bulkRecipients = document.getElementById('modalBulkRecipients');
+            if (bulkRecipients) bulkRecipients.value = '';
+            const importInput = document.getElementById('modalScheduleImportFile');
+            if (importInput) importInput.value = '';
+        }
+        if (options.to !== undefined) setPhoneFieldValue('modalTo', options.to || '');
+        if (options.message !== undefined) {
+            const messageEl = document.getElementById('modalMessage');
+            if (messageEl) messageEl.value = options.message || '';
+        }
+        setModalRecipientMode(options.recipientMode || (options.to ? 'single' : 'single'));
+        setModalSendMode(options.mode || options.sendMode || 'instant');
+        updateRecipientMeta('modalTo');
+        updateSmsComposeCounter('modalMessage', {
+            countId: 'modalCharCount',
+            byteId: 'modalByteCount',
+            partsId: 'smsParts'
+        });
+        const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        modal.show();
+        setTimeout(() => {
+            const focusTarget = document.getElementById(options.to ? 'modalMessage' : 'modalTo');
+            focusTarget?.focus();
+        }, 180);
+    }
+
+    function getModalRecipientMode() {
+        if (document.getElementById('modalRecipientModeUpload')?.checked) return 'upload';
+        if (document.getElementById('modalRecipientModeMultiple')?.checked) return 'multiple';
+        return 'single';
+    }
+
+    function setModalRecipientMode(mode = 'single') {
+        const normalized = ['single', 'multiple', 'upload'].includes(String(mode || '').toLowerCase())
+            ? String(mode || '').toLowerCase()
+            : 'single';
+        const singleRadio = document.getElementById('modalRecipientModeSingle');
+        const multipleRadio = document.getElementById('modalRecipientModeMultiple');
+        const uploadRadio = document.getElementById('modalRecipientModeUpload');
+        const singlePane = document.getElementById('modalSingleRecipientPane');
+        const multiplePane = document.getElementById('modalMultipleRecipientPane');
+        const uploadPane = document.getElementById('modalUploadRecipientPane');
+        const sendBtn = document.getElementById('modalSendBtn');
+        const manualSections = document.querySelectorAll('#composeSmsModal .sms-compose-manual-section');
+
+        if (singleRadio) singleRadio.checked = normalized === 'single';
+        if (multipleRadio) multipleRadio.checked = normalized === 'multiple';
+        if (uploadRadio) uploadRadio.checked = normalized === 'upload';
+        if (singlePane) singlePane.classList.toggle('d-none', normalized !== 'single');
+        if (multiplePane) multiplePane.classList.toggle('d-none', normalized !== 'multiple');
+        if (uploadPane) uploadPane.classList.toggle('d-none', normalized !== 'upload');
+        manualSections.forEach(section => section.classList.toggle('d-none', normalized === 'upload'));
+        if (sendBtn) sendBtn.classList.toggle('d-none', normalized === 'upload');
+    }
+
+    function getModalSendMode() {
+        if (document.getElementById('modalScheduleEnabled')?.checked) return 'scheduled';
+        return document.getElementById('modalSendModeScheduled')?.checked ? 'scheduled' : 'instant';
+    }
+
+    function setModalSendMode(mode = 'instant') {
+        const scheduled = String(mode || '').toLowerCase() === 'scheduled';
+        const instantRadio = document.getElementById('modalSendModeInstant');
+        const scheduledRadio = document.getElementById('modalSendModeScheduled');
+        const scheduleEnabled = document.getElementById('modalScheduleEnabled');
+        const scheduleRow = document.getElementById('modalScheduleRow');
+        const scheduleInput = document.getElementById('modalScheduleAt');
+        const sendLabel = document.getElementById('modalSendBtnLabel');
+        if (instantRadio) instantRadio.checked = !scheduled;
+        if (scheduledRadio) scheduledRadio.checked = scheduled;
+        if (scheduleEnabled) scheduleEnabled.checked = scheduled;
+        if (scheduleRow) scheduleRow.classList.toggle('d-none', !scheduled);
+        if (scheduleInput && scheduled && !scheduleInput.value) {
+            scheduleInput.value = getDefaultScheduleValue();
+        }
+        if (sendLabel) sendLabel.textContent = scheduled ? 'Schedule Message' : 'Send Message';
+    }
+
+    function applyModalBulkRecipients() {
+        const bulk = document.getElementById('modalBulkRecipients');
+        const values = splitRecipientEntries(bulk?.value || '');
+        if (!values.length) {
+            showToast('Paste at least one recipient.', 'warning');
+            return;
+        }
+        setRecipientValues('modalTo', values);
+        showToast(`${values.length} recipient${values.length === 1 ? '' : 's'} added.`, 'success');
+    }
+
+    async function importModalScheduleTemplate() {
+        const input = document.getElementById('modalScheduleImportFile');
+        const button = document.getElementById('modalScheduleImportBtn');
+        const spinner = button?.querySelector('.spinner-border');
+        const file = input?.files?.[0];
+        const activeDeviceId = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
+        if (!activeDeviceId) {
+            showToast('Select a device first.', 'warning');
+            return;
+        }
+        if (!file) {
+            showToast('Choose a CSV exported from Excel first.', 'warning');
+            return;
+        }
+        const formData = new FormData();
+        formData.append('file', file);
+        if (button) button.disabled = true;
+        if (spinner) spinner.classList.remove('d-none');
+        try {
+            const response = await fetch(buildSmsRequestUrl('/api/sms/scheduled/import'), {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin'
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data?.success) {
+                throw new Error(data?.message || `Upload failed with HTTP ${response.status}`);
+            }
+            const skipped = Array.isArray(data.errors) && data.errors.length ? ` (${data.errors.length} skipped)` : '';
+            showToast(`${data.count || 0} SMS scheduled from upload${skipped}`, 'success');
+            if (input) input.value = '';
+            if (typeof window.loadScheduledSms === 'function') {
+                window.loadScheduledSms();
+            }
+        } catch (error) {
+            showToast(error.message || 'Failed to import schedule template.', 'danger');
+        } finally {
+            if (spinner) spinner.classList.add('d-none');
+            if (button) button.disabled = false;
+        }
     }
 
     function renderThreadMessages(messages, number, title = threadState.title || number) {
@@ -1983,18 +2123,14 @@
         const scheduledItems = getScheduledItemsForNumber(number);
 
         if (numberEl) {
-            numberEl.innerHTML = (title || number)
-                ? `<i class="bi bi-person-circle me-2"></i>${esc(title || number)}`
-                : '<i class="bi bi-chat-square-text me-2"></i>Select a conversation';
+            numberEl.textContent = (title || number) ? String(title || number) : 'Select a conversation';
         }
         if (countEl) countEl.textContent = `${messages.length} message${messages.length === 1 ? '' : 's'}`;
         if (metaEl) {
-            const deviceLabel = getSmsActiveDeviceId() || 'No device selected';
-            metaEl.textContent = messages.length
-                ? `Showing freshest conversation for ${deviceLabel}${scheduledItems.length ? ` | ${scheduledItems.length} scheduled` : ''}`
-                : (scheduledItems.length
-                    ? `${scheduledItems.length} scheduled SMS on ${deviceLabel}`
-                    : `No conversation history on ${deviceLabel}`);
+            const conversationLabel = String(number || '').trim();
+            metaEl.textContent = conversationLabel
+                ? (scheduledItems.length ? `${conversationLabel} | ${scheduledItems.length} scheduled` : conversationLabel)
+                : (scheduledItems.length ? `${scheduledItems.length} scheduled` : '');
         }
 
         if (!container) return;
@@ -2026,7 +2162,7 @@
             </div>` : '';
 
         if (!messages.length) {
-            container.innerHTML = scheduledMarkup || '<div class="text-muted text-center py-4">No messages found for this conversation on the selected device.</div>';
+            container.innerHTML = scheduledMarkup || '<div class="text-muted text-center py-4">No messages</div>';
             return;
         }
 
@@ -2035,15 +2171,18 @@
             const speaker = outgoing ? 'You' : (sms.display_from || sms.from_number || number || 'Unknown');
             const meta = [formatTs(sms.timestamp)];
             if (!outgoing && !sms.read) meta.push('Unread');
+            const smsIds = getSmsSegmentIds(sms);
+            const smsIdAttr = esc(smsIds.join(','));
+            const primarySmsId = smsIds[0] || Number(sms.id) || '';
 
             return `
                 <div class="d-flex ${outgoing ? 'justify-content-end' : 'justify-content-start'}">
-                    <div class="card shadow-sm sms-bubble ${outgoing ? 'sms-bubble-out' : 'sms-bubble-in'}" data-thread-sms-id="${Number(sms.id) || ''}">
+                    <div class="card shadow-sm sms-bubble ${outgoing ? 'sms-bubble-out' : 'sms-bubble-in'}" data-thread-sms-id="${primarySmsId}">
                         <div class="card-body py-2 px-3">
                             <div class="sms-message-header mb-1">
                                 <div class="small fw-semibold ${outgoing ? 'text-primary-emphasis' : 'text-secondary'}">${esc(speaker)}</div>
                                 <div class="sms-message-header-meta">
-                                    <button type="button" class="sms-message-info" data-thread-message-info="${Number(sms.id) || ''}" aria-label="Message details">
+                                    <button type="button" class="sms-message-info" data-thread-message-info="${primarySmsId}" aria-label="Message details">
                                         <i class="bi bi-info-circle"></i>
                                     </button>
                                     <div class="dropdown">
@@ -2056,8 +2195,8 @@
                                             <i class="bi bi-three-dots-vertical"></i>
                                         </button>
                                         <ul class="dropdown-menu dropdown-menu-end">
-                                            ${!outgoing && !sms.read ? `<li><button type="button" class="dropdown-item" data-thread-message-action="mark-read" data-sms-id="${Number(sms.id) || ''}"><i class="bi bi-envelope-open me-2"></i>Mark Read</button></li>` : ''}
-                                            <li><button type="button" class="dropdown-item text-danger" data-thread-message-action="delete-message" data-sms-id="${Number(sms.id) || ''}"><i class="bi bi-trash me-2"></i>Delete</button></li>
+                                            ${!outgoing && !sms.read ? `<li><button type="button" class="dropdown-item" data-thread-message-action="mark-read" data-sms-id="${primarySmsId}" data-sms-ids="${smsIdAttr}"><i class="bi bi-envelope-open me-2"></i>Mark Read</button></li>` : ''}
+                                            <li><button type="button" class="dropdown-item text-danger" data-thread-message-action="delete-message" data-sms-id="${primarySmsId}" data-sms-ids="${smsIdAttr}"><i class="bi bi-trash me-2"></i>Delete</button></li>
                                         </ul>
                                     </div>
                                 </div>
@@ -2083,14 +2222,12 @@
         const metaEl = document.getElementById('smsChatMeta') || document.getElementById('smsThreadMeta');
 
         if (numberEl) {
-            numberEl.innerHTML = (title || number)
-                ? `<i class="bi bi-person-circle me-2"></i>${esc(title || number)}`
-                : '<i class="bi bi-chat-square-text me-2"></i>Select a conversation';
+            numberEl.textContent = (title || number) ? String(title || number) : 'Select a conversation';
         }
         if (countEl) countEl.textContent = 'Loading...';
-        if (metaEl) metaEl.textContent = 'Fetching latest conversation from the selected device...';
+        if (metaEl) metaEl.textContent = String(number || '').trim();
         if (container) {
-            container.innerHTML = '<div class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Loading conversation...</div>';
+            container.innerHTML = '<div class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Loading...</div>';
         }
     }
 
@@ -2125,10 +2262,19 @@
         setChatComposerBlocked(blockReply);
     }
 
+    function getSmsSegmentIds(sms) {
+        const ids = Array.isArray(sms?.segment_ids) && sms.segment_ids.length ? sms.segment_ids : [sms?.id];
+        return ids
+            .map(function (id) { return Number(id); })
+            .filter(function (id, index, all) {
+                return Number.isInteger(id) && id > 0 && all.indexOf(id) === index;
+            });
+    }
+
     function markThreadMessagesRead(messages) {
         const ids = (Array.isArray(messages) ? messages : [])
             .filter((sms) => String(sms?.type || '').toLowerCase() !== 'outgoing' && !sms?.read)
-            .map((sms) => Number(sms.id))
+            .flatMap((sms) => getSmsSegmentIds(sms))
             .filter((id) => Number.isInteger(id) && id > 0);
         if (!ids.length) return Promise.resolve();
 
@@ -2142,7 +2288,7 @@
             .then(function (data) {
                 if (!data?.success) return;
                 threadState.messages = threadState.messages.map(function (sms) {
-                    return ids.includes(Number(sms.id)) ? { ...sms, read: 1 } : sms;
+                    return getSmsSegmentIds(sms).some(function (id) { return ids.includes(id); }) ? { ...sms, read: 1 } : sms;
                 });
                 renderThreadMessages(threadState.messages, threadState.number, threadState.title);
                 updateUnreadBadge(data.unreadCount);
@@ -2155,7 +2301,7 @@
 
     function getThreadMessageIds(messages) {
         return (Array.isArray(messages) ? messages : [])
-            .map(function (sms) { return Number(sms?.id); })
+            .flatMap(function (sms) { return getSmsSegmentIds(sms); })
             .filter(function (id) { return Number.isInteger(id) && id > 0; });
     }
 
@@ -2220,14 +2366,17 @@
             return false;
         }
 
+        const deletedIdSet = new Set(smsIds);
+        threadState.messages = threadState.messages.filter(function (sms) {
+            return !getSmsSegmentIds(sms).some(function (id) { return deletedIdSet.has(id); });
+        });
+
         if (count === 1) {
-            threadState.messages = threadState.messages.filter(function (sms) {
-                return Number(sms?.id) !== smsIds[0];
-            });
             showToast('SMS deleted successfully', 'success');
         } else {
-            threadState.messages = [];
             showToast(`Deleted ${count} messages`, 'success');
+        }
+        if (!threadState.messages.length) {
             clearThreadSelection({ historyMode: 'replace' });
         }
 
@@ -2279,6 +2428,7 @@
         updateThreadPermalink(target, conversationId, title);
         syncConversationSelection(target, conversationId);
         syncThreadUrl(target, historyMode, conversationId, title);
+        updateMobileConversationMode();
 
         if (options.silent !== true) {
             setThreadLoading(target, title);
@@ -2333,9 +2483,9 @@
                 threadState.messages = [];
                 const container = document.getElementById('smsChatMessages') || document.getElementById('smsThreadMessages');
                 const metaEl = document.getElementById('smsChatMeta') || document.getElementById('smsThreadMeta');
-                if (metaEl) metaEl.textContent = error.message || 'Failed to load conversation';
+                if (metaEl) metaEl.textContent = String(target || '').trim();
                 if (container) {
-                    container.innerHTML = '<div class="text-danger text-center py-4">Failed to load conversation for this number.</div>';
+                    container.innerHTML = '<div class="text-danger text-center py-4">Failed to load</div>';
                 }
             });
     }
@@ -2369,6 +2519,9 @@
         list.innerHTML = conversations.map(function (thread) {
             const active = (thread.conversationId && threadState.conversationId && thread.conversationId === threadState.conversationId)
                 || (!threadState.conversationId && thread.number === threadState.number);
+            const titleText = thread.contactName || thread.title || thread.number;
+            const numberText = String(thread.contactPhone || thread.number || '').trim();
+            const showNumberSub = Boolean(thread.contactName && numberText && numberText !== titleText);
             const direction = thread.lastDirection === 'outgoing' ? 'You: ' : '';
             const previewText = thread.scheduledOnly
                 ? `Scheduled: ${thread.lastMessage || 'Pending SMS'}`
@@ -2386,10 +2539,11 @@
                         data-thread-last-direction="${esc(thread.lastDirection || '')}"
                         data-thread-last-status="${esc(thread.lastStatus || '')}"
                         data-thread-replyable="${thread.replyable === false ? 'false' : 'true'}"
-                        data-thread-title="${esc(thread.title || thread.number)}">
+                        data-thread-title="${esc(titleText)}">
                     <div class="d-flex justify-content-between align-items-start gap-2 conversation-item-top">
                         <div class="min-w-0">
-                            <div class="fw-semibold text-truncate conversation-item-title">${esc(thread.title || thread.number)}</div>
+                            <div class="fw-semibold text-truncate conversation-item-title">${esc(titleText)}</div>
+                            ${showNumberSub ? `<div class="small ${active ? 'text-white-50' : 'text-muted'} text-truncate conversation-item-number">${esc(numberText)}</div>` : ''}
                             <div class="small ${active ? 'text-white-50' : 'text-muted'} conversation-preview" title="${esc(previewText)}">
                                 ${esc(previewText)}
                             </div>
@@ -2404,14 +2558,14 @@
                                         data-thread-number="${esc(thread.number)}"
                                         data-thread-conversation-id="${thread.conversationId || ''}"
                                         data-thread-replyable="${thread.replyable === false ? 'false' : 'true'}"
-                                        data-thread-title="${esc(thread.title || thread.number)}"
+                                        data-thread-title="${esc(titleText)}"
                                         aria-expanded="false"
                                         aria-label="Thread menu">
                                     <i class="bi bi-three-dots-vertical"></i>
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><button type="button" class="dropdown-item" data-thread-item-action="mark-read" data-thread-number="${esc(thread.number)}" data-thread-conversation-id="${thread.conversationId || ''}" data-thread-title="${esc(thread.title || thread.number)}"><i class="bi bi-envelope-open me-2"></i>Mark Read</button></li>
-                                    <li><button type="button" class="dropdown-item text-danger" data-thread-item-action="delete-thread" data-thread-number="${esc(thread.number)}" data-thread-conversation-id="${thread.conversationId || ''}" data-thread-title="${esc(thread.title || thread.number)}"><i class="bi bi-trash me-2"></i>Delete Thread</button></li>
+                                    <li><button type="button" class="dropdown-item" data-thread-item-action="mark-read" data-thread-number="${esc(thread.number)}" data-thread-conversation-id="${thread.conversationId || ''}" data-thread-title="${esc(titleText)}"><i class="bi bi-envelope-open me-2"></i>Mark Read</button></li>
+                                    <li><button type="button" class="dropdown-item text-danger" data-thread-item-action="delete-thread" data-thread-number="${esc(thread.number)}" data-thread-conversation-id="${thread.conversationId || ''}" data-thread-title="${esc(titleText)}"><i class="bi bi-trash me-2"></i>Delete Thread</button></li>
                                 </ul>
                             </div>
                         </div>
@@ -2436,7 +2590,7 @@
         if ((!threadState.number && !threadState.conversationId) || !selectedThreadExists) {
             loadSmsThread(conversations[0].number, {
                 conversationId: conversations[0].conversationId,
-                title: conversations[0].title,
+                title: conversations[0].contactName || conversations[0].title,
                 replyable: conversations[0].replyable,
                 showModal: false,
                 silent: true
@@ -2955,8 +3109,16 @@
                 if (messageAction) {
                     event.preventDefault();
                     event.stopPropagation();
-                    const smsId = Number(messageAction.dataset.smsId || 0);
-                    const message = threadState.messages.find(function (sms) { return Number(sms?.id) === smsId; });
+                    const smsIds = String(messageAction.dataset.smsIds || messageAction.dataset.smsId || '')
+                        .split(',')
+                        .map(function (id) { return Number(id); })
+                        .filter(function (id, index, all) {
+                            return Number.isInteger(id) && id > 0 && all.indexOf(id) === index;
+                        });
+                    const smsId = smsIds[0] || 0;
+                    const message = threadState.messages.find(function (sms) {
+                        return getSmsSegmentIds(sms).includes(smsId);
+                    });
                     if (!message) return;
                     if (String(messageAction.dataset.threadMessageAction || '').trim() === 'mark-read') {
                         markThreadMessagesRead([message]).then(function () {
@@ -2965,7 +3127,7 @@
                         return;
                     }
                     if (String(messageAction.dataset.threadMessageAction || '').trim() === 'delete-message') {
-                        deleteSmsIds([smsId]).then(function (deleted) {
+                        deleteSmsIds(smsIds).then(function (deleted) {
                             if (!deleted) return;
                             renderThreadMessages(threadState.messages, threadState.number, threadState.title);
                             if (!threadState.messages.length) {
@@ -3036,16 +3198,15 @@
         if (focusComposerBtn && focusComposerBtn.dataset.focusBound !== '1') {
             focusComposerBtn.dataset.focusBound = '1';
             focusComposerBtn.addEventListener('click', function () {
-                if (threadState.replyable === false && (threadState.number || threadState.conversationId)) {
-                    clearThreadSelection({ historyMode: 'replace' });
-                }
-                const chatTo = document.getElementById('smsChatTo');
-                const chatMessage = document.getElementById('smsChatMessage');
-                if (chatTo && !chatTo.value) {
-                    focusChatRecipientEditor();
-                } else if (chatMessage) {
-                    chatMessage.focus();
-                }
+                openComposeSmsModal({ reset: true, to: '', message: '' });
+            });
+        }
+
+        const backBtn = document.getElementById('smsThreadBackBtn');
+        if (backBtn && backBtn.dataset.threadBackBound !== '1') {
+            backBtn.dataset.threadBackBound = '1';
+            backBtn.addEventListener('click', function () {
+                clearThreadSelection({ historyMode: 'replace' });
             });
         }
     }
@@ -3098,17 +3259,7 @@
                 document.getElementById('searchSms')?.focus();
             } else if (e.key.toLowerCase() === 'c') {
                 e.preventDefault();
-                const chatTo = document.getElementById('smsChatTo');
-                if (chatTo) {
-                    if (chatTo.value) {
-                        document.getElementById('smsChatMessage')?.focus();
-                    } else {
-                        focusChatRecipientEditor();
-                    }
-                } else {
-                    const modal = new bootstrap.Modal(document.getElementById('composeSmsModal'));
-                    modal.show();
-                }
+                openComposeSmsModal({ reset: true, to: '', message: '' });
             } else if (e.key === '?') {
                 e.preventDefault();
                 const modal = new bootstrap.Modal(document.getElementById('smsShortcutsModal'));
@@ -3176,8 +3327,11 @@
     function handleTemplateClick(e) {
         e.preventDefault();
         const template = this.dataset.template;
-        const messageInput = document.getElementById('smsChatMessage') || document.getElementById('modalMessage');
-        const toFieldId = document.getElementById('smsChatTo') ? 'smsChatTo' : 'modalTo';
+        const composeVisible = document.getElementById('composeSmsModal')?.classList.contains('show');
+        const messageInput = composeVisible
+            ? document.getElementById('modalMessage')
+            : (document.getElementById('smsChatMessage') || document.getElementById('modalMessage'));
+        const toFieldId = composeVisible ? 'modalTo' : (document.getElementById('smsChatTo') ? 'smsChatTo' : 'modalTo');
         const toInput = document.getElementById(toFieldId);
 
         const templates = {
@@ -3219,12 +3373,54 @@
             sendBtn.addEventListener('click', handleSendSms);
         }
 
+        ['modalSendModeInstant', 'modalSendModeScheduled'].forEach(function (id) {
+            const radio = document.getElementById(id);
+            if (radio && radio.dataset.modalModeBound !== '1') {
+                radio.dataset.modalModeBound = '1';
+                radio.addEventListener('change', function () {
+                    setModalSendMode(getModalSendMode());
+                });
+            }
+        });
+
+        const scheduleEnabled = document.getElementById('modalScheduleEnabled');
+        if (scheduleEnabled && scheduleEnabled.dataset.modalScheduleBound !== '1') {
+            scheduleEnabled.dataset.modalScheduleBound = '1';
+            scheduleEnabled.addEventListener('change', function () {
+                setModalSendMode(scheduleEnabled.checked ? 'scheduled' : 'instant');
+            });
+        }
+
+        ['modalRecipientModeSingle', 'modalRecipientModeMultiple', 'modalRecipientModeUpload'].forEach(function (id) {
+            const radio = document.getElementById(id);
+            if (radio && radio.dataset.recipientModeBound !== '1') {
+                radio.dataset.recipientModeBound = '1';
+                radio.addEventListener('change', function () {
+                    setModalRecipientMode(getModalRecipientMode());
+                });
+            }
+        });
+
+        const bulkApplyBtn = document.getElementById('modalApplyBulkRecipientsBtn');
+        if (bulkApplyBtn && bulkApplyBtn.dataset.bulkApplyBound !== '1') {
+            bulkApplyBtn.dataset.bulkApplyBound = '1';
+            bulkApplyBtn.addEventListener('click', applyModalBulkRecipients);
+        }
+
+        const modalImportBtn = document.getElementById('modalScheduleImportBtn');
+        if (modalImportBtn && modalImportBtn.dataset.modalImportBound !== '1') {
+            modalImportBtn.dataset.modalImportBound = '1';
+            modalImportBtn.addEventListener('click', importModalScheduleTemplate);
+        }
+
         // Reset compose modal on close
         const composeModal = document.getElementById('composeSmsModal');
         if (composeModal) {
             composeModal.addEventListener('hidden.bs.modal', function () {
                 const form = document.getElementById('composeSmsForm');
                 if (form) form.reset();
+                setModalRecipientMode('single');
+                setModalSendMode('instant');
                 updateRecipientMeta('modalTo');
                 updateSmsComposeCounter('modalMessage', {
                     countId: 'modalCharCount',
@@ -3621,6 +3817,20 @@
     function handleSendSms(e) {
         e.preventDefault();
 
+        const recipientMode = getModalRecipientMode();
+        if (recipientMode === 'upload') {
+            showToast('Use the Upload button for Excel recipients.', 'warning');
+            return;
+        }
+        if (recipientMode === 'multiple') {
+            const bulkRecipients = splitRecipientEntries(document.getElementById('modalBulkRecipients')?.value || '');
+            if (!bulkRecipients.length) {
+                showToast('Paste at least one recipient.', 'warning');
+                return;
+            }
+            setRecipientValues('modalTo', bulkRecipients);
+        }
+
         const phoneValidation = validatePhoneField('modalTo', { allowShortCode: true });
         const recipients = Array.isArray(phoneValidation.values) ? phoneValidation.values : [phoneValidation.value].filter(Boolean);
         const to = recipients[0] || '';
@@ -3628,6 +3838,9 @@
         const messageAnalysis = analyzeSmsComposeText(message);
         const button = this;
         const activeDeviceId = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
+        const sendMode = getModalSendMode();
+        const scheduleAtInput = document.getElementById('modalScheduleAt');
+        const scheduleAt = scheduleAtInput?.value || '';
 
         // Validate
         if (!message) {
@@ -3648,6 +3861,16 @@
             showToast(window.smsComposeLimits?.formatError?.(messageAnalysis) || 'SMS message exceeds the device limit.', 'warning');
             return;
         }
+        if (sendMode === 'scheduled') {
+            if (!scheduleAt) {
+                if (scheduleAtInput) scheduleAtInput.value = getDefaultScheduleValue();
+            }
+            const scheduledDate = new Date(scheduleAtInput?.value || getDefaultScheduleValue());
+            if (!Number.isFinite(scheduledDate.getTime()) || scheduledDate <= new Date()) {
+                showToast('Choose a future time for scheduled SMS.', 'warning');
+                return;
+            }
+        }
 
         const spinner = button.querySelector('.spinner-border');
         if (spinner) spinner.classList.remove('d-none');
@@ -3664,10 +3887,15 @@
             headers['X-CSRF-Token'] = csrfToken;
         }
 
-        request(buildSmsRequestUrl('/api/sms/send'), {
+        const requestUrl = sendMode === 'scheduled' ? '/api/sms/scheduled' : '/api/sms/send';
+        const requestBody = sendMode === 'scheduled'
+            ? { to, recipients, message, send_at: new Date(scheduleAtInput?.value || getDefaultScheduleValue()).toISOString(), deviceId: activeDeviceId }
+            : { to, recipients, message, deviceId: activeDeviceId };
+
+        request(buildSmsRequestUrl(requestUrl), {
             method: 'POST',
             headers,
-            body: JSON.stringify({ to, recipients, message, deviceId: activeDeviceId })
+            body: JSON.stringify(requestBody)
         })
             .then(async response => {
                 let payload = null;
@@ -3699,9 +3927,13 @@
                     if (modal) modal.hide();
 
                     showToast(
-                        Number(data.count || recipients.length || 1) > 1
-                            ? `${Number(data.count || recipients.length || 1)} SMS queued for delivery.`
-                            : (data.queued ? 'SMS queued for delivery.' : 'SMS sent successfully.'),
+                        sendMode === 'scheduled'
+                            ? (Number(data.count || recipients.length || 1) > 1
+                                ? `${Number(data.count || recipients.length || 1)} SMS scheduled.`
+                                : 'SMS scheduled.')
+                            : (Number(data.count || recipients.length || 1) > 1
+                                ? `${Number(data.count || recipients.length || 1)} SMS queued for delivery.`
+                                : (data.queued ? 'SMS queued for delivery.' : 'SMS sent successfully.')),
                         'success'
                     );
 
@@ -3711,6 +3943,9 @@
                         : null;
                     setTimeout(() => {
                         refreshSmsPageData();
+                        if (sendMode === 'scheduled' && typeof window.loadScheduledSms === 'function') {
+                            window.loadScheduledSms();
+                        }
                         if (followUpThread?.number) {
                             setPhoneFieldValue('smsChatTo', to);
                             followUpComposerThread(followUpThread, data.queued ? 20 : 60);

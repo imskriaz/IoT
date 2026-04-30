@@ -8,7 +8,8 @@ const {
     isShortCode,
     getPhoneLookupKeys,
     sqlNormalizePhone,
-    sqlPhoneLastDigits
+    sqlPhoneLastDigits,
+    normalizePhoneDigits
 } = require('../utils/phoneNumber');
 const { DEFAULT_DEVICE_ID } = require('../config/device');
 const { resolveDeviceId } = require('../utils/deviceResolver');
@@ -271,6 +272,55 @@ function normalizeSmsConversationRow(row) {
     };
 }
 
+async function loadContactLookupMap(db) {
+    const map = new Map();
+    if (!db) return map;
+    try {
+        const rows = await db.all('SELECT name, phone_number FROM contacts ORDER BY name');
+        (Array.isArray(rows) ? rows : []).forEach((row) => {
+            const name = String(row?.name || '').trim();
+            const phone = String(row?.phone_number || '').trim();
+            const digits = normalizePhoneDigits(phone);
+            if (!name || !digits) return;
+            const contact = { name, phone };
+            map.set(digits, contact);
+            map.set(digits.slice(-10), contact);
+            const formatted = formatPhoneNumber(phone);
+            const formattedDigits = normalizePhoneDigits(formatted);
+            if (formattedDigits) {
+                map.set(formattedDigits, contact);
+                map.set(formattedDigits.slice(-10), contact);
+            }
+        });
+    } catch (_) {
+        return map;
+    }
+    return map;
+}
+
+function findContactForPhone(contactMap, phone) {
+    if (!contactMap || !phone) return null;
+    const keys = getPhoneLookupKeys(phone);
+    return contactMap.get(keys.digits)
+        || contactMap.get(keys.last10)
+        || contactMap.get(normalizePhoneDigits(keys.formatted))
+        || contactMap.get(normalizePhoneDigits(keys.formatted).slice(-10))
+        || null;
+}
+
+function applyContactDisplay(row, contactMap) {
+    if (!row || row.sender_is_phone === false) return row;
+    const threadNumber = String(row.thread_number || row.primary_number || row.from_number || row.to_number || '').trim();
+    const contact = findContactForPhone(contactMap, threadNumber);
+    if (!contact) return row;
+    return {
+        ...row,
+        display_from: contact.name,
+        contact_name: contact.name,
+        contact_phone: contact.phone || threadNumber
+    };
+}
+
 function isSmsThreadReplyable(messages, fallbackNumber = '') {
     const list = Array.isArray(messages) ? messages : [];
     const incoming = list.filter((message) => String(message?.type || '').toLowerCase() !== 'outgoing');
@@ -278,6 +328,93 @@ function isSmsThreadReplyable(messages, fallbackNumber = '') {
         return incoming.some((message) => message?.sender_is_phone === true);
     }
     return list.some((message) => isSmsSenderReplyable(message?.to_number || message?.from_number)) || isSmsSenderReplyable(fallbackNumber);
+}
+
+function isGenericSmsDisplayName(name) {
+    const value = String(name || '').trim().toLowerCase();
+    return !value || value === 'service sender' || value === 'service messages';
+}
+
+function chooseSmsThreadDisplayName(messages, fallbackNumber = '') {
+    const list = Array.isArray(messages) ? messages : [];
+    for (const message of list) {
+        if (String(message?.type || '').toLowerCase() === 'outgoing') continue;
+        const candidate = getSmsSenderDisplayName(message?.from_number || fallbackNumber, message?.message || '');
+        if (!isGenericSmsDisplayName(candidate)) return candidate;
+    }
+    return getSmsSenderDisplayName(
+        list.find((message) => String(message?.type || '').toLowerCase() !== 'outgoing')?.from_number || fallbackNumber,
+        list[list.length - 1]?.message || ''
+    );
+}
+
+function normalizeSmsThreadSenderDisplays(messages, displayName) {
+    const stableDisplay = String(displayName || '').trim();
+    const shouldApplyServiceName = stableDisplay && !isGenericSmsDisplayName(stableDisplay);
+    return (Array.isArray(messages) ? messages : []).map((message) => {
+        const outgoing = String(message?.type || '').toLowerCase() === 'outgoing';
+        const fromNumber = String(message?.from_number || '').trim();
+        if (outgoing || !fromNumber || isSmsSenderReplyable(fromNumber) || !shouldApplyServiceName) {
+            return message;
+        }
+        return {
+            ...message,
+            display_from: stableDisplay,
+            sender_is_phone: false,
+            replyable: false
+        };
+    });
+}
+
+function getSmsMessageCounterpart(message) {
+    const outgoing = String(message?.type || '').toLowerCase() === 'outgoing';
+    return String(outgoing ? (message?.to_number || message?.from_number || '') : (message?.from_number || message?.to_number || '')).trim();
+}
+
+function startsLikeMultipartContinuation(text) {
+    return /^[\s,.;:)\]\-]|^[a-z]/.test(String(text || ''));
+}
+
+function shouldMergeMultipartSmsSegment(previous, current) {
+    if (!previous || !current) return false;
+    const previousType = String(previous?.type || '').toLowerCase();
+    const currentType = String(current?.type || '').toLowerCase();
+    if (previousType !== currentType) return false;
+    if (getSmsMessageCounterpart(previous) !== getSmsMessageCounterpart(current)) return false;
+
+    const previousTime = toTimestampMs(previous.timestamp);
+    const currentTime = toTimestampMs(current.timestamp);
+    const gapMs = currentTime - previousTime;
+    if (gapMs < 0 || gapMs > 45000) return false;
+
+    const previousText = String(previous.message || '');
+    const currentText = String(current.message || '');
+    return previousText.length >= 60 || currentText.length >= 60 || startsLikeMultipartContinuation(currentText);
+}
+
+function mergeMultipartSmsMessages(messages) {
+    const merged = [];
+    for (const message of (Array.isArray(messages) ? messages : [])) {
+        const previous = merged[merged.length - 1];
+        if (shouldMergeMultipartSmsSegment(previous, message)) {
+            const segmentIds = [
+                ...(Array.isArray(previous.segment_ids) ? previous.segment_ids : [previous.id]),
+                message.id
+            ].map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
+            merged[merged.length - 1] = {
+                ...previous,
+                message: `${String(previous.message || '')}${String(message.message || '')}`,
+                timestamp: message.timestamp || previous.timestamp,
+                status: message.status || previous.status,
+                read: Boolean(previous.read) && Boolean(message.read) ? 1 : 0,
+                segment_ids: Array.from(new Set(segmentIds)),
+                segment_count: Array.from(new Set(segmentIds)).length
+            };
+            continue;
+        }
+        merged.push(message);
+    }
+    return merged;
 }
 
 /**
@@ -464,13 +601,14 @@ router.get('/thread', async (req, res) => {
             `, [...params, ...simParams, limit]);
         }
 
-        const messages = rows.map(decodeSmsRecord).reverse();
-        const resolvedNumber = number || String(messages[messages.length - 1]?.to_number || messages[messages.length - 1]?.from_number || '').trim();
-        const displayName = getSmsSenderDisplayName(
-            messages.find((message) => String(message?.type || '').toLowerCase() !== 'outgoing')?.from_number || resolvedNumber,
-            messages[messages.length - 1]?.message || ''
-        );
-        const replyable = isSmsThreadReplyable(messages, resolvedNumber);
+        const rawMessages = rows.map(decodeSmsRecord).reverse();
+        const resolvedNumber = number || String(rawMessages[rawMessages.length - 1]?.to_number || rawMessages[rawMessages.length - 1]?.from_number || '').trim();
+        const contactMap = await loadContactLookupMap(db);
+        const contact = findContactForPhone(contactMap, resolvedNumber);
+        const displayName = contact?.name || chooseSmsThreadDisplayName(rawMessages, resolvedNumber);
+        const normalizedMessages = normalizeSmsThreadSenderDisplays(rawMessages, displayName);
+        const messages = mergeMultipartSmsMessages(normalizedMessages);
+        const replyable = isSmsThreadReplyable(normalizedMessages, resolvedNumber);
 
         res.json({
             success: true,
@@ -480,6 +618,8 @@ router.get('/thread', async (req, res) => {
                 simSlot: simScope.simSlot,
                 number: resolvedNumber,
                 displayName,
+                contactName: contact?.name || null,
+                contactPhone: contact?.phone || null,
                 replyable,
                 conversationId: conversationId || Number(messages[0]?.conversation_id || 0) || null,
                 count: messages.length
@@ -581,6 +721,9 @@ router.get('/conversations', async (req, res) => {
             }));
             total = { count: allConversations.length };
         }
+
+        const contactMap = await loadContactLookupMap(db);
+        conversations = conversations.map((row) => applyContactDisplay(row, contactMap));
 
         res.json({
             success: true,

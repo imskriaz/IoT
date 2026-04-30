@@ -309,8 +309,14 @@ function resolveRule(key, caps = {}, status = {}, context = {}) {
             reason = available ? 'MQTT command path ready' : 'MQTT command path is not ready';
             break;
         case 'modem':
-            available = Boolean(cap || telephony.ready) && telephony.ready && (!mqttRequired || mqttReady);
-            reason = available ? 'Modem path ready' : 'Modem is not registered or MQTT control is not ready';
+            available = Boolean(
+                cap
+                || telephony.ready
+                || readBoolean(status, context, ['modem.present', 'modem_present']) === true
+                || hasText(readValue(status, context, ['imei', 'modem.imei', 'modem_data_ip', 'modem_ip_address', 'sim.dataIp']))
+                || String(status?.activePath || status?.active_path || '').trim().toLowerCase() === 'modem'
+            ) && (!mqttRequired || mqttReady);
+            reason = available ? 'Modem module present' : 'Modem module or MQTT control is not ready';
             break;
         case 'internet': {
             const activePath = String(status?.activePath || status?.active_path || '').toLowerCase();
@@ -455,12 +461,34 @@ function applyModuleRulesToHealth(moduleHealth = [], caps = {}, status = {}, con
         const key = normalizeModuleKey(entry?.moduleKey);
         if (!key || !MODULE_RULES[key]) return entry;
         const result = caps?.modules?.[key] || resolveRule(key, caps, status, context);
+        const hasReportedHealth = entry?.supported === true
+            && entry?.state
+            && entry.state !== 'unsupported'
+            && (
+                entry.lastSuccessAt
+                || entry.lastFailureAt
+                || entry.updatedAt
+                || entry.details
+                || (entry.message && entry.message !== 'Firmware support pending on active device')
+            );
         if (result.available) {
             return {
                 ...entry,
                 moduleKey: key,
                 available: true,
                 complete: true,
+                visible: true,
+                linkEnabled: true,
+                ruleReason: result.reason,
+                transport: result.transport
+            };
+        }
+        if (hasReportedHealth) {
+            return {
+                ...entry,
+                moduleKey: key,
+                available: true,
+                complete: entry.state === 'ok',
                 visible: true,
                 linkEnabled: true,
                 ruleReason: result.reason,
