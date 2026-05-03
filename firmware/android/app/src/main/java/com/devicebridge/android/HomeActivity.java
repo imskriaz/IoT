@@ -98,6 +98,8 @@ public class HomeActivity extends Activity {
     private static final long CALL_REFRESH_MS = 4_000L;
     private static final long SMS_REFRESH_MS = 45_000L;
     private static final long SETUP_POLL_MS = 900L;
+    private static final int SMALL_TEXT_MAX_SP = 13;
+    private static final float SMALL_TEXT_SCALE = 1.15f;
 
     private interface ValueCallback {
         void onValue(String value);
@@ -754,7 +756,7 @@ public class HomeActivity extends Activity {
     private View overviewPanel() {
         boolean online = boolValue(state.get("online"));
         String bridgeState = stringValue(state.get("bridgeState"), "Stopped");
-        String transport = stringValue(state.get("transport"), "MQTT").toUpperCase(Locale.US);
+        String transport = stringValue(state.get("transport"), "Smart dashboard link");
         int readinessScore = intValue(state.get("readinessScore"));
         int batteryLevel = state.get("batteryLevel") == null ? -1 : intValue(state.get("batteryLevel"));
         String batteryStatus = stringValue(state.get("batteryStatus"), "Unknown");
@@ -791,11 +793,7 @@ public class HomeActivity extends Activity {
 
         LinearLayout metrics = new LinearLayout(this);
         metrics.setOrientation(LinearLayout.HORIZONTAL);
-        String connectivity = online
-                ? transport + " Online"
-                : bridgeState.toLowerCase(Locale.US).contains("connect")
-                ? transport + " Connecting"
-                : transport + " Offline";
+        String connectivity = online ? "Online" : "Offline";
         String power = batteryLevel < 0 ? "Battery pending - " + batteryStatus : batteryLevel + "% battery - " + batteryStatus;
         metrics.addView(overviewMiniStat(
                 R.drawable.ic_db_devices,
@@ -898,6 +896,7 @@ public class HomeActivity extends Activity {
 
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(7), 0, 0, 0);
         header.addView(singleLineText("Operations Console", 14, "#ffffff", true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         header.addView(consoleUtility(R.drawable.ic_db_copy, () -> copyText(joinConsole(filteredConsoleEntries()))), wrapRight(4));
         header.addView(consoleUtility(R.drawable.ic_db_clean, this::confirmClearConsole));
@@ -2792,7 +2791,7 @@ public class HomeActivity extends Activity {
             public View getView(int position, View convertView, ViewGroup parent) {
                 TextView view = (TextView) super.getView(position, convertView, parent);
                 view.setTextColor(color("#ffffff"));
-                view.setTextSize(12);
+                view.setTextSize(scaledTextSize(12));
                 view.setTypeface(Typeface.DEFAULT_BOLD);
                 view.setSingleLine(true);
                 view.setEllipsize(TextUtils.TruncateAt.END);
@@ -2805,7 +2804,7 @@ public class HomeActivity extends Activity {
             public View getDropDownView(int position, View convertView, ViewGroup parent) {
                 TextView view = (TextView) super.getDropDownView(position, convertView, parent);
                 view.setTextColor(color("#0f172a"));
-                view.setTextSize(12);
+                view.setTextSize(scaledTextSize(12));
                 view.setSingleLine(true);
                 view.setEllipsize(TextUtils.TruncateAt.END);
                 view.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -3266,10 +3265,8 @@ public class HomeActivity extends Activity {
         boolean online = boolValue(state.get("online"));
         int battery = state.get("batteryLevel") == null ? 0 : intValue(state.get("batteryLevel"));
         int readiness = intValue(state.get("readinessScore"));
-        String transport = stringValue(state.get("transport"), "MQTT");
-        String bridgeState = stringValue(state.get("bridgeState"), "Stopped");
+        String connectivityState = online ? "Online" : "Offline";
         String batteryText = state.get("batteryLevel") == null ? "Unknown" : battery + "%";
-        String linkDetail = stringValue(state.get("connectionDetail"), stringValue(state.get("connectionSummary"), "No link detail yet."));
         String deviceDetail = stringValue(state.get("deviceInfoDetail"), stringValue(state.get("deviceInfoSummary"), "No device detail yet."));
         List<InsightTab> tabs = new ArrayList<>();
         tabs.add(new InsightTab("Overview", () -> {
@@ -3277,7 +3274,7 @@ public class HomeActivity extends Activity {
             root.setOrientation(LinearLayout.VERTICAL);
             LinearLayout row1 = new LinearLayout(this);
             row1.setOrientation(LinearLayout.HORIZONTAL);
-            row1.addView(insightStatCard("Transport", transport, bridgeState, "#0b5ed7"), weighted(8));
+            row1.addView(insightStatCard("Connectivity", connectivityState, "", "#0b5ed7"), weighted(8));
             row1.addView(insightStatCard("Battery", batteryText, stringValue(state.get("batteryStatus"), "Unknown"), "#0f766e"), weighted(0));
             root.addView(row1, fullWidth(8));
             LinearLayout row2 = new LinearLayout(this);
@@ -3291,15 +3288,15 @@ public class HomeActivity extends Activity {
             )));
             return root;
         }));
-        tabs.add(new InsightTab("Link", () -> insightCodePanel("Link state", linkDetail.isEmpty() ? "No link detail yet." : linkDetail)));
+        tabs.add(new InsightTab("Link", () -> insightCodePanel("Link state", connectivityState)));
         tabs.add(new InsightTab("Device", () -> insightCodePanel("Device detail", deviceDetail)));
         showTabbedInsightSheet(
                 "Connectivity & Device",
-                online ? "Online" : bridgeState,
+                connectivityState,
                 online ? "#16a34a" : "#f59e0b",
                 "#0b5ed7",
                 tabs,
-                () -> copyText(linkDetail + "\n\n" + deviceDetail)
+                () -> copyText(connectivityState)
         );
     }
 
@@ -4192,7 +4189,7 @@ public class HomeActivity extends Activity {
             public View getView(int position, View convertView, ViewGroup parent) {
                 TextView view = (TextView) super.getView(position, convertView, parent);
                 view.setTextColor(color("#0f172a"));
-                view.setTextSize(12);
+                view.setTextSize(scaledTextSize(12));
                 view.setTypeface(Typeface.DEFAULT_BOLD);
                 view.setPadding(0, 0, 0, 0);
                 return view;
@@ -4202,7 +4199,7 @@ public class HomeActivity extends Activity {
             public View getDropDownView(int position, View convertView, ViewGroup parent) {
                 TextView view = (TextView) super.getDropDownView(position, convertView, parent);
                 view.setTextColor(color("#0f172a"));
-                view.setTextSize(13);
+                view.setTextSize(scaledTextSize(13));
                 view.setPadding(dp(12), dp(10), dp(12), dp(10));
                 return view;
             }
@@ -4915,10 +4912,10 @@ public class HomeActivity extends Activity {
     private String messageSourceBadge(String source) {
         String clean = safe(source).toLowerCase(Locale.US);
         if (clean.contains("dashboard_http")) {
-            return "API";
+            return "DB";
         }
         if (clean.contains("dashboard_mqtt")) {
-            return "MQTT";
+            return "DB";
         }
         if (clean.contains("dashboard")) {
             return "DB";
@@ -4929,10 +4926,10 @@ public class HomeActivity extends Activity {
     private String messageSourceLabel(Map<String, Object> message) {
         String source = stringValue(message.get("source"), "phone").toLowerCase(Locale.US);
         if (source.contains("dashboard_http")) {
-            return "Dashboard API";
+            return "Dashboard";
         }
         if (source.contains("dashboard_mqtt")) {
-            return "Dashboard MQTT";
+            return "Dashboard";
         }
         if (source.contains("dashboard")) {
             return "Dashboard";
@@ -5863,7 +5860,7 @@ public class HomeActivity extends Activity {
     private EditText input(String hint) {
         EditText input = new EditText(this);
         input.setHint(hint);
-        input.setTextSize(13);
+        input.setTextSize(scaledTextSize(13));
         input.setPadding(dp(12), dp(10), dp(12), dp(10));
         input.setBackground(roundRect("#f8fafc", "#cbd5e1", 14));
         return input;
@@ -5872,7 +5869,7 @@ public class HomeActivity extends Activity {
     private TextView text(String value, int sp, String color, boolean bold) {
         TextView view = new TextView(this);
         view.setText(value);
-        view.setTextSize(sp);
+        view.setTextSize(scaledTextSize(sp));
         view.setTextColor(color(color));
         view.setLineSpacing(0f, 1.14f);
         view.setIncludeFontPadding(true);
@@ -5903,7 +5900,7 @@ public class HomeActivity extends Activity {
         Button button = new Button(this);
         button.setAllCaps(false);
         button.setText(label);
-        button.setTextSize(11);
+        button.setTextSize(scaledTextSize(11));
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setTextColor(color(fg));
         button.setPadding(dp(9), dp(6), dp(9), dp(6));
@@ -5911,6 +5908,10 @@ public class HomeActivity extends Activity {
         button.setMinimumHeight(0);
         button.setBackground(roundRect(bg, bg, 12));
         return button;
+    }
+
+    private static float scaledTextSize(int sp) {
+        return sp <= SMALL_TEXT_MAX_SP ? sp * SMALL_TEXT_SCALE : sp;
     }
 
     private GradientDrawable roundRect(String fill, String stroke, int radius) {

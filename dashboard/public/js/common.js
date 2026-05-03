@@ -142,9 +142,9 @@
      * Show a toast notification. Delegates to window.showToast (defined in
      * main.js) if available; otherwise falls back to alert().
      */
-    function showToast(message, type) {
+    function showToast(message, type, title) {
         if (typeof window.showToast === 'function' && window.showToast !== showToast) {
-            window.showToast(message, type || 'info');
+            window.showToast(message, type || 'info', title || 'Notification');
         } else {
             alert(message);
         }
@@ -319,7 +319,7 @@
 
             if (isDeviceAction && !httpDeviceHealthy && window._serverConnected !== false && window._mqttConnected === false) {
                 if (typeof window.showToast === 'function') {
-                    window.showToast('Dashboard MQTT is reconnecting. Device actions may queue until the broker link is back.', 'info');
+                    window.showToast('Connecting', 'info', 'MQTT');
                 }
             }
 
@@ -414,14 +414,22 @@ window.userPrefs = {
         if (socket) {
             // New incoming SMS — store in IDB
             socket.on('sms:received', function (data) {
+                const type = String(data?.type || '').trim().toLowerCase();
+                const outgoing = data?.outgoing === true || type === 'outgoing';
+                const readValue = data?.read ?? data?.is_read;
+                const read = outgoing
+                    ? 1
+                    : (readValue === true || readValue === 1 || String(readValue || '').toLowerCase() === 'true' || String(readValue || '') === '1' ? 1 : 0);
                 db.sms.add({
                     server_id: data.id,
                     device_id: data.deviceId || null,
                     from_number: data.from_number || data.from || null,
                     to_number: data.to_number || data.to || null,
                     message: data.message,
-                    type: 'incoming',
-                    read: 0,
+                    type: outgoing ? 'outgoing' : 'incoming',
+                    read,
+                    conversation_id: data.conversationId || data.conversation_id || null,
+                    sync: data.sync === true || String(data.sync || '').toLowerCase() === 'true' ? 1 : 0,
                     timestamp: data.timestamp || new Date().toISOString()
                 }).catch(function () {}); // ignore duplicates
             });

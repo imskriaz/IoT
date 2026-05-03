@@ -949,12 +949,9 @@ function updateGlobalConnectionOverlay() {
         nextMessage = 'Trying to reconnect to the dashboard server/socket. Actions are paused until it is back.';
     } else if (window._serverConnected !== false && window._mqttConnected === false) {
         show = true;
-        const mqttDetail = window._mqttStatus?.lastError ? ` Reason: ${window._mqttStatus.lastError}.` : '';
-        nextTitle = window._mqttStatus?.reconnecting ? 'Dashboard MQTT Reconnecting' : 'Dashboard MQTT Down';
-        nextMessage = `Dashboard MQTT broker connection is down.${mqttDetail} Live device actions may queue until dashboard MQTT is restored.`;
-        if (mqttDownSettingsRedirectTimer) {
-            nextMessage += ` Opening System Settings in ${getMQTTDownRedirectSecondsRemaining()} seconds so you can change MQTT settings.`;
-        }
+        const mqttState = normalizeMQTTStatus(window._mqttStatus || false);
+        nextTitle = 'MQTT';
+        nextMessage = mqttState.reconnecting || mqttState.connecting ? 'Connecting' : 'Offline';
     }
 
     title.textContent = nextTitle;
@@ -988,7 +985,7 @@ function updateActionAvailability() {
 
         if (!hasActiveDevice) {
             disabled = true;
-            reason = 'Onboard or select a device first.';
+            reason = 'Add or select a device first.';
         } else if (!serverOk) {
             disabled = true;
             reason = 'Unavailable while the dashboard socket/server reconnects.';
@@ -1190,6 +1187,30 @@ function buildDashboardConversationHref(thread = {}) {
     if (number) params.set('thread', number);
     if (conversationId) params.set('conversation', String(conversationId));
     if (title) params.set('title', title);
+
+    const query = params.toString();
+    return `/sms${query ? `?${query}` : ''}`;
+}
+
+function isSmsSyncEvent(data = {}) {
+    return data.sync === true || String(data.sync || '').toLowerCase() === 'true';
+}
+
+function buildSmsEventHref(data = {}) {
+    const params = new URLSearchParams();
+    const deviceId = String(data.deviceId || data.device_id || getDashboardSmsDeviceId() || '').trim();
+    const conversationId = Math.max(0, Number(data.conversationId ?? data.conversation_id) || 0);
+    const type = String(data.type || '').trim().toLowerCase();
+    const outgoing = data.outgoing === true || type === 'outgoing';
+    const number = String(outgoing
+        ? (data.to || data.to_number || data.number || '')
+        : (data.from || data.from_number || data.number || data.to || data.to_number || '')
+    ).trim();
+
+    if (deviceId) params.set('device', deviceId);
+    if (number) params.set('thread', number);
+    if (conversationId) params.set('conversation', String(conversationId));
+    if (number) params.set('title', number);
 
     const query = params.toString();
     return `/sms${query ? `?${query}` : ''}`;
@@ -1483,7 +1504,7 @@ function initializeSocket() {
             state: 'error',
             lastError: data.message || 'MQTT connection error'
         });
-        showToast('MQTT Error: ' + data.message, 'danger');
+        showToast('Offline', 'danger', 'MQTT');
     });
     
     socket.on('device:status', function(data) {
@@ -1611,13 +1632,19 @@ function isActiveSimScopedEvent(data) {
     socket.on('sms:received', function(data) {
         if (!isActiveSimScopedEvent(data)) return;
         console.log('New SMS received:', data);
-        const from = data.from_number || data.from || 'Unknown';
-        const message = String(data.message || '');
-        showToast(`New SMS from ${from}: ${message.substring(0, 30)}...`, 'info');
         updateUnreadBadge();
         scheduleDashboardSmsRefresh();
+
+        if (isSmsSyncEvent(data)) {
+            return;
+        }
+
+        const from = data.from_number || data.from || 'Unknown';
+        const message = String(data.message || '');
+        const smsHref = buildSmsEventHref(data);
+        showToast(`New SMS from ${from}: ${message.substring(0, 30)}...`, 'info');
         playNotificationSound('sms');
-        pushNotify('New SMS', `From: ${from}\n${message.substring(0, 80)}`, '/favicon.ico');
+        pushNotify('New SMS', `From: ${from}\n${message.substring(0, 80)}`, '/favicon.ico', smsHref);
     });
 
     socket.on('sms:queued', function(data) {
@@ -1809,12 +1836,11 @@ function normalizeMQTTStatus(status) {
     const reconnecting = Boolean(mqttState.reconnecting || mqttState.state === 'reconnecting');
     const lastError = mqttState.lastError || mqttState.error || mqttState.message || '';
     const authFailed = /auth|authorized|credential/i.test(String(lastError));
-    let label = 'Disconnected';
+    let label = 'Offline';
 
-    if (connected) label = 'Connected';
-    else if (reconnecting) label = 'Reconnecting...';
-    else if (connecting) label = 'Connecting...';
-    else if (authFailed) label = 'Auth failed';
+    if (connected) label = 'Online';
+    else if (reconnecting || connecting) label = 'Connecting';
+    else if (authFailed) label = 'Offline';
 
     return {
         ...mqttState,
@@ -1847,7 +1873,7 @@ function updateTopBarStatus() {
         } else if (!window._serverConnected) {
             label.textContent = 'Dashboard Socket Down';
         } else if (!window._mqttConnected) {
-            label.textContent = 'Dashboard MQTT Down';
+            label.textContent = 'MQTT Offline';
         } else {
             label.textContent = 'Device Offline';
         }
@@ -3157,14 +3183,24 @@ window.addEventListener('device:sim-changed', function (event) {
 });
 
 // Push notification helper
-function pushNotify(title, body, icon) {
+function pushNotify(title, body, icon, url) {
     if (!('Notification' in window)) return;
+    const showNotification = () => {
+        const notification = new Notification(title, { body, icon, data: { url: url || '' } });
+        if (url) {
+            notification.onclick = function () {
+                window.focus?.();
+                window.location.href = url;
+                notification.close?.();
+            };
+        }
+    };
     if (Notification.permission === 'granted') {
-        try { new Notification(title, { body, icon }); } catch (_) {}
+        try { showNotification(); } catch (_) {}
     } else if (Notification.permission === 'default') {
         Notification.requestPermission().then(perm => {
             if (perm === 'granted') {
-                try { new Notification(title, { body, icon }); } catch (_) {}
+                try { showNotification(); } catch (_) {}
             }
         });
     }

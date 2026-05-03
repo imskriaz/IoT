@@ -42,6 +42,20 @@ function isSyncPayload(payload = {}) {
     return payload.sync === true || clean(payload.sync).toLowerCase() === 'true';
 }
 
+function boolFromPayload(value, fallback = false) {
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0) return false;
+    const text = clean(value).toLowerCase();
+    if (['true', '1', 'yes', 'read'].includes(text)) return true;
+    if (['false', '0', 'no', 'unread'].includes(text)) return false;
+    return fallback;
+}
+
+function smsExternalId(payload = {}) {
+    const raw = clean(payload.external_id || payload.externalId || payload.message_id || payload.messageId || payload.local_id || payload.localId);
+    return raw || null;
+}
+
 function parseDeviceIds(req) {
     try {
         return JSON.parse(req.apiKey?.device_ids || '[]');
@@ -260,6 +274,7 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
             });
             return res.json({ success: true, device_id: deviceId, sync: true });
         }
+        const syncPayload = isSyncPayload(req.body);
         const isOutgoing = req.body.outgoing === true || String(req.body.direction || req.body.type || '').toLowerCase() === 'outgoing';
         const from = clean(req.body.from || req.body.from_number);
         const to = clean(req.body.to || req.body.to_number);
@@ -274,10 +289,12 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
         }
         const timestamp = normalizeTimestamp(req.body.timestamp);
         const simScope = extractSimScope(req.body);
+        const read = isOutgoing ? 1 : (boolFromPayload(req.body.read ?? req.body.is_read, false) ? 1 : 0);
+        const externalId = smsExternalId(req.body);
         const result = await db.run(
             `INSERT OR IGNORE INTO sms
-                (device_id, from_number, to_number, message, type, status, timestamp, read, source, sim_slot)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                (device_id, from_number, to_number, message, type, status, timestamp, read, source, sim_slot, external_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 deviceId,
                 isOutgoing ? null : from,
@@ -286,9 +303,10 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
                 isOutgoing ? 'outgoing' : 'incoming',
                 isOutgoing ? 'sent' : 'received',
                 timestamp,
-                isOutgoing ? 1 : 0,
-                req.body.sync ? 'android-http-sync' : 'android-http',
-                simScope.simSlot
+                read,
+                syncPayload ? 'android-http-sync' : 'android-http',
+                simScope.simSlot,
+                externalId
             ]
         );
 
@@ -304,12 +322,14 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
                 deviceId,
                 id: result.lastID,
                 conversationId: Number(conversationId || 0) || null,
-                sync: Boolean(req.body.sync),
+                sync: syncPayload,
                 from: isOutgoing ? null : from,
                 from_number: isOutgoing ? null : from,
                 to_number: isOutgoing ? to : (to || null),
                 type: isOutgoing ? 'outgoing' : 'incoming',
                 status: isOutgoing ? 'sent' : 'received',
+                read,
+                external_id: externalId,
                 sim_slot: simScope.simSlot,
                 message: content,
                 text: content,

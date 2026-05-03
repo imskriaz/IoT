@@ -10,28 +10,17 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Build;
 import android.os.Bundle;
-import android.text.InputType;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 public class SettingsActivity extends Activity {
     private static final int REQ_BRIDGE_PERMISSIONS = 4301;
 
-    private EditText serverUrl;
-    private EditText apiKey;
-    private EditText deviceId;
-    private EditText topicPrefix;
-    private EditText host;
-    private EditText port;
-    private EditText protocol;
-    private EditText username;
-    private EditText password;
+    private TextView connectionSummary;
     private TextView settingsStatus;
     private TextView eventLog;
     private TextView mqttHint;
@@ -80,8 +69,6 @@ public class SettingsActivity extends Activity {
         root.addView(buildPermissionCenterSection());
         root.addView(BridgeUi.sectionSpacing(this));
         root.addView(buildAccessSection());
-        root.addView(BridgeUi.sectionSpacing(this));
-        root.addView(buildTransportSection());
         root.addView(BridgeUi.sectionSpacing(this));
         root.addView(buildControlSection());
         root.addView(BridgeUi.sectionSpacing(this));
@@ -155,34 +142,12 @@ public class SettingsActivity extends Activity {
     }
 
     private LinearLayout buildAccessSection() {
-        LinearLayout card = BridgeUi.sectionCard(this, "Bridge Access", "");
-        serverUrl = BridgeUi.input(this, "Device Bridge server URL");
-        apiKey = BridgeUi.passwordInput(this, "Device Bridge API key");
-        deviceId = BridgeUi.input(this, "Device ID");
-        topicPrefix = BridgeUi.input(this, "Topic prefix");
-
-        card.addView(BridgeUi.label(this, "Server URL"));
-        card.addView(serverUrl, BridgeUi.fullWidth(this));
-        card.addView(BridgeUi.label(this, "API Key"));
-        card.addView(apiKey, BridgeUi.fullWidth(this));
-        card.addView(BridgeUi.label(this, "Device ID"));
-        card.addView(deviceId, BridgeUi.fullWidth(this));
-        card.addView(BridgeUi.label(this, "Topic Prefix"));
-        card.addView(topicPrefix, BridgeUi.fullWidth(this));
-        return card;
-    }
-
-    private LinearLayout buildTransportSection() {
-        LinearLayout card = BridgeUi.sectionCard(this, "Connection", "");
-        host = BridgeUi.input(this, "Broker host");
-        port = BridgeUi.input(this, "Realtime port");
-        port.setInputType(InputType.TYPE_CLASS_NUMBER);
-        protocol = BridgeUi.input(this, "Realtime protocol");
-        username = BridgeUi.input(this, "Realtime username");
-        password = BridgeUi.passwordInput(this, "Realtime password");
-
+        LinearLayout card = BridgeUi.sectionCard(this, "Dashboard Connection", "");
+        connectionSummary = BridgeUi.textBlock(this, 13, true);
+        connectionSummary.setTypeface(Typeface.MONOSPACE);
         mqttHint = BridgeUi.textBlock(this, 12, false);
-        mqttHint.setText("Connection details are provisioned by the dashboard setup code. The bridge uses realtime MQTT when available and falls back to dashboard HTTP when needed.");
+        mqttHint.setText("Connection details are managed by the dashboard setup code. Scan the QR again when dashboard settings change.");
+        card.addView(connectionSummary, BridgeUi.fullWidth(this));
         card.addView(mqttHint, BridgeUi.fullWidth(this));
         return card;
     }
@@ -293,67 +258,18 @@ public class SettingsActivity extends Activity {
 
     private void loadConfig() {
         BridgeConfig config = BridgeConfig.load(this);
-        serverUrl.setText(config.serverUrl);
-        apiKey.setText(config.apiKey);
-        deviceId.setText(config.deviceId);
-        topicPrefix.setText(config.topicPrefix);
-        host.setText(config.brokerHost);
-        port.setText(String.valueOf(config.brokerPort));
-        username.setText(config.username);
-        password.setText(config.password);
-        protocol.setText(config.brokerProtocol);
-        updateTransportHint(config.transportMode);
+        updateConnectionSummary(config);
     }
 
     private String saveConfig(boolean enabled) {
         BridgeConfig current = BridgeConfig.load(this);
-        String nextTransportMode = normalizeTransportMode(current.transportMode, "auto");
-        String brokerValue = host.getText().toString().trim();
-        boolean hasHttpAccess = !serverUrl.getText().toString().trim().isEmpty()
-                && !apiKey.getText().toString().trim().isEmpty()
-                && !BridgeProvisioning.firstNonEmpty(deviceId.getText().toString(), current.deviceId).isEmpty();
-        if (enabled && "mqtt".equals(nextTransportMode) && brokerValue.isEmpty()) {
-            return "Realtime host is required before starting.";
-        }
-        if (enabled && "http".equals(nextTransportMode)) {
-            if (serverUrl.getText().toString().trim().isEmpty()) {
-                return "Server URL is required before starting.";
-            }
-            if (apiKey.getText().toString().trim().isEmpty()) {
-                return "API key is required before starting.";
-            }
-        }
-        if (enabled && "auto".equals(nextTransportMode) && brokerValue.isEmpty() && !hasHttpAccess) {
+        if (enabled && !current.hasBridgeConnectionConfig()) {
             return "Dashboard setup code is required before starting.";
         }
-
-        int parsedPort = current.brokerPort;
-        try {
-            parsedPort = Integer.parseInt(port.getText().toString().trim());
-        } catch (NumberFormatException ignored) {
-        }
-        if (parsedPort <= 0) {
-            parsedPort = 1883;
-        }
-
-        BridgeConfig updated = new BridgeConfig(
-                serverUrl.getText().toString(),
-                apiKey.getText().toString(),
-                current.installId,
-                nextTransportMode,
-                host.getText().toString(),
-                parsedPort,
-                BridgeProvisioning.firstNonEmpty(protocol.getText().toString(), current.brokerProtocol),
-                username.getText().toString(),
-                password.getText().toString(),
-                BridgeProvisioning.firstNonEmpty(deviceId.getText().toString(), current.deviceId),
-                BridgeProvisioning.firstNonEmpty(topicPrefix.getText().toString(), current.topicPrefix),
-                true,
-                enabled
-        );
+        BridgeConfig updated = current.withBridgeEnabled(enabled);
         updated.save(this);
         BridgeEventLog.append(this, enabled ? "Settings saved with bridge enabled" : "Settings saved");
-        updateTransportHint(updated.transportMode);
+        updateConnectionSummary(updated);
         return null;
     }
 
@@ -377,7 +293,7 @@ public class SettingsActivity extends Activity {
         if (permissionButton != null) {
             permissionButton.setText(BridgeDiagnostics.hasOperationalPermissions(this) ? "Permissions Ready" : "Grant Permissions");
         }
-        updateTransportHint(config.transportMode);
+        updateConnectionSummary(config);
     }
 
     private void updateTestLabResult(String title, String detail) {
@@ -387,9 +303,16 @@ public class SettingsActivity extends Activity {
         refreshStatus(title);
     }
 
-    private void updateTransportHint(String mode) {
+    private void updateConnectionSummary(BridgeConfig config) {
+        if (connectionSummary != null) {
+            connectionSummary.setText("Device ID: " + (config.deviceId.isEmpty() ? "not set" : config.deviceId)
+                    + "\nConnection: " + config.transportDisplayLabel()
+                    + "\nDashboard access: " + (config.hasDashboardAccess() ? "ready" : "not provisioned")
+                    + "\nDevice link: " + (config.hasBridgeConnectionConfig() ? "ready" : "not provisioned")
+                    + "\nAPI key: " + (config.apiKey.isEmpty() ? "not set" : "configured"));
+        }
         if (mqttHint == null) return;
-        mqttHint.setText("Connection details are provisioned by the dashboard setup code. The bridge uses realtime MQTT when available and falls back to dashboard HTTP when needed.");
+        mqttHint.setText("Connection details are managed by the dashboard setup code. Scan the QR again when dashboard settings change.");
     }
 
     private void copyConsole() {
@@ -399,12 +322,6 @@ public class SettingsActivity extends Activity {
             BridgeEventLog.append(this, "Console copied to clipboard");
             refreshStatus("Console copied");
         }
-    }
-
-    private String normalizeTransportMode(String value, String fallback) {
-        String normalized = BridgeProvisioning.firstNonEmpty(value, fallback).toLowerCase(Locale.ROOT);
-        if ("auto".equals(normalized)) return "auto";
-        return "http".equals(normalized) ? "http" : "mqtt";
     }
 
     private void requestBridgePermissions() {

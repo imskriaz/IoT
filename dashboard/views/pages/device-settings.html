@@ -129,7 +129,7 @@
                                         <i class="bi bi-eye"></i>
                                     </button>
                                 </div>
-                                <div class="form-text" id="deviceSettingsMqttPassHint">Stored for onboarding/provisioning, not hardcoded in firmware.</div>
+                                <div class="form-text" id="deviceSettingsMqttPassHint">Stored for device setup/provisioning, not hardcoded in firmware.</div>
                             </div>
                         </div>
                         <div class="row g-3 mb-2">
@@ -239,7 +239,7 @@
                     <h5 class="mb-0"><i class="bi bi-exclamation-triangle me-2"></i>Danger Zone</h5>
                 </div>
                 <div class="card-body">
-                    <p class="text-muted small mb-3">Clear device-linked registry, telemetry, queue state, and onboarding data without touching users or unrelated dashboard administration.</p>
+                    <p class="text-muted small mb-3">Clear device-linked registry, telemetry, queue state, and setup data without touching users or unrelated dashboard administration.</p>
                     <button class="btn btn-outline-warning" type="button" onclick="clearDeviceData()">
                         <i class="bi bi-trash3 me-2"></i>Clear Device Data
                     </button>
@@ -294,13 +294,13 @@ async function clearDeviceData() {
     if (typeof window.appConfirm === 'function') {
         approved = await window.appConfirm({
             title: 'Clear Device Data',
-            message: 'This clears all onboarded devices, telemetry, queue-linked device data, and unregistered-device tracking. Users and system settings stay intact.',
+            message: 'This clears all added devices, telemetry, queue-linked device data, and unregistered-device tracking. Users and system settings stay intact.',
             requiredText: 'CLEAR',
             confirmText: 'Clear Device Data',
             confirmClass: 'btn btn-warning'
         });
     } else {
-        approved = confirm('This clears all onboarded devices and device-linked data while keeping users and system settings.') &&
+        approved = confirm('This clears all added devices and device-linked data while keeping users and system settings.') &&
             prompt('Type CLEAR to continue:') === 'CLEAR';
     }
     if (!approved) return;
@@ -422,7 +422,7 @@ function renderDeviceSettingsLane(device = {}) {
             cls: 'badge bg-success fs-6',
             hint: 'Android phone device. Dashboard provisioning is changed here; app permissions and OS controls stay in Android.',
             description: 'Stored for this Android device. The recovery QR and copied code both carry the same secure setup package for the selected transport.',
-            apply: 'Save updates dashboard-side Android provisioning. Scan the recovery QR on the right if onboarding details were missed.'
+            apply: 'Save updates dashboard-side Android provisioning. Scan the recovery QR on the right if setup details were missed.'
         }
     };
     const meta = labels[lane] || labels.esp32;

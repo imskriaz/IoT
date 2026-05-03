@@ -251,6 +251,63 @@ describe('androidBridgeAdapter routes', () => {
         );
     });
 
+    test('POST /messages/receive stores synced read SMS without marking it unread', async () => {
+        const emit = jest.fn();
+        const { attachSmsToConversation } = require('../services/smsConversations');
+        attachSmsToConversation.mockResolvedValueOnce(77);
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue({ id: 'android-http-01' }),
+            run: jest.fn().mockResolvedValue({ lastID: 42, changes: 1 })
+        });
+        global.io = {
+            to: jest.fn().mockReturnValue({ emit })
+        };
+
+        const router = require('../routes/androidBridgeAdapter');
+        const app = buildApp(router, db, { deviceIds: ['android-http-01'] });
+        const res = await request(app)
+            .post('/v1/android/bridge/messages/receive')
+            .send({
+                device_id: 'android-http-01',
+                type: 'sms_sync',
+                sync: true,
+                from: '+8801555000000',
+                content: 'historical message',
+                timestamp: '2026-04-03T09:00:00.000Z',
+                read: 1,
+                external_id: 'android-sms-42'
+            });
+
+        expect(res.status).toBe(200);
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT OR IGNORE INTO sms'),
+            [
+                'android-http-01',
+                '+8801555000000',
+                null,
+                'historical message',
+                'incoming',
+                'received',
+                '2026-04-03T09:00:00.000Z',
+                1,
+                'android-http-sync',
+                null,
+                'android-sms-42'
+            ]
+        );
+        expect(emit).toHaveBeenCalledWith(
+            'sms:received',
+            expect.objectContaining({
+                deviceId: 'android-http-01',
+                id: 42,
+                conversationId: 77,
+                sync: true,
+                read: 1,
+                external_id: 'android-sms-42'
+            })
+        );
+    });
+
     test('GET /messages/outstanding returns queued Android HTTP messages and marks them sending', async () => {
         const db = makeDbMock({
             get: jest.fn().mockResolvedValue({ id: 'android-http-01' }),

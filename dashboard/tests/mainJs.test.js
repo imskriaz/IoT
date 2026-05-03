@@ -44,6 +44,8 @@ describe('main.js device HTTP helper export', () => {
         expect(source).toContain("return '/settings?mqttDown=1#mqtt-broker';");
         expect(source).toContain('scheduleMQTTDownSettingsRedirect();');
         expect(source).toContain('cancelMQTTDownSettingsRedirect();');
-        expect(source).toContain('Opening System Settings in ${getMQTTDownRedirectSecondsRemaining()} seconds');
+        expect(source).toContain("nextTitle = 'MQTT';");
+        expect(source).toContain("nextMessage = mqttState.reconnecting || mqttState.connecting ? 'Connecting' : 'Offline';");
+        expect(source).not.toContain('Opening System Settings in ${getMQTTDownRedirectSecondsRemaining()} seconds');
     });
 });

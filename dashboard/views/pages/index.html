@@ -8,125 +8,12 @@
         <span id="dashboardLastSeen" class="dashboard-last-seen text-muted small">
             <i class="bi bi-clock-history me-1"></i>Last seen: <%= deviceStatus.lastSeen ? moment(deviceStatus.lastSeen).format('YYYY-MM-DD HH:mm:ss') : '-' %>
         </span>
-        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#quickOnboardModal">
-            <i class="bi bi-phone me-1"></i>Onboard Phone
-        </button>
+        <a class="btn btn-sm btn-primary" href="/onboard">
+            <i class="bi bi-plus-circle me-1"></i>Add Device
+        </a>
         <button class="btn btn-sm btn-outline-primary" onclick="refreshDashboard()">
             <i class="bi bi-arrow-repeat"></i>
         </button>
-    </div>
-</div>
-
-<div class="modal fade" id="quickOnboardModal" tabindex="-1" aria-labelledby="quickOnboardModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered modal-lg">
-        <div class="modal-content quick-onboard-modal">
-            <div class="modal-header">
-                <div>
-                    <h5 class="modal-title" id="quickOnboardModalLabel">
-                        <i class="bi bi-phone me-2 text-primary"></i>Onboard Android Phone
-                    </h5>
-                    <div class="text-muted small">Create a phone bridge QR without leaving the dashboard.</div>
-                </div>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <div id="quickOnboardStart">
-                    <div class="row g-3 align-items-end">
-                        <div class="col-md-7">
-                            <label class="form-label small text-muted">Phone name</label>
-                            <input type="text" class="form-control" id="quickOnboardName" maxlength="100" placeholder="Counter phone, SIM gateway, Office Android">
-                        </div>
-                        <div class="col-md-5 d-grid">
-                            <button type="button" class="btn btn-primary" id="quickOnboardGenerateBtn" onclick="generateQuickAndroidOnboardQr()">
-                                <i class="bi bi-qr-code me-1"></i>Generate QR
-                            </button>
-                        </div>
-                    </div>
-                    <div class="quick-onboard-guide mt-4">
-                        <div class="quick-onboard-step">
-                            <span>1</span>
-                            <div>
-                                <strong>Install or open Device Bridge</strong>
-                                <small>Use the Android app already installed on the phone.</small>
-                            </div>
-                        </div>
-                        <div class="quick-onboard-step">
-                            <span>2</span>
-                            <div>
-                                <strong>Generate and scan QR</strong>
-                                <small>The QR carries one secure setup code for this phone.</small>
-                            </div>
-                        </div>
-                        <div class="quick-onboard-step">
-                            <span>3</span>
-                            <div>
-                                <strong>Grant permissions and start bridge</strong>
-                                <small>The phone will request SMS, Wi-Fi, and notification access.</small>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="alert alert-light border small mt-3 mb-0">
-                        Need ESP32, USB, Bluetooth, Wi-Fi AP, or firmware setup? Use the <a href="/onboard" class="alert-link">full onboarding wizard</a>.
-                    </div>
-                </div>
-
-                <div id="quickOnboardResult" class="app-hidden">
-                    <div class="row g-4 align-items-start">
-                        <div class="col-lg-5 text-center">
-                            <img id="quickOnboardQr" alt="Android Device Bridge setup QR" class="img-fluid border rounded p-2 bg-white quick-onboard-qr">
-                            <div class="small text-muted mt-2">Scan from the Device Bridge app.</div>
-                        </div>
-                        <div class="col-lg-7">
-                            <div class="quick-onboard-guide mb-3">
-                                <div class="quick-onboard-step">
-                                    <span>1</span>
-                                    <div>
-                                        <strong>Open Device Bridge</strong>
-                                        <small>Tap Scan dashboard QR on the phone.</small>
-                                    </div>
-                                </div>
-                                <div class="quick-onboard-step">
-                                    <span>2</span>
-                                    <div>
-                                        <strong>Scan this QR</strong>
-                                        <small>The app imports broker and device identity automatically.</small>
-                                    </div>
-                                </div>
-                                <div class="quick-onboard-step">
-                                    <span>3</span>
-                                    <div>
-                                        <strong>Grant access</strong>
-                                        <small>Approve SMS, Wi-Fi status, and notifications.</small>
-                                    </div>
-                                </div>
-                                <div class="quick-onboard-step">
-                                    <span>4</span>
-                                    <div>
-                                        <strong>Start bridge</strong>
-                                        <small>Keep battery optimization disabled for reliable delivery.</small>
-                                    </div>
-                                </div>
-                            </div>
-                            <label class="form-label small text-muted">Secure setup code</label>
-                            <textarea class="form-control font-monospace" id="quickOnboardToken" rows="5" readonly></textarea>
-                            <div class="d-flex flex-wrap gap-2 mt-2">
-                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyQuickOnboardToken()">
-                                    <i class="bi bi-clipboard me-1"></i>Copy code
-                                </button>
-                                <a class="btn btn-sm btn-outline-secondary" id="quickOnboardSettingsLink" href="/devices/settings">
-                                    <i class="bi bi-gear me-1"></i>Device settings
-                                </a>
-                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="resetQuickOnboardModal()">
-                                    <i class="bi bi-plus-circle me-1"></i>Another phone
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div id="quickOnboardError" class="alert alert-danger small mt-3 mb-0 app-hidden"></div>
-            </div>
-        </div>
     </div>
 </div>
 
@@ -176,19 +63,19 @@
     </div>
     <% }); %>
     <div class="col-12 col-sm-6 col-md-4 col-lg-3">
-        <button type="button" class="dashboard-add-card card h-100 border-dashed text-decoration-none hover-effect w-100 bg-white" data-bs-toggle="modal" data-bs-target="#quickOnboardModal">
+        <a href="/onboard" class="dashboard-add-card card h-100 border-dashed text-decoration-none hover-effect w-100 bg-white">
             <div class="card-body d-flex flex-column align-items-center justify-content-center text-muted py-4">
                 <i class="bi bi-plus-circle fs-2 mb-2"></i>
-                <span class="small">Onboard Phone</span>
-                <span class="x-small text-muted mt-1">QR setup</span>
+                <span class="small">Add Device</span>
+                <span class="x-small text-muted mt-1">Open Add Device</span>
             </div>
-        </button>
+        </a>
     </div>
 </div>
 <% } else if (mqttConnected) { %>
 <div class="alert alert-info d-flex align-items-center gap-3 mb-3">
     <i class="bi bi-cpu fs-4"></i>
-    <div>No devices registered yet. <button type="button" class="btn btn-link alert-link p-0 align-baseline" data-bs-toggle="modal" data-bs-target="#quickOnboardModal">Onboard an Android phone</button> or use the <a href="/onboard" class="alert-link">full wizard</a>.</div>
+    <div>No devices registered yet. <a href="/onboard" class="alert-link">Add your first device</a>.</div>
 </div>
 <% } %>
 <% if (!hasRegisteredDevices) { %>
@@ -197,14 +84,11 @@
         <div class="display-6 mb-3 text-primary">
             <i class="bi bi-router"></i>
         </div>
-        <h5 class="fw-semibold mb-2">No device is onboarded yet</h5>
-        <p class="text-muted mb-4">Use the device selector or onboarding flow first. Device-only services stay hidden until a real device is available.</p>
+        <h5 class="fw-semibold mb-2">No device has been added yet</h5>
+        <p class="text-muted mb-4">Use Add Device first. Device-only services stay hidden until a real device is available.</p>
         <div class="d-flex flex-wrap justify-content-center gap-2">
-            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#quickOnboardModal">
-                <i class="bi bi-phone me-2"></i>Onboard Phone
-            </button>
-            <a href="/onboard" class="btn btn-outline-primary">
-                <i class="bi bi-tools me-2"></i>Advanced Wizard
+            <a href="/onboard" class="btn btn-primary">
+                <i class="bi bi-plus-circle me-2"></i>Add Device
             </a>
             <a href="/devices" class="btn btn-outline-secondary">
                 <i class="bi bi-cpu me-2"></i>Open Device Manager
@@ -261,7 +145,7 @@
         android: {
             device: [
                 'Open Android Bridge on the phone',
-                'Scan the recovery QR if onboarding details were missed',
+                'Scan the recovery QR if setup details were missed',
                 'Confirm the selected transport mode is correct for this device',
                 'Allow SMS/phone permissions and background service',
                 'Disable battery optimization for the bridge app'
@@ -1881,180 +1765,9 @@
         });
     })();
 
-    function quickOnboardToast(message, type = 'info') {
-        if (typeof showToast === 'function') {
-            showToast(message, type);
-        }
-    }
-
-    function generateQuickOnboardId() {
-        const bytes = new Uint8Array(3);
-        if (window.crypto?.getRandomValues) {
-            window.crypto.getRandomValues(bytes);
-        } else {
-            const seed = Date.now();
-            bytes[0] = seed & 255;
-            bytes[1] = (seed >> 8) & 255;
-            bytes[2] = (seed >> 16) & 255;
-        }
-        return 'android-' + Array.from(bytes).map((value) => value.toString(16).padStart(2, '0')).join('');
-    }
-
-    function setQuickOnboardBusy(isBusy) {
-        const button = document.getElementById('quickOnboardGenerateBtn');
-        if (!button) return;
-        button.disabled = isBusy;
-        button.innerHTML = isBusy
-            ? '<span class="spinner-border spinner-border-sm me-1"></span>Generating...'
-            : '<i class="bi bi-qr-code me-1"></i>Generate QR';
-    }
-
-    function renderQuickOnboardError(message) {
-        const errorEl = document.getElementById('quickOnboardError');
-        if (!errorEl) return;
-        if (!message) {
-            errorEl.classList.add('app-hidden');
-            errorEl.textContent = '';
-            return;
-        }
-        errorEl.textContent = message;
-        errorEl.classList.remove('app-hidden');
-    }
-
-    async function generateQuickAndroidOnboardQr() {
-        const nameInput = document.getElementById('quickOnboardName');
-        const name = String(nameInput?.value || '').trim() || 'Android Bridge Phone';
-        const deviceId = generateQuickOnboardId();
-        renderQuickOnboardError('');
-        setQuickOnboardBusy(true);
-
-        try {
-            const response = await fetch('/api/onboard/register', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
-                },
-                body: JSON.stringify({
-                    device_id: deviceId,
-                    name,
-                    model: 'android-sms-bridge',
-                    bridge_type: 'android',
-                    transport_mode: 'mqtt',
-                    capabilities: {
-                        bridge: 'android',
-                        bridge_type: 'android',
-                        platform: 'android',
-                        sms: true,
-                        calls: true,
-                        ussd: true,
-                        wifi: true,
-                        mqtt: true,
-                        transport_mode: 'mqtt'
-                    }
-                })
-            });
-            const payload = await response.json();
-            if (!response.ok || !payload?.success || !payload?.provisioning) {
-                throw new Error(payload?.message || 'Failed to generate Android setup QR');
-            }
-
-            const provisioning = payload.provisioning;
-            document.getElementById('quickOnboardQr').src = provisioning.qr_data_url || '';
-            document.getElementById('quickOnboardToken').value = provisioning.setup_token || '';
-            document.getElementById('quickOnboardSettingsLink').href = `/devices/settings?device=${encodeURIComponent(payload.device_id || deviceId)}`;
-            document.getElementById('quickOnboardStart').classList.add('app-hidden');
-            document.getElementById('quickOnboardResult').classList.remove('app-hidden');
-
-            try {
-                window.setActiveDeviceContext?.(payload.device_id || deviceId);
-                await window.persistActiveDeviceSelection?.(payload.device_id || deviceId);
-            } catch (_) {}
-
-            quickOnboardToast('Android setup QR generated.', 'success');
-        } catch (error) {
-            renderQuickOnboardError(error.message || 'Failed to generate Android setup QR');
-            quickOnboardToast(error.message || 'Failed to generate Android setup QR', 'danger');
-        } finally {
-            setQuickOnboardBusy(false);
-        }
-    }
-
-    function copyQuickOnboardToken() {
-        const token = document.getElementById('quickOnboardToken')?.value || '';
-        if (!token) {
-            quickOnboardToast('No setup code is available yet.', 'warning');
-            return;
-        }
-        navigator.clipboard.writeText(token)
-            .then(() => quickOnboardToast('Setup code copied.', 'success'))
-            .catch(() => {
-                const field = document.getElementById('quickOnboardToken');
-                field?.focus();
-                field?.select();
-                quickOnboardToast('Select and copy the setup code manually.', 'warning');
-            });
-    }
-
-    function resetQuickOnboardModal() {
-        document.getElementById('quickOnboardName').value = '';
-        document.getElementById('quickOnboardQr').removeAttribute('src');
-        document.getElementById('quickOnboardToken').value = '';
-        document.getElementById('quickOnboardResult').classList.add('app-hidden');
-        document.getElementById('quickOnboardStart').classList.remove('app-hidden');
-        renderQuickOnboardError('');
-    }
 </script>
 
 <style>
-    .quick-onboard-modal .modal-header {
-        align-items: flex-start;
-    }
-
-    .quick-onboard-guide {
-        display: grid;
-        gap: 0.65rem;
-    }
-
-    .quick-onboard-step {
-        display: grid;
-        grid-template-columns: 2rem minmax(0, 1fr);
-        gap: 0.7rem;
-        align-items: start;
-        padding: 0.7rem;
-        border: 1px solid var(--bs-border-color);
-        border-radius: 0.5rem;
-        background: var(--bs-body-bg);
-    }
-
-    .quick-onboard-step span {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 2rem;
-        height: 2rem;
-        border-radius: 999px;
-        background: rgba(13, 110, 253, 0.12);
-        color: var(--bs-primary);
-        font-weight: 700;
-        line-height: 1;
-    }
-
-    .quick-onboard-step strong,
-    .quick-onboard-step small {
-        display: block;
-    }
-
-    .quick-onboard-step small {
-        color: var(--bs-secondary-color);
-        margin-top: 0.1rem;
-    }
-
-    .quick-onboard-qr {
-        max-width: 280px;
-    }
-
     .x-small {
         font-size: 0.72rem;
     }

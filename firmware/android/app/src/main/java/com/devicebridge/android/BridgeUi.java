@@ -20,6 +20,9 @@ import android.widget.TextView;
 import java.util.Locale;
 
 final class BridgeUi {
+    private static final int SMALL_TEXT_MAX_SP = 13;
+    private static final float SMALL_TEXT_SCALE = 1.15f;
+
     private BridgeUi() {
     }
 
@@ -121,7 +124,7 @@ final class BridgeUi {
 
         TextView labelView = new TextView(context);
         labelView.setText(label);
-        labelView.setTextSize(9);
+        labelView.setTextSize(scaledTextSize(9));
         labelView.setTypeface(Typeface.DEFAULT_BOLD);
         labelView.setGravity(Gravity.CENTER);
         labelView.setTextColor(Color.parseColor("#0f172a"));
@@ -182,7 +185,7 @@ final class BridgeUi {
             TextView eyebrow = new TextView(context);
             eyebrow.setText(eyebrowText.toUpperCase(Locale.ROOT));
             eyebrow.setTextColor(Color.parseColor("#93c5fd"));
-            eyebrow.setTextSize(10);
+            eyebrow.setTextSize(scaledTextSize(10));
             eyebrow.setTypeface(Typeface.DEFAULT_BOLD);
             eyebrow.setLetterSpacing(0.06f);
             LinearLayout.LayoutParams ep = fullWidth(context);
@@ -203,7 +206,7 @@ final class BridgeUi {
             TextView copy = new TextView(context);
             copy.setText(copyText);
             copy.setTextColor(Color.parseColor("#bfdbfe"));
-            copy.setTextSize(11);
+            copy.setTextSize(scaledTextSize(11));
             copy.setLineSpacing(0f, 1.1f);
             LinearLayout.LayoutParams cp = fullWidth(context);
             cp.bottomMargin = 0;
@@ -228,7 +231,7 @@ final class BridgeUi {
             TextView titleView = new TextView(context);
             titleView.setText(title);
             titleView.setTextColor(Color.parseColor("#0f172a"));
-            titleView.setTextSize(13);
+            titleView.setTextSize(scaledTextSize(13));
             titleView.setTypeface(Typeface.DEFAULT_BOLD);
             LinearLayout.LayoutParams tp = fullWidth(context);
             tp.bottomMargin = (subtitle != null && !subtitle.isEmpty()) ? dp(context, 2) : dp(context, 8);
@@ -239,7 +242,7 @@ final class BridgeUi {
             TextView subtitleView = new TextView(context);
             subtitleView.setText(subtitle);
             subtitleView.setTextColor(Color.parseColor("#64748b"));
-            subtitleView.setTextSize(11);
+            subtitleView.setTextSize(scaledTextSize(11));
             subtitleView.setPadding(0, 0, 0, dp(context, 6));
             subtitleView.setLineSpacing(0f, 1.1f);
             card.addView(subtitleView, fullWidth(context));
@@ -274,7 +277,7 @@ final class BridgeUi {
         EditText editText = new EditText(context);
         editText.setHint(hint);
         editText.setSingleLine(true);
-        editText.setTextSize(13);
+        editText.setTextSize(scaledTextSize(13));
         editText.setPadding(dp(context, 10), dp(context, 8), dp(context, 10), dp(context, 8));
         editText.setBackground(inputBackground(context));
         return editText;
@@ -306,7 +309,7 @@ final class BridgeUi {
     static TextView label(Context context, String value) {
         TextView view = new TextView(context);
         view.setText(value);
-        view.setTextSize(11);
+        view.setTextSize(scaledTextSize(11));
         view.setTextColor(Color.parseColor("#334155"));
         view.setTypeface(Typeface.DEFAULT_BOLD);
         view.setAllCaps(true);
@@ -317,7 +320,7 @@ final class BridgeUi {
 
     static TextView textBlock(Context context, int sizeSp, boolean dark) {
         TextView view = new TextView(context);
-        view.setTextSize(sizeSp);
+        view.setTextSize(scaledTextSize(sizeSp));
         view.setTextColor(dark ? Color.parseColor("#0f172a") : Color.parseColor("#1e293b"));
         view.setLineSpacing(0f, 1.12f);
         return view;
@@ -335,13 +338,13 @@ final class BridgeUi {
 
     static Button smallButton(Context context, String text, String backgroundColor, int textColor) {
         Button button = actionButton(context, text, backgroundColor, textColor);
-        button.setTextSize(12);
+        button.setTextSize(scaledTextSize(12));
         return button;
     }
 
     static Button tinyButton(Context context, String text, String backgroundColor, int textColor) {
         Button button = actionButton(context, text, backgroundColor, textColor);
-        button.setTextSize(10);
+        button.setTextSize(scaledTextSize(10));
         button.setPadding(dp(context, 9), dp(context, 6), dp(context, 9), dp(context, 6));
         return button;
     }
@@ -377,7 +380,7 @@ final class BridgeUi {
         TextView titleView = new TextView(context);
         titleView.setText(title);
         titleView.setTextColor(Color.parseColor("#0f172a"));
-        titleView.setTextSize(13);
+        titleView.setTextSize(scaledTextSize(13));
         titleView.setTypeface(Typeface.DEFAULT_BOLD);
         textCol.addView(titleView);
 
@@ -385,7 +388,7 @@ final class BridgeUi {
             TextView detailView = new TextView(context);
             detailView.setText(detail);
             detailView.setTextColor(Color.parseColor("#64748b"));
-            detailView.setTextSize(11);
+            detailView.setTextSize(scaledTextSize(11));
             detailView.setPadding(0, dp(context, 2), 0, 0);
             textCol.addView(detailView);
         }
@@ -398,7 +401,7 @@ final class BridgeUi {
         TextView view = new TextView(context);
         view.setText(text);
         view.setTextColor(Color.parseColor(textColor));
-        view.setTextSize(11);
+        view.setTextSize(scaledTextSize(11));
         view.setTypeface(Typeface.DEFAULT_BOLD);
         view.setPadding(dp(context, 8), dp(context, 4), dp(context, 8), dp(context, 4));
         GradientDrawable background = new GradientDrawable();
@@ -430,6 +433,10 @@ final class BridgeUi {
 
     static int dp(Context context, int value) {
         return (int) (value * context.getResources().getDisplayMetrics().density);
+    }
+
+    private static float scaledTextSize(int sizeSp) {
+        return sizeSp <= SMALL_TEXT_MAX_SP ? sizeSp * SMALL_TEXT_SCALE : sizeSp;
     }
 }
 

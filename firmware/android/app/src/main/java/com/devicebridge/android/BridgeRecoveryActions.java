@@ -130,6 +130,9 @@ final class BridgeRecoveryActions {
     static void clearLog(Activity activity) {
         BridgeEventLog.clear(activity);
         resetRuntimeTelemetry(activity, false);
+        if (BridgeAppGate.isBridgeServiceRunning(activity)) {
+            MqttBridgeService.requestClearTelemetry(activity);
+        }
     }
 
     static void reopenOnboarding(Activity activity) {

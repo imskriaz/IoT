@@ -5,6 +5,8 @@ const router = express.Router();
 const { body, param, validationResult } = require('express-validator');
 const http = require('http');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const QRCode = require('qrcode');
 const logger = require('../utils/logger');
 const { encodeProvisioningToken } = require('../utils/provisioningToken');
@@ -12,6 +14,12 @@ const { setupApIp, setupApLabel, setupApExampleLabel, bleNamePrefixes } = requir
 const { getWifiDisconnectReasonText } = require('../utils/wifiDisconnectReason');
 const DEFAULT_MQTT_PORT = 1883;
 const DEFAULT_TOPIC_PREFIX = normalizeTopicPrefix(process.env.MQTT_TOPIC_PREFIX || 'device');
+const ANDROID_APP_VARIANTS = Object.freeze([
+    { abi: 'arm64-v8a', label: 'Android app', hint: 'Most phones' },
+    { abi: 'armeabi-v7a', label: 'Android app 32-bit', hint: 'Older phones' },
+    { abi: 'x86_64', label: 'Android app x86_64', hint: 'Emulators' }
+]);
+const ANDROID_APP_ABIS = new Set(ANDROID_APP_VARIANTS.map(item => item.abi));
 
 function buildSetupApErrorMessage(errorMessage) {
     return errorMessage === 'timeout'
@@ -50,8 +58,8 @@ function hashApiKey(key) {
     return crypto.createHash('sha256').update(key).digest('hex');
 }
 
-function selectedMqttHost(value) {
-    return clean(value || process.env.MQTT_HOST || '');
+function selectedMqttHost() {
+    return clean(process.env.MQTT_HOST || '');
 }
 
 function selectedMqttPort(value) {
@@ -67,6 +75,37 @@ function selectedAndroidTransportMode(value) {
     const mode = clean(value).toLowerCase();
     if (mode === 'mqtt' || mode === 'http') return mode;
     return 'auto';
+}
+
+function resolveAndroidApkPath(abi = 'arm64-v8a') {
+    const normalizedAbi = ANDROID_APP_ABIS.has(clean(abi)) ? clean(abi) : 'arm64-v8a';
+    const apkRoot = path.resolve(__dirname, '..', '..', 'firmware', 'android', 'app', 'build', 'outputs', 'apk');
+    const candidates = [
+        {
+            buildType: 'release',
+            filename: `app-${normalizedAbi}-release.apk`,
+            apkPath: path.join(apkRoot, 'release', `app-${normalizedAbi}-release.apk`)
+        },
+        {
+            buildType: 'debug',
+            filename: `app-${normalizedAbi}-debug.apk`,
+            apkPath: path.join(apkRoot, 'debug', `app-${normalizedAbi}-debug.apk`)
+        }
+    ];
+    const selected = candidates.find(candidate => fs.existsSync(candidate.apkPath)) || candidates[0];
+    return { abi: normalizedAbi, ...selected, available: fs.existsSync(selected.apkPath) };
+}
+
+function buildAndroidAppDownloadOptions() {
+    return ANDROID_APP_VARIANTS.map(item => {
+        const resolved = resolveAndroidApkPath(item.abi);
+        return {
+            ...item,
+            available: resolved.available,
+            buildType: resolved.available ? resolved.buildType : null,
+            url: `/api/onboard/android-app/download?abi=${encodeURIComponent(item.abi)}`
+        };
+    });
 }
 
 function isAndroidBridge(body) {
@@ -104,11 +143,11 @@ async function buildAndroidProvisioning(req, db, userId, body) {
             topic_prefix: normalizeTopicPrefix(body.topic_prefix || DEFAULT_TOPIC_PREFIX)
         },
         mqtt: {
-            host: selectedMqttHost(body.mqtt_host),
-            port: selectedMqttPort(body.mqtt_port),
+            host: selectedMqttHost(),
+            port: selectedMqttPort(process.env.MQTT_PORT),
             protocol: selectedMqttProtocol(),
-            username: clean(body.mqtt_user || process.env.MQTT_USER || ''),
-            password: String(body.mqtt_pass ?? process.env.MQTT_PASSWORD ?? '')
+            username: clean(process.env.MQTT_USER || ''),
+            password: String(process.env.MQTT_PASSWORD ?? '')
         }
     };
     const setupToken = encodeProvisioningToken(payload);
@@ -147,7 +186,7 @@ function buildMqttUri(host, port) {
 
 function buildFirmwareSetupPayload(body) {
     const payload = {};
-    const mqttUri = buildMqttUri(body.mqtt_host || process.env.MQTT_HOST || '', body.mqtt_port || process.env.MQTT_PORT);
+    const mqttUri = buildMqttUri(process.env.MQTT_HOST || '', process.env.MQTT_PORT);
 
     if (body.device_id) {
         payload.device_id_override = body.device_id;
@@ -155,8 +194,8 @@ function buildFirmwareSetupPayload(body) {
     payload.wifi_ssid = body.wifi_ssid || '';
     payload.wifi_password = body.wifi_pass || '';
     payload.mqtt_uri = mqttUri;
-    payload.mqtt_username = body.mqtt_user || '';
-    payload.mqtt_password = body.mqtt_pass || '';
+    payload.mqtt_username = process.env.MQTT_USER || '';
+    payload.mqtt_password = process.env.MQTT_PASSWORD || '';
 
     return payload;
 }
@@ -256,6 +295,23 @@ router.get('/api/onboard/wifi-probe', async (_req, res) => {
     }
 });
 
+router.get('/api/onboard/android-app/download', (req, res) => {
+    try {
+        const { abi, apkPath, buildType, available } = resolveAndroidApkPath(req.query.abi);
+        if (!available) {
+            return res.status(404).json({
+                success: false,
+                message: `Android app APK for ${abi} is not built yet`
+            });
+        }
+
+        res.download(apkPath, `device-bridge-${abi}-${buildType}.apk`);
+    } catch (error) {
+        logger.error('Android app download error:', error);
+        res.status(500).json({ success: false, message: 'Failed to download Android app' });
+    }
+});
+
 router.post('/api/onboard/wifi-send', [
     body('device_id').trim().notEmpty().matches(/^[a-zA-Z0-9_-]+$/),
     body('apn').optional({ nullable: true }).trim().isLength({ max: 100 }),
@@ -274,10 +330,10 @@ router.post('/api/onboard/wifi-send', [
 
         const payload = {
             device_id: req.body.device_id,
-            mqtt_host: req.body.mqtt_host || process.env.MQTT_HOST || '',
-            mqtt_port: parseInt(req.body.mqtt_port, 10) || parseInt(process.env.MQTT_PORT, 10) || DEFAULT_MQTT_PORT,
-            mqtt_user: req.body.mqtt_user || '',
-            mqtt_pass: req.body.mqtt_pass || '',
+            mqtt_host: process.env.MQTT_HOST || '',
+            mqtt_port: parseInt(process.env.MQTT_PORT, 10) || DEFAULT_MQTT_PORT,
+            mqtt_user: process.env.MQTT_USER || '',
+            mqtt_pass: process.env.MQTT_PASSWORD || '',
             apn: req.body.apn || '',
             wifi_ssid: req.body.wifi_ssid || '',
             wifi_pass: req.body.wifi_pass || ''
@@ -314,8 +370,9 @@ router.post('/api/onboard/wifi-send', [
 router.get('/onboard', (req, res) => {
     try {
         res.render('pages/onboarding', {
-            title: 'Device Onboarding',
+            title: 'Add Device',
             layout: 'layouts/main',
+            showHeader: false,
             showSidebar: false,
             showStatusChrome: false,
             user: req.session.user,
@@ -327,7 +384,8 @@ router.get('/onboard', (req, res) => {
             mqttPort: parseInt(process.env.MQTT_PORT, 10) || DEFAULT_MQTT_PORT,
             mqttUser: process.env.MQTT_USER || '',
             mqttPassword: process.env.MQTT_PASSWORD || '',
-            mqttTopicPrefix: DEFAULT_TOPIC_PREFIX
+            mqttTopicPrefix: DEFAULT_TOPIC_PREFIX,
+            androidAppDownloads: buildAndroidAppDownloadOptions()
         });
     } catch (error) {
         logger.error('Onboarding page error:', error);
@@ -421,16 +479,15 @@ router.post('/api/onboard/register', [
             model,
             bridge_type,
             apn,
-            mqtt_host,
-            mqtt_port,
-            mqtt_user,
-            mqtt_pass,
-            transport_mode,
             wifi_ssid,
             wifi_pass,
             capabilities
         } = req.body;
         const db = req.app.locals.db;
+        const dashboardMqttHost = selectedMqttHost();
+        const dashboardMqttPort = selectedMqttPort(process.env.MQTT_PORT);
+        const dashboardMqttUser = clean(process.env.MQTT_USER || '');
+        const dashboardMqttPass = String(process.env.MQTT_PASSWORD ?? '');
 
         await db.run(
             `INSERT INTO devices (id, name, type, status, created_at)
@@ -459,7 +516,7 @@ router.post('/api/onboard/register', [
                  capabilities = excluded.capabilities,
                  board = excluded.board,
                  updated_at = excluded.updated_at`,
-            [device_id, location || null, apn || null, mqtt_host || null, mqtt_user || null, mqtt_pass || null, wifi_ssid || null, wifi_pass || null, capJson, model || null]
+            [device_id, location || null, apn || null, dashboardMqttHost || null, dashboardMqttUser || null, dashboardMqttPass || null, wifi_ssid || null, wifi_pass || null, capJson, model || null]
         );
 
         if (req.session?.user?.id) {
@@ -479,11 +536,11 @@ router.post('/api/onboard/register', [
             name,
             model,
             bridge_type,
-            mqtt_host,
-            mqtt_port,
-            mqtt_user,
-            mqtt_pass,
-            transport_mode
+            mqtt_host: dashboardMqttHost,
+            mqtt_port: dashboardMqttPort,
+            mqtt_user: dashboardMqttUser,
+            mqtt_pass: dashboardMqttPass,
+            transport_mode: 'auto'
         };
         const provisioning = isAndroidBridge(bodyForProvisioning)
             ? await buildAndroidProvisioning(req, db, req.session?.user?.id || req.user?.id || null, bodyForProvisioning)

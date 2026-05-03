@@ -973,13 +973,13 @@
         if (typeof window.appConfirm === 'function') {
             approved = await window.appConfirm({
                 title: 'Clear Device Data',
-                message: 'This clears all onboarded devices, telemetry, queue-linked device data, and unregistered-device tracking. Users and general settings stay intact.',
+                message: 'This clears all added devices, telemetry, queue-linked device data, and unregistered-device tracking. Users and general settings stay intact.',
                 requiredText: 'CLEAR',
                 confirmText: 'Clear Device Data',
                 confirmClass: 'btn btn-warning'
             });
         } else {
-            approved = confirm('This clears all onboarded devices and device-linked data while keeping users and general settings.') &&
+            approved = confirm('This clears all added devices and device-linked data while keeping users and general settings.') &&
                 prompt('Type CLEAR to continue:') === 'CLEAR';
         }
         if (!approved) return;

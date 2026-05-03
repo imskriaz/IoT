@@ -221,12 +221,12 @@ final class BridgeConfig {
 
     String transportDisplayLabel() {
         if (usesAutoTransport()) {
-            return "Automatic fallback";
+            return "Smart dashboard link";
         }
         if (usesHttpTransport()) {
-            return "Dashboard HTTP";
+            return "Dashboard link";
         }
-        return "Realtime MQTT";
+        return "Dashboard link";
     }
 
     boolean hasProvisionedMqttConfig() {

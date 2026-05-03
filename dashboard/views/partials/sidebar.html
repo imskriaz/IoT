@@ -555,7 +555,7 @@ function renderSidebarDeviceSelectorOptions(sel, devices, resolvedActiveId) {
         }).join('');
     } else {
         setActiveDeviceContext('');
-        opts = '<option value="">No devices onboarded</option>';
+        opts = '<option value="">No devices added</option>';
     }
     opts += '<option value="__add_new__">+ Add New Device</option>';
     sel.innerHTML = opts;
@@ -622,7 +622,7 @@ function renderSidebarDeviceSelectorPlaceholder(sel, deviceId) {
                 }).join('');
             } else {
                 setActiveDeviceContext('');
-                opts = '<option value="">No devices onboarded</option>';
+                opts = '<option value="">No devices added</option>';
             }
             opts += '<option value="__add_new__">+ Add New Device</option>';
             sel.innerHTML = opts;
@@ -648,7 +648,7 @@ function renderSidebarDeviceSelectorPlaceholder(sel, deviceId) {
             if (!cachedDevices.length) {
                 cacheSidebarDeviceCatalog([]);
                 setActiveDeviceContext('');
-                sel.innerHTML = '<option value="">No devices onboarded</option>'
+                sel.innerHTML = '<option value="">No devices added</option>'
                               + '<option value="__add_new__">+ Add New Device</option>';
             }
             if (window.refreshSidebarDeviceNavigation) {

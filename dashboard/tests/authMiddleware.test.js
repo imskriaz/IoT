@@ -67,6 +67,48 @@ describe('auth middleware', () => {
         expect(res.body).toBeNull();
     });
 
+    test('requires login for the onboarding page', async () => {
+        const req = {
+            originalUrl: '/onboard',
+            path: '/onboard',
+            url: '/onboard',
+            baseUrl: '',
+            headers: {},
+            session: {},
+            app: { locals: { db: null } }
+        };
+        const res = createResponse();
+        const next = jest.fn();
+
+        await authMiddleware(req, res, next);
+
+        expect(next).not.toHaveBeenCalled();
+        expect(res.redirectTarget).toBe('/auth/login');
+    });
+
+    test('requires authentication for onboarding APIs', async () => {
+        const req = {
+            originalUrl: '/api/onboard/check-id/device-1',
+            path: '/api/onboard/check-id/device-1',
+            url: '/api/onboard/check-id/device-1',
+            baseUrl: '',
+            headers: {},
+            session: {},
+            app: { locals: { db: null } }
+        };
+        const res = createResponse();
+        const next = jest.fn();
+
+        await authMiddleware(req, res, next);
+
+        expect(next).not.toHaveBeenCalled();
+        expect(res.statusCode).toBe(401);
+        expect(res.body).toEqual({
+            success: false,
+            message: 'Authentication required'
+        });
+    });
+
     test('rejects inactive session users on API requests and clears the session', async () => {
         const destroy = jest.fn((callback) => callback());
         const req = {

@@ -63,8 +63,11 @@
 <body>
     <% const sidebarEnabled = (typeof showSidebar === 'undefined') ? true : showSidebar !== false; %>
     <% const statusChromeEnabled = (typeof showStatusChrome === 'undefined') ? true : showStatusChrome !== false; %>
-    <!-- Header -->
-    <%- include('../partials/header.html') %>
+    <% const headerEnabled = (typeof showHeader === 'undefined') ? true : showHeader !== false; %>
+    <% if (headerEnabled) { %>
+        <!-- Header -->
+        <%- include('../partials/header.html') %>
+    <% } %>
 
     <% if (sidebarEnabled) { %>
         <!-- Sidebar Overlay -->

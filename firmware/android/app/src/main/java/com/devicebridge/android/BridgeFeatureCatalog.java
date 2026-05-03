@@ -53,7 +53,7 @@ final class BridgeFeatureCatalog {
                 "Runtime and transport capabilities the Android bridge can surface now.",
                 items(
                         new FeatureItem("Realtime channel", "Live", "Dashboard status, command plane", "Real-time status and outbound commands use the live channel when available."),
-                        new FeatureItem("Dashboard HTTP fallback", "Live", "HTTP bridge adapter, queued pickup", "Phone can push status and poll the outgoing queue when realtime is unavailable."),
+                        new FeatureItem("Connectivity Uplink fallback", "Live", "HTTP bridge adapter, queued pickup", "Phone can push status and poll the outgoing queue when realtime is unavailable."),
                         new FeatureItem("Battery, Wi-Fi, operator, storage, queue depth", "Live", "Dashboard status panel and home metrics", "Operational health fields already fit the dashboard status model."),
                         new FeatureItem("Dual-SIM routing and signal detail", "Possible Next", "Internet, SMS routing, device detail", "Expose per-slot signal, operator, and preferred send path."),
                         new FeatureItem("Network self-heal and fallback rules", "Innovative", "Automation and device health", "App can choose the best dashboard path when one connection degrades.")

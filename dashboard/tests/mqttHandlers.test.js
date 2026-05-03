@@ -513,6 +513,7 @@ describe('MQTTHandlers SMS storage', () => {
                 '2026-04-03T10:00:00.000Z',
                 0,
                 'android-mqtt',
+                null,
                 null
             ]
         );
@@ -532,6 +533,50 @@ describe('MQTTHandlers SMS storage', () => {
             'test-device-1',
             expect.objectContaining({
                 title: 'New SMS received'
+            })
+        );
+    });
+
+    test('stores synced read SMS without unread bump or notification', async () => {
+        const smsCache = require('../services/smsCache');
+        const notificationService = require('../services/notificationService');
+        const pushNotificationService = require('../services/pushNotificationService');
+        const { mqttService, db, room } = buildSmsSubject();
+        smsCache.increment.mockClear();
+        notificationService.notifySms.mockClear();
+        pushNotificationService.notifyLinkedDevices.mockClear();
+
+        mqttService.emit('sms:incoming', 'test-device-1', {
+            type: 'sms_sync',
+            sync: true,
+            from: '+8801555000000',
+            message: 'historical message',
+            timestamp: '2026-04-03T09:00:00.000Z',
+            read: 1,
+            external_id: 'android-sms-42'
+        });
+
+        await flushAsync();
+
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT OR IGNORE INTO sms'),
+            expect.arrayContaining([
+                '2026-04-03T09:00:00.000Z',
+                1,
+                'android-mqtt-sync',
+                null,
+                'android-sms-42'
+            ])
+        );
+        expect(smsCache.increment).not.toHaveBeenCalled();
+        expect(notificationService.notifySms).not.toHaveBeenCalled();
+        expect(pushNotificationService.notifyLinkedDevices).not.toHaveBeenCalled();
+        expect(room.emit).toHaveBeenCalledWith(
+            'sms:received',
+            expect.objectContaining({
+                sync: true,
+                read: 1,
+                external_id: 'android-sms-42'
             })
         );
     });

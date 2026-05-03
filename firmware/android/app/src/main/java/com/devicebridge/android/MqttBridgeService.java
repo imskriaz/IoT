@@ -73,6 +73,7 @@ public class MqttBridgeService extends Service {
     static final String ACTION_PUBLISH_INCOMING = "com.devicebridge.android.PUBLISH_INCOMING";
     static final String ACTION_TEST_STATUS_PUSH = "com.devicebridge.android.TEST_STATUS_PUSH";
     static final String ACTION_CLEAR_QUEUE = "com.devicebridge.android.CLEAR_QUEUE";
+    static final String ACTION_CLEAR_TELEMETRY = "com.devicebridge.android.CLEAR_TELEMETRY";
     static final String EXTRA_FROM = "from";
     static final String EXTRA_TEXT = "text";
     static final String EXTRA_TIMESTAMP = "timestamp";
@@ -80,6 +81,10 @@ public class MqttBridgeService extends Service {
 
     private static final String TAG = "DeviceBridge";
     private static final String CHANNEL_ID = "device_bridge";
+    private static final String NOTIFICATION_TITLE = "MQTT";
+    private static final String NOTIFICATION_STATUS_ONLINE = "Online";
+    private static final String NOTIFICATION_STATUS_OFFLINE = "Offline";
+    private static final String NOTIFICATION_STATUS_CONNECTING = "Connecting";
     private static final int NOTIFICATION_ID = 7201;
     private static final int RECONNECT_DELAY_SECONDS = 15;
     private static final int STATUS_HEARTBEAT_INTERVAL_SECONDS = 45;
@@ -149,6 +154,10 @@ public class MqttBridgeService extends Service {
             pendingPublishes.clear();
             BridgeEventLog.append(this, "Local bridge queue cleared");
             persistRuntimeTelemetry();
+            return START_NOT_STICKY;
+        }
+        if (ACTION_CLEAR_TELEMETRY.equals(action)) {
+            clearRuntimeTelemetry();
             return START_NOT_STICKY;
         }
 
@@ -277,6 +286,19 @@ public class MqttBridgeService extends Service {
         }
     }
 
+    static void requestClearTelemetry(Context context) {
+        Intent intent = new Intent(context, MqttBridgeService.class).setAction(ACTION_CLEAR_TELEMETRY);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                context.startForegroundService(intent);
+            } else {
+                context.startService(intent);
+            }
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to clear bridge telemetry", error);
+        }
+    }
+
     static void requestSilentBulkSync(Context context) {
         if (context == null) {
             return;
@@ -378,7 +400,7 @@ public class MqttBridgeService extends Service {
             }
 
             logTelemetry("HTTP bridge connected to " + cfg.serverUrl);
-            updateBridgeNotification("Device Bridge online", "HTTP connected");
+            updateBridgeNotification(NOTIFICATION_STATUS_ONLINE);
             scheduleStatusHeartbeat();
             scheduleOutstandingPoll();
             updateRuntimeState("online", false, "HTTP bridge active via " + cfg.serverUrl);
@@ -396,7 +418,7 @@ public class MqttBridgeService extends Service {
                 publishStatus("online", true);
                 scheduleStatusHeartbeat();
                 logTelemetry("MQTT already connected");
-                updateBridgeNotification("Device Bridge online", "MQTT connected");
+                updateBridgeNotification(NOTIFICATION_STATUS_ONLINE);
                 updateRuntimeState("online", true, "Connected to " + cfg.brokerUri());
                 return;
             }
@@ -420,7 +442,7 @@ public class MqttBridgeService extends Service {
                     commandSubscriptionsReady = false;
                     cancelStatusHeartbeat();
                     logTelemetry("MQTT connection lost");
-                    updateBridgeNotification("Device Bridge reconnecting", "MQTT connection lost");
+                    updateBridgeNotification(NOTIFICATION_STATUS_CONNECTING);
                     updateRuntimeState("mqtt_connection_lost", false, detailForError(cause, "MQTT connection lost"));
                     scheduleReconnect();
                 }
@@ -459,7 +481,7 @@ public class MqttBridgeService extends Service {
                 BridgeHttpClient.Result result = httpHandler.connect(cfg, statusPayload("online"));
                 if (result.success) {
                     logTelemetry("HTTP fallback connected to " + cfg.serverUrl);
-                    updateBridgeNotification("Device Bridge online", "HTTP fallback connected");
+                    updateBridgeNotification(NOTIFICATION_STATUS_ONLINE);
                     scheduleStatusHeartbeat();
                     scheduleOutstandingPoll();
                     updateRuntimeState("online", false, "HTTP fallback active via " + cfg.serverUrl);
@@ -487,7 +509,7 @@ public class MqttBridgeService extends Service {
             logTelemetry("Subscribed to bridge command topics");
             publishStatus("online", true);
             scheduleStatusHeartbeat();
-            updateBridgeNotification("Device Bridge online", "MQTT connected");
+            updateBridgeNotification(NOTIFICATION_STATUS_ONLINE);
             updateRuntimeState("online", true, "Connected to " + cfg.brokerUri());
             flushPendingPublishes();
             syncSmsAndCallsToDashboardOnce(consumePendingPermissionBulkSync(cfg));
@@ -1221,6 +1243,7 @@ public class MqttBridgeService extends Service {
         if (cfg == null || message == null) return null;
         String address = objectString(message.get("address"));
         String body = objectString(message.get("body"));
+        String localId = objectString(message.get("id"));
         if (address.isEmpty() || body.isEmpty()) return null;
         boolean outgoing = Boolean.TRUE.equals(message.get("outgoing"));
         JSONObject json = new JSONObject();
@@ -1240,6 +1263,10 @@ public class MqttBridgeService extends Service {
             json.put("timestamp", objectLong(message.get("timestamp"), System.currentTimeMillis()));
             json.put("read", Boolean.TRUE.equals(message.get("read")) ? 1 : 0);
             json.put("source", "android-initial-sync");
+            if (!localId.isEmpty()) {
+                json.put("external_id", "android-sms-" + localId);
+                json.put("local_id", localId);
+            }
         } catch (JSONException ignored) {
         }
         return json;
@@ -2874,7 +2901,7 @@ public class MqttBridgeService extends Service {
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL_ID)
                 : new Notification.Builder(this);
-        Notification notification = buildBridgeNotification(builder, "Device Bridge active", "Bridge transport is running", contentIntent);
+        Notification notification = buildBridgeNotification(builder, NOTIFICATION_STATUS_CONNECTING, contentIntent);
 
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
@@ -2883,17 +2910,28 @@ public class MqttBridgeService extends Service {
         }
     }
 
-    private Notification buildBridgeNotification(Notification.Builder builder, String title, String text, PendingIntent contentIntent) {
+    private Notification buildBridgeNotification(Notification.Builder builder, String status, PendingIntent contentIntent) {
         return builder
                 .setSmallIcon(R.drawable.ic_stat_bridge)
-                .setContentTitle(title)
-                .setContentText(text)
+                .setContentTitle(NOTIFICATION_TITLE)
+                .setContentText(normalizeNotificationStatus(status))
                 .setContentIntent(contentIntent)
                 .setOngoing(true)
                 .build();
     }
 
-    private void updateBridgeNotification(String title, String text) {
+    private String normalizeNotificationStatus(String status) {
+        String value = status == null ? "" : status.trim().toLowerCase(Locale.US);
+        if (value.equals(NOTIFICATION_STATUS_OFFLINE.toLowerCase(Locale.US))) {
+            return NOTIFICATION_STATUS_OFFLINE;
+        }
+        if (value.equals(NOTIFICATION_STATUS_ONLINE.toLowerCase(Locale.US))) {
+            return NOTIFICATION_STATUS_ONLINE;
+        }
+        return NOTIFICATION_STATUS_CONNECTING;
+    }
+
+    private void updateBridgeNotification(String status) {
         Intent openIntent = new Intent(this, MainActivity.class);
         PendingIntent contentIntent = PendingIntent.getActivity(
                 this,
@@ -2906,7 +2944,7 @@ public class MqttBridgeService extends Service {
                 : new Notification.Builder(this);
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) {
-            manager.notify(NOTIFICATION_ID, buildBridgeNotification(builder, title, text, contentIntent));
+            manager.notify(NOTIFICATION_ID, buildBridgeNotification(builder, status, contentIntent));
         }
     }
 
@@ -2924,7 +2962,7 @@ public class MqttBridgeService extends Service {
         }
         reconnectFuture = executor.schedule(this::connectInternal, RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
         logTelemetry("Reconnect scheduled in " + RECONNECT_DELAY_SECONDS + "s");
-        updateBridgeNotification("Device Bridge reconnecting", "Retrying in " + RECONNECT_DELAY_SECONDS + "s");
+        updateBridgeNotification(NOTIFICATION_STATUS_CONNECTING);
         updateRuntimeState("reconnecting", false, currentTransportUsesHttp()
                 ? "Retrying HTTP in " + RECONNECT_DELAY_SECONDS + "s"
                 : "Retrying MQTT in " + RECONNECT_DELAY_SECONDS + "s");
@@ -3396,6 +3434,18 @@ public class MqttBridgeService extends Service {
                 lastIncomingSyncAtMs,
                 lastSendAcceptedAtMs
         );
+    }
+
+    private void clearRuntimeTelemetry() {
+        pendingPublishes.clear();
+        publishSuccessCount = 0L;
+        publishFailureCount = 0L;
+        lastStatusPushAtMs = 0L;
+        lastQueuePollAtMs = 0L;
+        lastMessageEventAtMs = 0L;
+        lastIncomingSyncAtMs = 0L;
+        lastSendAcceptedAtMs = 0L;
+        persistRuntimeTelemetry();
     }
 
     private void hydrateRuntimeTelemetry() {

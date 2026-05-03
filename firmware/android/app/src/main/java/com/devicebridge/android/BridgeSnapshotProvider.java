@@ -273,12 +273,10 @@ final class BridgeSnapshotProvider {
 
     private static String buildConnectionSummary(Activity activity, BridgeConfig config, BridgeRuntimeState runtime) {
         WifiSummary wifi = captureWifiSummary(activity);
-        String realtimeTarget = safe(config.brokerUri(), "not set");
-        String fallbackTarget = safe(config.serverUrl, "not set");
         return "device_id      = " + safe(config.deviceId, "not set")
                 + "\nconnection     = " + config.transportDisplayLabel()
-                + "\nrealtime       = " + realtimeTarget
-                + "\nfallback       = " + fallbackTarget
+                + "\nprimary_link   = " + (config.hasProvisionedMqttConfig() ? "ready" : "not provisioned")
+                + "\ndashboard_link = " + (config.hasHttpBridgeConfig() ? "ready" : "not provisioned")
                 + "\nservice_state  = " + safe(runtime.serviceState, "idle")
                 + "\nconnected      = " + runtime.isBridgeOnline(config)
                 + "\nbridge_enabled = " + config.bridgeEnabled

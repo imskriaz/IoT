@@ -229,7 +229,7 @@ describe('auth screen coverage', () => {
     test('layout render omits sidebar and mobile toggle when showSidebar is false', async () => {
         const layoutPath = path.join(__dirname, '..', 'views', 'layouts', 'main.html');
         const html = await ejs.renderFile(layoutPath, {
-            title: 'Device Onboarding',
+            title: 'Add Device',
             user: null,
             csrfToken: 'csrf-token',
             assetVersion: 'test',
@@ -251,7 +251,7 @@ describe('auth screen coverage', () => {
     test('layout render omits dashboard status chrome when showStatusChrome is false', async () => {
         const layoutPath = path.join(__dirname, '..', 'views', 'layouts', 'main.html');
         const html = await ejs.renderFile(layoutPath, {
-            title: 'Device Onboarding',
+            title: 'Add Device',
             user: null,
             csrfToken: 'csrf-token',
             assetVersion: 'test',

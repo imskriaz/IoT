@@ -83,6 +83,25 @@ async function withRunningServer(app, callback) {
     }
 }
 
+async function withEnv(values, callback) {
+    const previous = {};
+    Object.keys(values).forEach((key) => {
+        previous[key] = process.env[key];
+        process.env[key] = values[key];
+    });
+    try {
+        return await callback();
+    } finally {
+        Object.keys(values).forEach((key) => {
+            if (previous[key] === undefined) {
+                delete process.env[key];
+            } else {
+                process.env[key] = previous[key];
+            }
+        });
+    }
+}
+
 describe('onboarding routes', () => {
     afterEach(() => {
         jest.restoreAllMocks();
@@ -94,20 +113,35 @@ describe('onboarding routes', () => {
         expect(html).toContain('type="hidden" id="fModel"');
         expect(html).not.toContain('<label class="form-label">Board Model</label>');
         expect(html).toContain('data-onboard-scope="esp32"');
-        expect(html).toContain('data-onboard-scope="mqtt"');
+        expect(html).not.toContain('data-onboard-scope="mqtt"');
+        expect(html).not.toContain('id="fMqttHost"');
+        expect(html).not.toContain('id="fMqttUser"');
+        expect(html).not.toContain('id="fMqttPass"');
         expect(html).toContain('data-onboard-scope="android-transport"');
         expect(html).toContain('function applyStep3FieldVisibility()');
         expect(html).toContain("if (scope === 'esp32') show = !bridgeDevice;");
-        expect(html).toContain("if (scope === 'mqtt') show = wizardState.deviceType === 'esp32-s3';");
+        expect(html).not.toContain("if (scope === 'mqtt')");
         expect(html).toContain("if (scope === 'android-transport') show = wizardState.deviceType === 'android';");
-        expect(html).toContain('The secure setup code carries both realtime and fallback connection details.');
-        expect(html).toContain('Register &amp; Generate App Setup');
+        expect(html).toContain('Install the app, register this bridge, then scan the generated QR in the phone app.');
+        expect(html).toContain('function registerAndroidBridge()');
+        expect(html).toContain('const ANDROID_STEP_META');
+        expect(html).toContain('const ANDROID_APP_DOWNLOADS');
+        expect(html).toContain('function androidAppDownloadMenu');
+        expect(html).toContain('Download app');
+        expect(html).toContain('Other APK variants');
+        expect(html).toContain('<tr><td class="text-muted">Device ID</td><td><code>${escHtml(summary.device_id || \'\')}</code></td></tr>');
+        expect(html).not.toContain('<tr><td class="text-muted">Connection</td>');
+        expect(html).not.toContain('<tr><td class="text-muted">Server URL</td>');
+        expect(html).not.toContain('<tr><td class="text-muted">Topic Prefix</td>');
+        expect(html).not.toContain('API Key Name</td>');
+        expect(html).not.toContain('Register &amp; Generate App Setup');
         expect(html).not.toContain('httpSMS');
         expect(html).not.toContain('typeHttpSms');
         expect(html).not.toContain('Dashboard &gt; API Keys');
     });
 
     test('renders the onboarding page with MQTT defaults', async () => {
+        jest.spyOn(fs, 'existsSync').mockImplementation((candidatePath) => String(candidatePath || '').includes(`${path.sep}release${path.sep}`));
         const router = require('../routes/onboarding');
         const app = buildRenderedApp(router);
 
@@ -115,13 +149,34 @@ describe('onboarding routes', () => {
 
         expect(res.status).toBe(200);
         expect(res.body.view).toBe('pages/onboarding');
-        expect(res.body.locals.title).toBe('Device Onboarding');
+        expect(res.body.locals.title).toBe('Add Device');
+        expect(res.body.locals.showHeader).toBe(false);
         expect(res.body.locals.showSidebar).toBe(false);
         expect(res.body.locals.showStatusChrome).toBe(false);
         expect(res.body.locals.mqttPort).toBe(1883);
         expect(res.body.locals.setupApExampleLabel).toBe('cfg-XXXX');
         expect(res.body.locals.bleNamePrefixes).toContain('Device-Setup');
         expect(res.body.locals.bleNamePrefixes).not.toContain('IoT-Setup');
+        expect(res.body.locals.androidAppDownloads).toEqual([
+            expect.objectContaining({
+                abi: 'arm64-v8a',
+                available: true,
+                buildType: 'release',
+                url: '/api/onboard/android-app/download?abi=arm64-v8a'
+            }),
+            expect.objectContaining({
+                abi: 'armeabi-v7a',
+                available: true,
+                buildType: 'release',
+                url: '/api/onboard/android-app/download?abi=armeabi-v7a'
+            }),
+            expect.objectContaining({
+                abi: 'x86_64',
+                available: true,
+                buildType: 'release',
+                url: '/api/onboard/android-app/download?abi=x86_64'
+            })
+        ]);
     });
 
     test('returns the setup AP timeout message with cfg wording', async () => {
@@ -133,7 +188,12 @@ describe('onboarding routes', () => {
 
         const router = require('../routes/onboarding');
         const app = buildApiApp(router);
-        await withRunningServer(app, async (baseUrl) => {
+        await withEnv({
+            MQTT_HOST: 'dashboard-broker.local',
+            MQTT_PORT: '1884',
+            MQTT_USER: 'dashboard-user',
+            MQTT_PASSWORD: 'dashboard-pass'
+        }, () => withRunningServer(app, async (baseUrl) => {
             const res = await fetch(`${baseUrl}/api/onboard/wifi-send`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -145,7 +205,36 @@ describe('onboarding routes', () => {
             expect(data.success).toBe(false);
             expect(data.message).toContain('cfg-XXXX');
             expect(data.message).not.toContain('IoT-Setup');
+        }));
+    });
+
+    test('returns a clear error when Android APK is not built', async () => {
+        jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+        const router = require('../routes/onboarding');
+        const app = buildApiApp(router);
+
+        const res = await request(app).get('/api/onboard/android-app/download?abi=arm64-v8a');
+
+        expect(res.status).toBe(404);
+        expect(res.body).toMatchObject({
+            success: false,
+            message: expect.stringContaining('Android app APK')
         });
+    });
+
+    test('falls back to debug Android APK when release is missing', async () => {
+        const existsSpy = jest.spyOn(fs, 'existsSync').mockImplementation((candidatePath) => {
+            const value = String(candidatePath || '');
+            return value.includes('\\debug\\') || value.includes('/debug/');
+        });
+        const router = require('../routes/onboarding');
+        const app = buildApiApp(router);
+
+        const res = await request(app).get('/api/onboard/android-app/download?abi=arm64-v8a');
+
+        expect(existsSpy).toHaveBeenCalled();
+        expect(res.status).toBe(200);
+        expect(res.headers['content-disposition']).toContain('device-bridge-arm64-v8a-debug.apk');
     });
 
     test('proxies setup AP config through current firmware API and schedules reboot', async () => {
@@ -178,7 +267,12 @@ describe('onboarding routes', () => {
 
         const router = require('../routes/onboarding');
         const app = buildApiApp(router);
-        await withRunningServer(app, async (baseUrl) => {
+        await withEnv({
+            MQTT_HOST: 'dashboard-broker.local',
+            MQTT_PORT: '1884',
+            MQTT_USER: 'dashboard-user',
+            MQTT_PASSWORD: 'dashboard-pass'
+        }, () => withRunningServer(app, async (baseUrl) => {
             const res = await fetch(`${baseUrl}/api/onboard/wifi-send`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -200,12 +294,12 @@ describe('onboarding routes', () => {
                 device_id_override: 'idf-device-1',
                 wifi_ssid: '',
                 wifi_password: '',
-                mqtt_uri: 'mqtt://broker.example.com:1883',
-                mqtt_username: '',
-                mqtt_password: ''
+                mqtt_uri: 'mqtt://dashboard-broker.local:1884',
+                mqtt_username: 'dashboard-user',
+                mqtt_password: 'dashboard-pass'
             });
             expect(requests[1].options.path).toBe('/api/reboot');
-        });
+        }));
     });
 
     test('returns Android provisioning token and QR data after register', async () => {
@@ -213,7 +307,12 @@ describe('onboarding routes', () => {
         const router = require('../routes/onboarding');
         const app = buildApiApp(router, db);
 
-        const res = await request(app)
+        const res = await withEnv({
+            MQTT_HOST: 'dashboard-broker.local',
+            MQTT_PORT: '1884',
+            MQTT_USER: 'dashboard-user',
+            MQTT_PASSWORD: 'dashboard-pass'
+        }, () => request(app)
             .post('/api/onboard/register')
             .send({
                 device_id: 'android-test-01',
@@ -224,7 +323,7 @@ describe('onboarding routes', () => {
                 mqtt_port: 1883,
                 mqtt_user: 'device',
                 mqtt_pass: '153520'
-            });
+            }));
 
         expect(res.status).toBe(200);
         expect(res.body.success).toBe(true);

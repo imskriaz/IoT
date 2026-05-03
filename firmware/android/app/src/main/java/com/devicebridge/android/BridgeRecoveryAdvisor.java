@@ -45,7 +45,7 @@ final class BridgeRecoveryAdvisor {
         if (config.usesHttpTransport() && !config.hasHttpBridgeConfig()) {
             actions.add(new ActionItem(
                     "Complete dashboard fallback setup",
-                    "Dashboard HTTP is selected but the bridge does not have full server/API/device configuration yet.",
+                    "Connectivity Uplink is selected but the bridge does not have full server/API/device configuration yet.",
                     "settings"
             ));
         }

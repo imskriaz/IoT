@@ -256,6 +256,20 @@ function isSyncPayload(data = {}) {
     return data.sync === true || cleanText(data.sync).toLowerCase() === 'true';
 }
 
+function boolFromPayload(value, fallback = false) {
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0) return false;
+    const text = cleanText(value).toLowerCase();
+    if (['true', '1', 'yes', 'read'].includes(text)) return true;
+    if (['false', '0', 'no', 'unread'].includes(text)) return false;
+    return fallback;
+}
+
+function smsExternalId(data = {}) {
+    const raw = cleanText(data.external_id || data.externalId || data.message_id || data.messageId || data.local_id || data.localId);
+    return raw || null;
+}
+
 function normalizeEventTimestamp(value) {
     if (typeof value === 'number' && Number.isFinite(value)) {
         const millis = value > 100000000000 ? value : value * 1000;
@@ -1372,9 +1386,12 @@ class MQTTHandlers {
                     const decodedFrom = decodeUcs2Hex(fromNumber);
                     const decodedTo = decodeUcs2Hex(toNumber);
                     const simScope = extractSimScope(data);
+                    const syncPayload = isSyncPayload(data);
+                    const read = isOutgoing ? 1 : (boolFromPayload(data.read ?? data.is_read, false) ? 1 : 0);
+                    const externalId = smsExternalId(data);
                     const result = await db.run(`
-                        INSERT OR IGNORE INTO sms (from_number, to_number, message, type, status, device_id, timestamp, read, source, sim_slot)
-                        VALUES (?, ?, ?, ?, ?, COALESCE(?, ''), ?, ?, ?, ?)
+                        INSERT OR IGNORE INTO sms (from_number, to_number, message, type, status, device_id, timestamp, read, source, sim_slot, external_id)
+                        VALUES (?, ?, ?, ?, ?, COALESCE(?, ''), ?, ?, ?, ?, ?)
                     `, [
                         isOutgoing ? null : decodedFrom,
                         isOutgoing ? decodedTo : (decodedTo || null),
@@ -1383,9 +1400,10 @@ class MQTTHandlers {
                         isOutgoing ? 'sent' : 'received',
                         deviceId,
                         smsTimestamp,
-                        isOutgoing ? 1 : 0,
-                        data.sync ? 'android-mqtt-sync' : 'android-mqtt',
-                        simScope.simSlot
+                        read,
+                        syncPayload ? 'android-mqtt-sync' : 'android-mqtt',
+                        simScope.simSlot,
+                        externalId
                     ]);
 
                     logger.info(`✅ Saved incoming SMS from ${decodedFrom} (ID: ${result.lastID})`);
@@ -1413,7 +1431,7 @@ class MQTTHandlers {
                     });
 
                     // Update in-memory unread count for this device.
-                    if (!isOutgoing) smsCache.increment(deviceId);
+                    if (!isOutgoing && !read) smsCache.increment(deviceId);
 
                     // Seed cache from DB if not yet initialised.
                     if (smsCache.get(deviceId) === null) {
@@ -1427,7 +1445,7 @@ class MQTTHandlers {
                     this.toDevice(deviceId, 'sms:received', {
                         deviceId,
                         conversationId: Number(conversationId || 0) || null,
-                        sync: Boolean(data.sync),
+                        sync: syncPayload,
                         from: isOutgoing ? null : decodedFrom,
                         from_number: isOutgoing ? null : decodedFrom,
                         to_number: isOutgoing ? decodedTo : (decodedTo || null),
@@ -1437,6 +1455,8 @@ class MQTTHandlers {
                         id: result.lastID,
                         type: isOutgoing ? 'outgoing' : 'incoming',
                         status: isOutgoing ? 'sent' : 'received',
+                        read,
+                        external_id: externalId,
                         unreadCount: smsCache.get(deviceId),
                         timestamp: smsTimestamp
                     });

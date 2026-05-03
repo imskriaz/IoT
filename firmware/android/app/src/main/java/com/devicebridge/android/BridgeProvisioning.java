@@ -82,7 +82,7 @@ final class BridgeProvisioning {
             throw new IllegalArgumentException("Setup code is missing device ID.");
         }
         if ("mqtt".equals(nextTransportMode) && !hasMqtt) {
-            throw new IllegalArgumentException("Setup code is missing MQTT host.");
+            throw new IllegalArgumentException("Setup code is missing primary connection details.");
         }
         if ("http".equals(nextTransportMode)) {
             if (nextServerUrl.isEmpty()) {
@@ -138,15 +138,7 @@ final class BridgeProvisioning {
     }
 
     static String buildProvisioningSummary(BridgeConfig config) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("Connection: Automatic fallback")
-                .append("\nDevice ID: ").append(nonEmpty(config.deviceId))
-                .append("\nTopic Prefix: ").append(nonEmpty(config.topicPrefix))
-                .append("\nServer URL: ").append(nonEmpty(config.serverUrl))
-                .append("\nAPI Key: ").append(config.apiKey.isEmpty() ? "not provided" : "configured")
-                .append("\nRealtime channel: ").append(config.hasProvisionedMqttConfig() ? "ready" : "not provisioned")
-                .append("\nHTTP fallback: ").append(config.hasHttpBridgeConfig() ? "ready" : "not provisioned");
-        return builder.toString();
+        return "Device ID: " + nonEmpty(config.deviceId);
     }
 
     private static String decodeProvisioningText(String raw) {

@@ -30,8 +30,8 @@ final class BridgeDiagnostics {
                 .append("\nService state: ").append(runtime.serviceState)
                 .append("\nConnection mode: ").append(config.transportDisplayLabel())
                 .append("\nTransport connected: ").append(runtime.isTransportConnected(config))
-                .append("\nRealtime channel: ").append(config.hasProvisionedMqttConfig() ? "ready" : "not provisioned")
-                .append("\nHTTP fallback: ").append(config.hasHttpBridgeConfig() ? "ready" : "not provisioned")
+                .append("\nPrimary link: ").append(config.hasProvisionedMqttConfig() ? "ready" : "not provisioned")
+                .append("\nDashboard link: ").append(config.hasHttpBridgeConfig() ? "ready" : "not provisioned")
                 .append("\nServer URL: ").append(config.serverUrl.isEmpty() ? "not set" : config.serverUrl)
                 .append("\nDevice ID: ").append(config.deviceId.isEmpty() ? "not set" : config.deviceId)
                 .append("\nTopic prefix: ").append(config.topicPrefix.isEmpty() ? "device" : config.topicPrefix)
@@ -211,10 +211,10 @@ final class BridgeDiagnostics {
             findings.add("Camera access is missing. QR onboarding and camera-side features are unavailable.");
         }
         if (config.usesHttpTransport() && !config.hasHttpBridgeConfig()) {
-            findings.add("Dashboard HTTP connection is selected but server URL, API key, or device ID is incomplete.");
+            findings.add("Dashboard connection is incomplete. Import a setup code from the dashboard.");
         }
         if (!config.usesHttpTransport() && !config.hasProvisionedMqttConfig() && !config.usesAutoTransport()) {
-            findings.add("Realtime connection is selected but broker routing details are incomplete.");
+            findings.add("Dashboard connection is incomplete. Import a setup code from the dashboard.");
         }
         if (config.usesAutoTransport() && !config.hasBridgeConnectionConfig()) {
             findings.add("Dashboard connection details are incomplete. Import a setup code from the dashboard.");
@@ -226,7 +226,7 @@ final class BridgeDiagnostics {
             findings.add("Local publish queue is building up (" + runtime.queueDepth + "). Transport may be degraded.");
         }
         if (runtime.publishFailureCount > runtime.publishSuccessCount && runtime.publishFailureCount >= 3) {
-            findings.add("Publish failures are dominating successful sends. Inspect dashboard, broker, or network reachability.");
+            findings.add("Publish failures are dominating successful sends. Inspect dashboard settings or network reachability.");
         }
         if (storage.freeBytes >= 0 && storage.freeBytes < 512L * 1024L * 1024L) {
             findings.add("Free storage is below 512 MB. Queueing, captures, and logs may become unstable.");

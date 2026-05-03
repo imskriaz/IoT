@@ -4,7 +4,7 @@
     <div class="d-flex gap-2 align-items-center" id="devicesHeaderActions">
         <span class="badge bg-secondary" id="deviceCount">Loading...</span>
         <a href="/onboard" class="btn btn-sm btn-primary">
-            <i class="bi bi-plus-circle me-1"></i>Onboard Device
+            <i class="bi bi-plus-circle me-1"></i>Add Device
         </a>
         <button class="btn btn-sm btn-outline-secondary" onclick="loadDevices()">
             <i class="bi bi-arrow-repeat"></i>
@@ -507,7 +507,7 @@ function renderDevices(devices) {
     document.getElementById('deviceCount').textContent = total + ' device' + (total !== 1 ? 's' : '');
 
     if (!devices.length) {
-        const msg = allDevices.length ? 'No devices match your search.' : 'No devices registered yet. <a href="/onboard">Onboard your first device</a>.';
+        const msg = allDevices.length ? 'No devices match your search.' : 'No devices registered yet. <a href="/onboard">Add your first device</a>.';
         tbody.innerHTML = `<tr><td colspan="${IS_ADMIN ? 9 : 8}" class="text-center py-4 text-muted">${msg}</td></tr>`;
         return;
     }
@@ -820,7 +820,7 @@ renderDevices = function renderDevicesOverride(devices) {
     document.getElementById('deviceCount').textContent = total + ' device' + (total !== 1 ? 's' : '');
 
     if (!devices.length) {
-        const msg = allDevices.length ? 'No devices match your search.' : 'No devices registered yet. <a href="/onboard">Onboard your first device</a>.';
+        const msg = allDevices.length ? 'No devices match your search.' : 'No devices registered yet. <a href="/onboard">Add your first device</a>.';
         tbody.innerHTML = `<tr><td colspan="${IS_ADMIN ? 9 : 8}" class="text-center py-4 text-muted">${msg}</td></tr>`;
         return;
     }
@@ -1116,7 +1116,7 @@ function switchTab(tab) {
     document.getElementById('tab-devices').classList.toggle('active', tab === 'devices');
     document.getElementById('tab-unregistered')?.classList.toggle('active', tab === 'unregistered');
     document.getElementById('tab-groups').classList.toggle('active',  tab === 'groups');
-    // Show/hide the Onboard button only on the Devices tab
+    // Show/hide the Add Device button only on the Devices tab
     document.getElementById('devicesHeaderActions').style.display = (tab === 'devices' || tab === 'unregistered') ? '' : 'none';
     if (tab === 'unregistered' && IS_SUPERADMIN) {
         loadUnregisteredDevices();

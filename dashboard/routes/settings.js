@@ -1458,7 +1458,7 @@ router.post('/clear-device-data', adminMiddleware, async (req, res) => {
 
         res.json({
             success: true,
-            message: 'All device records and device-linked data cleared. Dashboard is ready for fresh onboarding.'
+            message: 'All device records and device-linked data cleared. Dashboard is ready to add devices.'
         });
     } catch (error) {
         logger.error('Clear device data error:', error);
