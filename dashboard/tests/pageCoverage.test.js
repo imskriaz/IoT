@@ -67,6 +67,7 @@ describe('dashboard screen coverage', () => {
         ['/location', 'pages/location', 'GPS Location'],
         ['/gpio', 'pages/gpio', 'GPIO'],
         ['/devices/queue', 'pages/queue-manager', 'Queue Manager'],
+        ['/esp32-console', 'pages/esp32-console', 'ESP32 MQTT Console'],
         ['/devices/settings', 'pages/device-settings', 'Device Settings'],
         ['/devices', 'pages/devices', 'Device Manager'],
         ['/devices/about', 'pages/device-about', 'Device About'],

@@ -37,6 +37,7 @@ const DEVICE_REQUIRED_PAGE_PATHS = new Set([
     '/devices/queue-manager',
     '/devices/capabilities',
     '/automation',
+    '/esp32-console',
     '/device-about',
     '/devices/about',
     '/test',
@@ -1128,6 +1129,20 @@ router.get('/automation', async (req, res) => {
     } catch (error) {
         logger.error('Automation page error:', error);
         req.flash('error', 'Failed to load automation page');
+        res.redirect('/');
+    }
+});
+
+router.get('/esp32-console', async (req, res) => {
+    try {
+        res.render('pages/esp32-console', {
+            title: 'ESP32 MQTT Console',
+            user: getViewUser(req),
+            pageScript: 'esp32-console.js'
+        });
+    } catch (error) {
+        logger.error('ESP32 MQTT Console page error:', error);
+        req.flash('error', 'Failed to load ESP32 MQTT Console');
         res.redirect('/');
     }
 });

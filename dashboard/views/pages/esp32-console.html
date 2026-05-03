@@ -1,0 +1,236 @@
+<div class="container-fluid px-0 esp32-console-page">
+    <div class="d-flex flex-column flex-xl-row justify-content-between align-items-start align-items-xl-center mb-3 gap-2">
+        <div>
+            <h2 class="mb-0 fs-4">
+                <i class="bi bi-terminal me-2 text-primary"></i>ESP32 MQTT Console
+            </h2>
+            <small class="text-muted">Serial-monitor style command testing through the live MQTT runtime path</small>
+        </div>
+        <div class="d-flex flex-wrap gap-2 align-items-center">
+            <span class="badge text-bg-light border" id="esp32ConsoleDeviceBadge">Device: --</span>
+            <span class="badge text-bg-secondary" id="esp32ConsoleMqttBadge">MQTT: checking</span>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="esp32ConsoleClearBtn" title="Clear console">
+                <i class="bi bi-eraser"></i>
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-primary" id="esp32ConsoleExportBtn" title="Export console log">
+                <i class="bi bi-download"></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-12 col-xl-8">
+            <section class="console-shell mb-3">
+                <div class="console-toolbar">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="console-dot bg-danger"></span>
+                        <span class="console-dot bg-warning"></span>
+                        <span class="console-dot bg-success"></span>
+                        <span class="small text-white-50 ms-1">live mqtt session</span>
+                    </div>
+                    <div class="small text-white-50" id="esp32ConsoleLastRun">idle</div>
+                </div>
+                <div class="console-output" id="esp32ConsoleOutput" aria-live="polite">
+                    <div class="console-line text-success">
+                        <span class="text-secondary">[system]</span> Console ready. Commands publish to device/&lt;id&gt;/command/&lt;command&gt; over MQTT.
+                    </div>
+                </div>
+            </section>
+
+            <section class="command-panel">
+                <div class="row g-2 align-items-end">
+                    <div class="col-12 col-md-5">
+                        <label class="form-label small mb-1" for="esp32CommandInput">Command</label>
+                        <input type="text" class="form-control form-control-sm" id="esp32CommandInput" value="get-status" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div class="col-6 col-md-2">
+                        <label class="form-label small mb-1" for="esp32TimeoutInput">Timeout ms</label>
+                        <input type="number" class="form-control form-control-sm" id="esp32TimeoutInput" value="30000" min="1000" max="120000" step="1000">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label small mb-1" for="esp32WaitSelect">Response</label>
+                        <select class="form-select form-select-sm" id="esp32WaitSelect">
+                            <option value="true" selected>Wait for response</option>
+                            <option value="false">Publish only</option>
+                        </select>
+                    </div>
+                    <div class="col-12 col-md-2 d-grid">
+                        <button type="button" class="btn btn-primary btn-sm" id="esp32SendCommandBtn">
+                            <i class="bi bi-send"></i> Send
+                        </button>
+                    </div>
+                    <div class="col-12">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <label class="form-label small mb-0" for="esp32PayloadInput">Payload JSON</label>
+                            <button type="button" class="btn btn-sm btn-link py-0 px-1" id="esp32FormatPayloadBtn">Format</button>
+                        </div>
+                        <textarea class="form-control console-payload" id="esp32PayloadInput" rows="7" spellcheck="false">{}</textarea>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mt-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h3 class="fs-6 mb-0">Command Presets</h3>
+                    <span class="small text-muted">Live only, no durable queue</span>
+                </div>
+                <div class="preset-grid" id="esp32PresetGrid"></div>
+            </section>
+        </div>
+
+        <div class="col-12 col-xl-4">
+            <section class="docs-panel mb-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h3 class="fs-6 mb-0">Runtime Contract</h3>
+                    <span class="badge text-bg-primary">MQTT</span>
+                </div>
+                <dl class="small mb-0 docs-list">
+                    <dt>Topic</dt>
+                    <dd><code>device/&lt;deviceId&gt;/command/&lt;command&gt;</code></dd>
+                    <dt>Payload</dt>
+                    <dd>JSON object plus firmware fields such as <code>command</code>, <code>action_id</code>, <code>timeout</code>, and <code>source</code>.</dd>
+                    <dt>Rule</dt>
+                    <dd>Use this console to prove the MQTT runtime command before keeping new firmware behavior.</dd>
+                    <dt>Raw AT</dt>
+                    <dd>Raw modem AT passthrough requires explicit firmware support, for example a future <code>modem-at</code> action.</dd>
+                </dl>
+            </section>
+
+            <section class="docs-panel mb-3">
+                <h3 class="fs-6 mb-2">Vendor Quick Notes</h3>
+                <div id="esp32VendorNotes"></div>
+            </section>
+
+            <section class="docs-panel">
+                <h3 class="fs-6 mb-2">Workflow Gate</h3>
+                <ul class="small mb-0 ps-3">
+                    <li>Check vendor docs before assuming modem, board, or AT behavior.</li>
+                    <li>Validate a new AT sequence from terminal or serial first.</li>
+                    <li>Expose it in firmware only after response, timing, and failure behavior are clear.</li>
+                    <li>Then test the firmware action here over MQTT.</li>
+                </ul>
+            </section>
+        </div>
+    </div>
+</div>
+
+<style>
+.esp32-console-page .console-shell,
+.esp32-console-page .command-panel,
+.esp32-console-page .docs-panel {
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    background: var(--bs-body-bg);
+}
+
+.esp32-console-page .console-shell {
+    overflow: hidden;
+}
+
+.esp32-console-page .console-toolbar {
+    min-height: 34px;
+    padding: 0.45rem 0.65rem;
+    background: #20242a;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.esp32-console-page .console-dot {
+    width: 0.62rem;
+    height: 0.62rem;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.esp32-console-page .console-output {
+    min-height: 360px;
+    max-height: 52vh;
+    overflow: auto;
+    background: #111418;
+    color: #e6edf3;
+    font-family: Consolas, "Liberation Mono", monospace;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    padding: 0.65rem;
+}
+
+.esp32-console-page .console-line {
+    white-space: pre-wrap;
+    word-break: break-word;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    padding: 0.18rem 0;
+}
+
+.esp32-console-page .command-panel,
+.esp32-console-page .docs-panel {
+    padding: 0.85rem;
+}
+
+.esp32-console-page .console-payload {
+    font-family: Consolas, "Liberation Mono", monospace;
+    font-size: 0.85rem;
+    resize: vertical;
+}
+
+.esp32-console-page .preset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 0.5rem;
+}
+
+.esp32-console-page .preset-btn {
+    min-height: 58px;
+    text-align: left;
+    border-radius: 8px;
+}
+
+.esp32-console-page .preset-btn .small {
+    display: block;
+    line-height: 1.25;
+}
+
+.esp32-console-page .docs-list dd {
+    margin-bottom: 0.65rem;
+}
+
+.esp32-console-page .vendor-note {
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+    padding-top: 0.65rem;
+    margin-top: 0.65rem;
+}
+
+.esp32-console-page .vendor-note:first-child {
+    border-top: 0;
+    padding-top: 0;
+    margin-top: 0;
+}
+
+.esp32-console-page .command-chip {
+    display: inline-block;
+    margin: 0.12rem 0.15rem 0.12rem 0;
+    padding: 0.12rem 0.32rem;
+    border-radius: 5px;
+    background: rgba(13, 110, 253, 0.08);
+    color: var(--bs-body-color);
+    font-family: Consolas, "Liberation Mono", monospace;
+    font-size: 0.76rem;
+}
+
+[data-bs-theme="dark"] .esp32-console-page .console-shell,
+[data-bs-theme="dark"] .esp32-console-page .command-panel,
+[data-bs-theme="dark"] .esp32-console-page .docs-panel {
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+[data-bs-theme="dark"] .esp32-console-page .vendor-note {
+    border-top-color: rgba(255, 255, 255, 0.12);
+}
+
+@media (max-width: 767.98px) {
+    .esp32-console-page .console-output {
+        min-height: 260px;
+        max-height: 42vh;
+    }
+}
+</style>
