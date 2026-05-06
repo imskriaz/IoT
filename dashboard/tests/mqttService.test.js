@@ -1871,4 +1871,56 @@ describe('mqttService durable SMS queue', () => {
             ['sent', null, 'send-sms_delivered', 99]
         );
     });
+
+    test('stale SMS cleanup treats multipart part queue rows as active work', async () => {
+        const db = {
+            all: jest.fn().mockResolvedValue([]),
+            run: jest.fn().mockResolvedValue({ changes: 0 })
+        };
+        global.app.locals.db = db;
+
+        await svc._markStaleSmsWithoutQueue(120000);
+
+        expect(db.all).toHaveBeenCalledWith(
+            expect.stringContaining("q.message_id LIKE s.external_id || '_p%'"),
+            expect.any(Array)
+        );
+        expect(db.all).toHaveBeenCalledWith(
+            expect.stringContaining("s.external_id LIKE 'sms_%'"),
+            expect.any(Array)
+        );
+        expect(db.run).not.toHaveBeenCalled();
+    });
+
+    test('SMS delivery queue lookup normalizes recipient numbers before fallback matching', async () => {
+        const originalPhoneCountryCode = process.env.PHONE_COUNTRY_CODE;
+        const db = {
+            get: jest.fn().mockResolvedValue(null),
+            all: jest.fn().mockResolvedValue([{
+                id: 'queue-phone-normalized',
+                device_id: 'device-1',
+                command: 'send-sms',
+                message_id: 'send-sms_phone',
+                status: 'waiting_response',
+                payload: JSON.stringify({ to: '+8801555123456', smsId: 45 })
+            }])
+        };
+        global.app.locals.db = db;
+        let row;
+        try {
+            process.env.PHONE_COUNTRY_CODE = '880';
+            row = await svc._findPersistentSmsQueueRow('device-1', {
+                to: '01555123456',
+                status: 'delivered'
+            });
+        } finally {
+            if (originalPhoneCountryCode === undefined) delete process.env.PHONE_COUNTRY_CODE;
+            else process.env.PHONE_COUNTRY_CODE = originalPhoneCountryCode;
+        }
+
+        expect(row).toEqual(expect.objectContaining({
+            id: 'queue-phone-normalized',
+            message_id: 'send-sms_phone'
+        }));
+    });
 });

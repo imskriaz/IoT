@@ -420,6 +420,69 @@ static unified_action_response_t api_bridge_execute_wifi_reconnect(
     );
 }
 
+static unified_action_response_t api_bridge_execute_wifi_connect(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    wifi_mgr_status_t wifi = {0};
+    char escaped_ssid[CONFIG_MGR_WIFI_SSID_LEN * 2U] = {0};
+    esp_err_t err = ESP_OK;
+    const bool password_set = request && request->password[0] != '\0';
+
+    if (!request || request->ssid[0] == '\0' || !payload || payload_len == 0U) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_INVALID_ARG,
+            UNIFIED_FEATURE_REASON_NONE,
+            "invalid_wifi_connect_request"
+        );
+    }
+
+    err = wifi_mgr_request_runtime_connect(request->ssid, request->password);
+    if (err != ESP_OK) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            err,
+            UNIFIED_FEATURE_REASON_NONE,
+            "wifi_connect_failed"
+        );
+    }
+
+    wifi_mgr_get_status(&wifi);
+    api_bridge_escape_json(wifi.ssid[0] != '\0' ? wifi.ssid : request->ssid, escaped_ssid, sizeof(escaped_ssid));
+    if (snprintf(
+            payload,
+            payload_len,
+            "{\"ssid\":\"%s\",\"password_set\":%s,\"configured\":%s,\"started\":%s,\"connected\":%s}",
+            escaped_ssid,
+            password_set ? "true" : "false",
+            wifi.configured ? "true" : "false",
+            wifi.started ? "true" : "false",
+            wifi.connected ? "true" : "false"
+        ) >= (int)payload_len) {
+        payload[0] = '\0';
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            ESP_ERR_INVALID_SIZE,
+            UNIFIED_FEATURE_REASON_NONE,
+            "wifi_connect_payload_failed"
+        );
+    }
+
+    return api_bridge_build_response(
+        action,
+        UNIFIED_ACTION_RESULT_COMPLETED,
+        ESP_OK,
+        UNIFIED_FEATURE_REASON_NONE,
+        "wifi_connect_requested"
+    );
+}
+
 static unified_action_response_t api_bridge_execute_wifi_toggle(
     const unified_action_envelope_t *action,
     const api_bridge_request_t *request,
@@ -1297,6 +1360,8 @@ static unified_action_response_t api_bridge_dispatch_action(
             return api_bridge_execute_get_sms_history(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_CONFIG_SET:
             return api_bridge_execute_config_set(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_WIFI_CONNECT:
+            return api_bridge_execute_wifi_connect(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_WIFI_RECONNECT:
             return api_bridge_execute_wifi_reconnect(action, payload, payload_len);
         case UNIFIED_ACTION_CMD_WIFI_TOGGLE:

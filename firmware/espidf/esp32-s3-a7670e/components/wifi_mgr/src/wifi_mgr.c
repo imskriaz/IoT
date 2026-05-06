@@ -32,6 +32,11 @@ wifi_mgr_status_t s_status;
 static esp_netif_t *s_wifi_netif;
 static uint8_t s_absent_retry_streak;
 static uint32_t s_config_revision;
+static uint32_t s_runtime_override_revision;
+static uint32_t s_applied_runtime_override_revision;
+static bool s_runtime_override_active;
+static char s_runtime_override_ssid[CONFIG_MGR_WIFI_SSID_LEN];
+static char s_runtime_override_password[CONFIG_MGR_WIFI_PASS_LEN];
 bool s_scan_in_progress;
 bool s_scan_suppress_connect;
 bool s_startup_connect_suppressed;
@@ -159,17 +164,32 @@ static void wifi_mgr_update_health_locked(void) {
     health_monitor_set_module_state("wifi_mgr", module_state, detail);
 }
 
+static void wifi_mgr_apply_runtime_override_locked(config_mgr_data_t *config) {
+    if (!config || !s_runtime_override_active) {
+        return;
+    }
+
+    snprintf(config->wifi_ssid, sizeof(config->wifi_ssid), "%s", s_runtime_override_ssid);
+    snprintf(config->wifi_password, sizeof(config->wifi_password), "%s", s_runtime_override_password);
+}
+
 bool wifi_mgr_refresh_config_locked(config_mgr_data_t *out_config) {
     config_mgr_data_t config = {0};
     bool changed = false;
     uint32_t config_revision = config_mgr_revision();
+    uint32_t runtime_override_revision = s_runtime_override_revision;
 
-    if (!out_config && config_revision != 0U && s_config_revision == config_revision) {
+    if (!out_config &&
+        config_revision != 0U &&
+        s_config_revision == config_revision &&
+        s_applied_runtime_override_revision == runtime_override_revision) {
         return false;
     }
 
     config_mgr_snapshot(&config);
+    wifi_mgr_apply_runtime_override_locked(&config);
     s_config_revision = config_revision;
+    s_applied_runtime_override_revision = runtime_override_revision;
 
     if (out_config) {
         *out_config = config;
@@ -578,6 +598,94 @@ esp_err_t wifi_mgr_request_connect(void) {
     }
 
     ESP_LOGI(TAG, "manual connect request scheduled ssid=%s", ssid);
+    wifi_mgr_notify_task();
+    return ESP_OK;
+}
+
+esp_err_t wifi_mgr_request_runtime_connect(const char *ssid, const char *password) {
+    config_mgr_data_t config = {0};
+    wifi_config_t wifi_config = {0};
+    char effective_ssid[CONFIG_MGR_WIFI_SSID_LEN] = {0};
+    bool started = false;
+    bool connected = false;
+    bool apply_disconnect = false;
+    esp_err_t err = ESP_OK;
+
+    if (!ssid || ssid[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(ssid) >= CONFIG_MGR_WIFI_SSID_LEN) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (password && password[0] != '\0') {
+        const size_t password_len = strlen(password);
+        if (password_len < 8U || password_len >= CONFIG_MGR_WIFI_PASS_LEN) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+
+    if (!s_ready || !s_lock) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    config_mgr_snapshot(&config);
+    snprintf(s_runtime_override_ssid, sizeof(s_runtime_override_ssid), "%s", ssid);
+    snprintf(s_runtime_override_password, sizeof(s_runtime_override_password), "%s", password ? password : "");
+    s_runtime_override_active = true;
+    if (s_runtime_override_revision < UINT32_MAX) {
+        s_runtime_override_revision++;
+    }
+
+    wifi_mgr_apply_runtime_override_locked(&config);
+    (void)wifi_mgr_refresh_config_locked(&config);
+    wifi_mgr_build_sta_config(&config, &wifi_config, NULL);
+
+    err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    if (err != ESP_OK) {
+        wifi_mgr_set_error_locked(err, "runtime_wifi_config_failed", UNIFIED_MODULE_STATE_FAILED);
+        xSemaphoreGive(s_lock);
+        return err;
+    }
+
+    started = s_status.started;
+    connected = s_status.connected;
+    s_runtime_connect_suppressed = false;
+    s_status.reconnect_suppressed = false;
+    s_startup_connect_suppressed = false;
+    s_next_connect_attempt_ms = 0U;
+    wifi_mgr_reset_absent_retry_backoff();
+    if (!connected) {
+        wifi_mgr_request_connect_locked();
+    } else {
+        s_status.connected = false;
+        s_status.ip_assigned = false;
+        s_status.ip_address[0] = '\0';
+        wifi_mgr_request_connect_locked();
+        apply_disconnect = true;
+    }
+    snprintf(effective_ssid, sizeof(effective_ssid), "%s", s_status.ssid);
+    xSemaphoreGive(s_lock);
+
+    if (!started) {
+        err = esp_wifi_start();
+        if (err == ESP_ERR_WIFI_CONN || err == ESP_ERR_WIFI_STATE) {
+            err = ESP_OK;
+        }
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+
+    if (apply_disconnect) {
+        (void)esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+
+    ESP_LOGI(TAG, "runtime connect request scheduled ssid=%s", effective_ssid[0] ? effective_ssid : "<unset>");
     wifi_mgr_notify_task();
     return ESP_OK;
 }

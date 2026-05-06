@@ -30,12 +30,17 @@ firmware, or device contracts.
 
 - When working on ESP32 firmware commands, first validate the command from the
   terminal or serial console.
+- For any ESP32 command sequence, first run the sequence directly in the serial
+  monitor or terminal and confirm the expected response, timing, and failure
+  behavior there before testing it through firmware, MQTT, or dashboard flows.
 - Add the command to firmware only after it works correctly outside the firmware
   and the expected response, timing, and failure behavior are understood.
 - Prefer this terminal-first check before build, flash, and boot trial cycles to
   avoid unnecessary firmware trial and error.
 - Do not treat a debug-only or serial-only success as proof that the runtime MQTT
   command path is complete.
+- After the direct serial or terminal sequence is confirmed, run the higher-level
+  runtime test separately to verify the real firmware and MQTT path.
 
 ## ESP32 Runtime Rules
 

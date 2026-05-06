@@ -710,6 +710,56 @@ describe('sms route queue-first delivery', () => {
         );
     });
 
+    test('stale conversation deep link falls back to thread number lookup', async () => {
+        const rows = [
+            {
+                id: 343,
+                device_id: 'device-8',
+                from_number: '3=:24;82=8<3=86<2:41',
+                to_number: null,
+                message: 'পেতে ডায়াল বা ভিজিট https://cutt.ly/myRobiOffer',
+                timestamp: '2026-05-04T07:36:28.123Z',
+                read: 1,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 49,
+                source: 'device',
+                error: null,
+                external_id: null,
+                sent_by: null
+            }
+        ];
+
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue(null),
+            all: jest.fn()
+                .mockResolvedValueOnce([])
+                .mockResolvedValueOnce(rows)
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/thread?deviceId=device-8&conversationId=56&number=%2B880324828386241&limit=20');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.meta).toMatchObject({
+            deviceId: 'device-8',
+            conversationId: 49,
+            title: 'Robi',
+            count: 1
+        });
+        expect(db.all).toHaveBeenNthCalledWith(
+            2,
+            expect.stringContaining('s.device_id = ?'),
+            ['device-8', '880324828386241', '4828386241', '+880324828386241', 20]
+        );
+    });
+
     test('returns conversation summaries scoped to the selected device', async () => {
         const conversationRows = [
             {

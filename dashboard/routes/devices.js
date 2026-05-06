@@ -19,6 +19,7 @@ const paymentGatewayService = require('../services/paymentGatewayService');
 const hostHotspotService = require('../services/hostHotspotService');
 const { readStoredSimRows, applyStoredSimFallback } = require('../services/storedSimService');
 const { normalizeSsid, readHostScanSummary } = require('../utils/hostWifiDiagnostics');
+const { publishWifiConnectSequence } = require('../utils/runtimeWifiConnect');
 const { setupApIp } = require('../config/onboarding');
 
 const DEFAULT_MQTT_PORT = 1883;
@@ -771,9 +772,8 @@ async function applyRuntimeConfigViaMqtt(deviceId, config) {
         throw new Error('MQTT not connected');
     }
 
+    const wifiConfigTouched = config.wifiSsid !== undefined || config.wifiPassword !== undefined;
     const updates = [
-        ['wifi_ssid', config.wifiSsid],
-        ['wifi_password', config.wifiPassword],
         ['modem_apn', config.modemApn],
         ['device_id_override', config.deviceIdOverride],
         ['mqtt_uri', config.mqttUri],
@@ -782,11 +782,25 @@ async function applyRuntimeConfigViaMqtt(deviceId, config) {
         ['mqtt_enabled', config.mqttEnabled],
         ['modem_fallback_enabled', config.modemFallbackEnabled]
     ].filter(([, value]) => value !== undefined && String(value).length > 0);
-    const wifiConfigTouched = config.wifiSsid !== undefined || config.wifiPassword !== undefined;
 
-    if (!updates.length) throw new Error('No runtime config fields supplied');
+    if (!updates.length && !wifiConfigTouched) throw new Error('No runtime config fields supplied');
 
     const responses = [];
+    if (wifiConfigTouched) {
+        responses.push(await publishWifiConnectSequence({
+            mqttService: global.mqttService,
+            deviceId,
+            ssid: String(config.wifiSsid || ''),
+            password: String(config.wifiPassword || ''),
+            timeoutMs: 10000,
+            commandOptionsFactory: (command, options = {}) => ({
+                source: 'dashboard-config',
+                skipPersistentQueue: true,
+                ...options
+            })
+        }));
+    }
+
     for (const [key, value] of updates) {
         responses.push(await global.mqttService.publishCommand(
             deviceId,
@@ -798,21 +812,13 @@ async function applyRuntimeConfigViaMqtt(deviceId, config) {
         ));
     }
 
-    if (wifiConfigTouched) {
-        responses.push(await global.mqttService.publishCommand(
-            deviceId,
-            'wifi-reconnect',
-            {},
-            true,
-            10000,
-            { source: 'dashboard-config', skipPersistentQueue: true }
-        ));
-    }
-
     return {
         ok: true,
         restartRequired: responses.some(response => response?.restart_required || response?.payload?.restart_required),
-        applied: updates.map(([key]) => key),
+        applied: [
+            ...(wifiConfigTouched ? ['wifi_ssid', 'wifi_password'] : []),
+            ...updates.map(([key]) => key)
+        ],
         responses
     };
 }

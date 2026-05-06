@@ -108,6 +108,7 @@ static uint16_t automation_bridge_command_priority(unified_action_command_t comm
         case UNIFIED_ACTION_CMD_DIAL_NUMBER:
         case UNIFIED_ACTION_CMD_HANGUP_CALL:
             return 10U;
+        case UNIFIED_ACTION_CMD_WIFI_CONNECT:
         case UNIFIED_ACTION_CMD_WIFI_RECONNECT:
         case UNIFIED_ACTION_CMD_WIFI_TOGGLE:
         case UNIFIED_ACTION_CMD_WIFI_DISCONNECT:
@@ -370,6 +371,9 @@ static unified_action_command_t automation_bridge_parse_command_name(const char 
     if (strcmp(normalized, "config_set") == 0) {
         return UNIFIED_ACTION_CMD_CONFIG_SET;
     }
+    if (strcmp(normalized, "wifi_connect") == 0) {
+        return UNIFIED_ACTION_CMD_WIFI_CONNECT;
+    }
     if (strcmp(normalized, "wifi_reconnect") == 0) {
         return UNIFIED_ACTION_CMD_WIFI_RECONNECT;
     }
@@ -629,6 +633,7 @@ static esp_err_t automation_bridge_parse_item(
     }
 
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "path"), out_request->path, sizeof(out_request->path));
+    automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "ssid"), out_request->ssid, sizeof(out_request->ssid));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "number"), out_request->number, sizeof(out_request->number));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "text"), out_request->text, sizeof(out_request->text));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "sms_encoding"), out_request->sms_encoding, sizeof(out_request->sms_encoding));

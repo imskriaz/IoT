@@ -61,6 +61,7 @@ typedef struct {
 esp_err_t wifi_mgr_init(void);
 void wifi_mgr_get_status(wifi_mgr_status_t *out_status);
 esp_err_t wifi_mgr_request_connect(void);
+esp_err_t wifi_mgr_request_runtime_connect(const char *ssid, const char *password);
 esp_err_t wifi_mgr_set_enabled(bool enabled);
 esp_err_t wifi_mgr_disconnect(bool suppress_reconnect);
 esp_err_t wifi_mgr_scan_networks(

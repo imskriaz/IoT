@@ -48,6 +48,11 @@ function looksLikeShiftedNibbleString(value) {
 
 function inferServiceSender(message) {
     const text = String(decodeUcs2Hex(message) || '').toLowerCase();
+    if (text.includes('robi') || text.includes('\u09b0\u09ac\u09bf')) return 'Robi';
+    if (text.includes('airtel') || text.includes('\u098f\u09df\u09be\u09b0\u099f\u09c7\u09b2') || text.includes('\u098f\u09af\u09bc\u09be\u09b0\u099f\u09c7\u09b2')) return 'Airtel';
+    if (text.includes('grameenphone') || text.includes('grammenphone') || /\bgp\b/.test(text)) return 'Grameenphone';
+    if (text.includes('banglalink') || text.includes('\u09ac\u09be\u0982\u09b2\u09be\u09b2\u09bf\u0982\u0995')) return 'Banglalink';
+    if (text.includes('teletalk') || text.includes('\u099f\u09c7\u09b2\u09bf\u099f\u0995')) return 'Teletalk';
     if (text.includes('otp') || text.includes('verification')) return 'Verification Service';
     if (text.includes('bank') || text.includes('payment') || text.includes('transaction')) return 'Financial Service';
     if (text.includes('support') || text.includes('customer care')) return 'Support Service';
@@ -80,6 +85,7 @@ function decodeSmsRecord(record) {
 module.exports = {
     decodeUcs2Hex,
     decodeSmsRecord,
+    inferServiceSender,
     isPhoneLike,
     looksLikeShiftedNibbleString,
     looksLikeUcs2Hex

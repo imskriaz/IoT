@@ -1390,7 +1390,7 @@ describe('modem route MQTT event flows', () => {
         const mqttService = new EventEmitter();
         mqttService.connected = true;
         mqttService.publishCommand = jest.fn().mockImplementation(async (deviceId, command, payload) => {
-            if (command === 'wifi-reconnect') {
+            if (command === 'wifi-connect') {
                 setImmediate(() => {
                     mqttService.emit('status', deviceId, {
                         active_path: 'wifi',
@@ -1431,37 +1431,14 @@ describe('modem route MQTT event flows', () => {
         expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
             1,
             'device-retry',
-            'config-set',
-            { key: 'wifi_ssid', value: 'RiazM' },
+            'wifi-connect',
+            { ssid: 'RiazM', password: '12345678', security: '' },
             true,
             10000,
             expect.objectContaining({
                 source: 'dashboard-modem',
-                skipPersistentQueue: true
-            })
-        );
-        expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
-            2,
-            'device-retry',
-            'config-set',
-            { key: 'wifi_password', value: '12345678' },
-            true,
-            10000,
-            expect.objectContaining({
-                source: 'dashboard-modem',
-                skipPersistentQueue: true
-            })
-        );
-        expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
-            3,
-            'device-retry',
-            'wifi-reconnect',
-            {},
-            true,
-            10000,
-            expect.objectContaining({
-                source: 'dashboard-modem',
-                skipPersistentQueue: true
+                skipPersistentQueue: true,
+                domain: 'network'
             })
         );
     });
@@ -1472,7 +1449,7 @@ describe('modem route MQTT event flows', () => {
         const mqttService = new EventEmitter();
         mqttService.connected = true;
         mqttService.publishCommand = jest.fn().mockImplementation(async (deviceId, command) => {
-            if (command === 'wifi-reconnect') {
+            if (command === 'wifi-connect') {
                 setImmediate(() => {
                     mqttService.emit('status', deviceId, {
                         active_path: 'wifi',
@@ -1528,15 +1505,16 @@ describe('modem route MQTT event flows', () => {
             activePath: 'wifi'
         }));
         expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
-            2,
+            1,
             'device-retry-open',
-            'config-set',
-            { key: 'wifi_password', value: '' },
+            'wifi-connect',
+            { ssid: 'GuestNet', password: '', security: 'open' },
             true,
             10000,
             expect.objectContaining({
                 source: 'dashboard-modem',
-                skipPersistentQueue: true
+                skipPersistentQueue: true,
+                domain: 'network'
             })
         );
         expect(app.locals.db.run).toHaveBeenCalledWith(
@@ -1551,7 +1529,7 @@ describe('modem route MQTT event flows', () => {
         const mqttService = new EventEmitter();
         mqttService.connected = true;
         mqttService.publishCommand = jest.fn().mockImplementation(async (deviceId, command) => {
-            if (command === 'wifi-reconnect') {
+            if (command === 'wifi-connect') {
                 setImmediate(() => {
                     mqttService.emit('status', deviceId, {
                         active_path: 'wifi',
@@ -1598,37 +1576,14 @@ describe('modem route MQTT event flows', () => {
         expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
             1,
             'device-connect',
-            'config-set',
-            { key: 'wifi_ssid', value: 'BenchNet' },
-            true,
-            10000,
-            expect.objectContaining({
-                source: 'dashboard-modem',
-                skipPersistentQueue: true
-            })
-        );
-        expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
-            2,
-            'device-connect',
-            'config-set',
-            { key: 'wifi_password', value: 'bench-pass' },
-            true,
-            10000,
-            expect.objectContaining({
-                source: 'dashboard-modem',
-                skipPersistentQueue: true
-            })
-        );
-        expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
-            3,
-            'device-connect',
-            'wifi-reconnect',
-            {},
+            'wifi-connect',
+            { ssid: 'BenchNet', password: 'bench-pass', security: 'WPA2-PSK' },
             true,
             15000,
             expect.objectContaining({
                 source: 'dashboard-modem',
-                skipPersistentQueue: true
+                skipPersistentQueue: true,
+                domain: 'network'
             })
         );
     });
@@ -1639,7 +1594,7 @@ describe('modem route MQTT event flows', () => {
         const mqttService = new EventEmitter();
         mqttService.connected = true;
         mqttService.publishCommand = jest.fn().mockImplementation(async (deviceId, command) => {
-            if (command === 'wifi-reconnect') {
+            if (command === 'wifi-connect') {
                 setImmediate(() => {
                     mqttService.emit('status', deviceId, {
                         active_path: 'wifi',
@@ -1687,15 +1642,16 @@ describe('modem route MQTT event flows', () => {
             expect.arrayContaining(['device-connect-profile', 'RiazM', '12345678'])
         );
         expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
-            2,
+            1,
             'device-connect-profile',
-            'config-set',
-            { key: 'wifi_password', value: '12345678' },
+            'wifi-connect',
+            { ssid: 'RiazM', password: '12345678', security: '' },
             true,
-            10000,
+            15000,
             expect.objectContaining({
                 source: 'dashboard-modem',
-                skipPersistentQueue: true
+                skipPersistentQueue: true,
+                domain: 'network'
             })
         );
     });
@@ -1706,7 +1662,7 @@ describe('modem route MQTT event flows', () => {
         const mqttService = new EventEmitter();
         mqttService.connected = true;
         mqttService.publishCommand = jest.fn().mockImplementation(async (deviceId, command) => {
-            if (command === 'wifi-reconnect') {
+            if (command === 'wifi-connect') {
                 setImmediate(() => {
                     mqttService.emit('status', deviceId, {
                         active_path: 'wifi',
@@ -1747,17 +1703,72 @@ describe('modem route MQTT event flows', () => {
             expect.arrayContaining(['device-connect-blank', 'RiazM', '12345678'])
         );
         expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
-            2,
+            1,
             'device-connect-blank',
-            'config-set',
-            { key: 'wifi_password', value: '12345678' },
+            'wifi-connect',
+            { ssid: 'RiazM', password: '12345678', security: '' },
             true,
-            10000,
+            15000,
             expect.objectContaining({
                 source: 'dashboard-modem',
-                skipPersistentQueue: true
+                skipPersistentQueue: true,
+                domain: 'network'
             })
         );
+    });
+
+    test('wifi connect returns a command error without falling back to legacy config-set', async () => {
+        jest.resetModules();
+
+        const mqttService = new EventEmitter();
+        mqttService.connected = true;
+        mqttService.publishCommand = jest.fn().mockImplementation(async (_deviceId, command) => {
+            if (command === 'wifi-connect') {
+                throw new Error('Command timeout after 15000ms');
+            }
+            return { success: true, command };
+        });
+
+        global.mqttService = mqttService;
+
+        const router = require('../routes/modem');
+        const app = buildApp(router);
+        app.locals.db = {
+            get: jest.fn().mockResolvedValue(null),
+            run: jest.fn().mockResolvedValue({ changes: 1 })
+        };
+
+        const res = await request(app)
+            .post('/api/modem/wifi/client/connect')
+            .send({
+                deviceId: 'device-connect-timeout',
+                ssid: 'BenchNet',
+                password: 'bench-pass',
+                security: 'WPA2-PSK'
+            });
+
+        expect(res.status).toBe(502);
+        expect(res.body.success).toBe(false);
+        expect(res.body.message).toContain('uses only the wifi-connect runtime command');
+        expect(res.body.data).toEqual(expect.objectContaining({
+            code: 'WIFI_CONNECT_COMMAND_FAILED',
+            stage: 'wifi-connect',
+            detail: 'Command timeout after 15000ms'
+        }));
+        expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
+            1,
+            'device-connect-timeout',
+            'wifi-connect',
+            { ssid: 'BenchNet', password: 'bench-pass', security: 'WPA2-PSK' },
+            true,
+            15000,
+            expect.objectContaining({
+                source: 'dashboard-modem',
+                skipPersistentQueue: true,
+                domain: 'network'
+            })
+        );
+        expect(mqttService.publishCommand).toHaveBeenCalledTimes(1);
     });
 
     test('wifi retry allows switching to a different saved SSID from dashboard known networks', async () => {
@@ -1766,7 +1777,7 @@ describe('modem route MQTT event flows', () => {
         const mqttService = new EventEmitter();
         mqttService.connected = true;
         mqttService.publishCommand = jest.fn().mockImplementation(async (deviceId, command) => {
-            if (command === 'wifi-reconnect') {
+            if (command === 'wifi-connect') {
                 setImmediate(() => {
                     mqttService.emit('status', deviceId, {
                         active_path: 'wifi',
@@ -1820,25 +1831,14 @@ describe('modem route MQTT event flows', () => {
         expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
             1,
             'device-retry',
-            'config-set',
-            { key: 'wifi_ssid', value: 'OtherNet' },
+            'wifi-connect',
+            { ssid: 'OtherNet', password: 'other-pass', security: 'WPA2-PSK' },
             true,
             10000,
             expect.objectContaining({
                 source: 'dashboard-modem',
-                skipPersistentQueue: true
-            })
-        );
-        expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
-            2,
-            'device-retry',
-            'config-set',
-            { key: 'wifi_password', value: 'other-pass' },
-            true,
-            10000,
-            expect.objectContaining({
-                source: 'dashboard-modem',
-                skipPersistentQueue: true
+                skipPersistentQueue: true,
+                domain: 'network'
             })
         );
     });

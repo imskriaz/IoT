@@ -193,6 +193,19 @@ function normalizeSmsTimestamp(value) {
     return new Date().toISOString();
 }
 
+function getSmsActionMessageIds(messageId) {
+    const normalized = String(messageId || '').trim();
+    if (!normalized) {
+        return { messageId: '', baseMessageId: '', isPartMessage: false };
+    }
+    const baseMessageId = normalized.replace(/_p\d+$/i, '');
+    return {
+        messageId: normalized,
+        baseMessageId,
+        isPartMessage: baseMessageId !== normalized
+    };
+}
+
 function parseSmsTimestampMs(value) {
     const text = String(value || '').trim();
     if (!text) return NaN;
@@ -1291,7 +1304,11 @@ class MQTTHandlers {
                 return;
             }
 
-            const messageId = String(data?.messageId || data?.action_id || '').trim();
+            const {
+                messageId,
+                baseMessageId,
+                isPartMessage
+            } = getSmsActionMessageIds(data?.messageId || data?.action_id || '');
             const successful = data?.success !== false
                 && !['failed', 'rejected', 'timeout'].includes(String(data?.result || '').trim().toLowerCase());
             let smsRow = null;
@@ -1299,41 +1316,62 @@ class MQTTHandlers {
             try {
                 const db = this.app.locals.db;
                 if (db && messageId) {
-                    await db.run(
-                        `UPDATE sms
-                         SET status = CASE WHEN status = 'delivered' THEN status ELSE ? END,
-                             error = CASE WHEN status = 'delivered' THEN NULL ELSE ? END
-                         WHERE device_id = ?
-                           AND external_id = ?`,
-                        [
-                            successful ? 'sent' : 'failed',
-                            successful ? null : (data?.error || data?.message || data?.detail || 'SMS send failed'),
-                            deviceId,
-                            messageId
-                        ]
-                    );
+                    const nextStatus = successful ? (isPartMessage ? 'sending' : 'sent') : 'failed';
+                    const nextError = successful ? null : (data?.error || data?.message || data?.detail || 'SMS send failed');
+                    if (isPartMessage) {
+                        await db.run(
+                            `UPDATE sms
+                             SET status = CASE
+                                     WHEN status = 'delivered' THEN status
+                                     WHEN ? = 'sending' AND status IN ('sent', 'failed', 'ambiguous') THEN status
+                                     ELSE ?
+                                 END,
+                                 error = CASE
+                                     WHEN status = 'delivered' THEN NULL
+                                     WHEN ? = 'sending' THEN error
+                                     ELSE ?
+                                 END
+                             WHERE device_id = ?
+                               AND external_id = ?`,
+                            [nextStatus, nextStatus, nextStatus, nextError, deviceId, baseMessageId]
+                        );
+                    } else {
+                        await db.run(
+                            `UPDATE sms
+                             SET status = CASE WHEN status = 'delivered' THEN status ELSE ? END,
+                                 error = CASE WHEN status = 'delivered' THEN NULL ELSE ? END
+                             WHERE device_id = ?
+                               AND external_id = ?`,
+                            [nextStatus, nextError, deviceId, messageId]
+                        );
+                    }
                     smsRow = await db.get(
-                        `SELECT id, conversation_id, to_number, external_id, sim_slot
+                        `SELECT id, conversation_id, to_number, external_id, sim_slot, status
                          FROM sms
                          WHERE device_id = ?
-                           AND external_id = ?
+                           AND external_id IN (?, ?)
                          ORDER BY id DESC
                          LIMIT 1`,
-                        [deviceId, messageId]
+                        [deviceId, messageId, baseMessageId || messageId]
                     );
                 }
             } catch (error) {
                 logger.error('Error syncing SMS action result:', error);
             }
 
+            const storedStatus = String(smsRow?.status || '').trim().toLowerCase();
+            const emittedStatus = successful
+                ? (['sent', 'delivered'].includes(storedStatus) ? storedStatus : (isPartMessage ? 'sending' : 'sent'))
+                : 'failed';
+
             this.toDevice(deviceId, successful ? 'sms:sent' : 'sms:send-failed', {
                 deviceId,
                 id: Number(smsRow?.id || 0) || null,
                 conversationId: Number(smsRow?.conversation_id || 0) || null,
-                messageId: smsRow?.external_id || messageId || null,
+                messageId: smsRow?.external_id || baseMessageId || messageId || null,
                 to: smsRow?.to_number || data?.number || data?.to || data?.payload?.number || data?.payload?.to || null,
                 sim_slot: smsRow?.sim_slot ?? null,
-                status: successful ? 'sent' : 'failed',
+                status: emittedStatus,
                 error: successful ? null : (data?.error || data?.message || data?.detail || 'SMS send failed'),
                 timestamp: new Date().toISOString()
             });

@@ -654,6 +654,56 @@ describe('MQTTHandlers SMS storage', () => {
         );
     });
 
+    test('maps multipart action part ids back to the base outgoing SMS row', async () => {
+        const { mqttService, db, room } = buildSmsSubject();
+
+        db.get.mockImplementation(async (sql) => {
+            const query = String(sql);
+            if (query.includes('SELECT id FROM devices')) {
+                return { id: 'test-device-1' };
+            }
+            if (query.includes('FROM sms') && query.includes('external_id')) {
+                return {
+                    id: 32,
+                    conversation_id: 10,
+                    to_number: '+8801555123456',
+                    external_id: 'sms_base123',
+                    sim_slot: 0,
+                    status: 'sending'
+                };
+            }
+            return null;
+        });
+
+        mqttService.emit('action:result', 'test-device-1', {
+            command: 'send-sms',
+            messageId: 'sms_base123_p1',
+            success: true,
+            payload: {
+                to: '+8801555123456'
+            }
+        });
+
+        await flushAsync();
+
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('external_id = ?'),
+            ['sending', 'sending', 'sending', null, 'test-device-1', 'sms_base123']
+        );
+        expect(room.emit).toHaveBeenCalledWith(
+            'sms:sent',
+            expect.objectContaining({
+                deviceId: 'test-device-1',
+                id: 32,
+                conversationId: 10,
+                messageId: 'sms_base123',
+                to: '+8801555123456',
+                sim_slot: 0,
+                status: 'sending'
+            })
+        );
+    });
+
     test('reconciles a timed-out outgoing SMS when matching incoming loopback evidence arrives', async () => {
         const { mqttService, db, room } = buildSmsSubject();
         mqttService._markPersistentQueueCompleted = jest.fn().mockResolvedValue(undefined);

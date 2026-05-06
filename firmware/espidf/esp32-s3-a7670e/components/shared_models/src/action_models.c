@@ -17,6 +17,7 @@ const char *unified_action_command_name(unified_action_command_t command) {
     switch (command) {
         case UNIFIED_ACTION_CMD_GET_STATUS: return "get_status";
         case UNIFIED_ACTION_CMD_CONFIG_SET: return "config_set";
+        case UNIFIED_ACTION_CMD_WIFI_CONNECT: return "wifi_connect";
         case UNIFIED_ACTION_CMD_WIFI_RECONNECT: return "wifi_reconnect";
         case UNIFIED_ACTION_CMD_WIFI_TOGGLE: return "wifi_toggle";
         case UNIFIED_ACTION_CMD_SEND_SMS: return "send_sms";

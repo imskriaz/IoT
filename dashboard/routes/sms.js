@@ -202,6 +202,11 @@ function toTimestampMs(value) {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function isGenericServiceDisplay(value) {
+    return ['service sender', 'service messages', 'system sender']
+        .includes(String(value || '').trim().toLowerCase());
+}
+
 function buildSmsConversationSummaries(rows) {
     const threads = new Map();
 
@@ -368,8 +373,55 @@ router.get('/thread', async (req, res) => {
             });
         }
 
+        const loadRowsByNumber = async (targetNumber) => {
+            const lookup = getPhoneLookupKeys(targetNumber);
+            let phoneWhere = `${COUNTERPART_EXPR} = ?`;
+            const params = [deviceId, targetNumber];
+
+            if (lookup.digits) {
+                phoneWhere = `(${COUNTERPART_NORM_SQL} = ? OR ${COUNTERPART_LAST10_SQL} = ? OR ${COUNTERPART_EXPR} = ?)`;
+                params.length = 0;
+                params.push(deviceId, lookup.digits, lookup.last10 || lookup.digits, targetNumber);
+            }
+
+            return db.all(`
+                SELECT s.id,
+                       s.device_id,
+                       s.from_number,
+                       s.to_number,
+                       s.message,
+                       s.timestamp,
+                       s.read,
+                       s.type,
+                       s.status,
+                       s.user_id,
+                       s.conversation_id,
+                       s.source,
+                       s.error,
+                       s.external_id,
+                       s.sim_slot,
+                       u.username AS sent_by
+                FROM sms s
+                LEFT JOIN users u ON s.user_id = u.id
+                WHERE s.device_id = ?
+                  AND ${phoneWhere}
+                  ${simFilter.length ? `AND ${simFilter.join(' AND ')}` : ''}
+                ORDER BY s.timestamp DESC
+                LIMIT ?
+            `, [...params, ...simParams, limit]);
+        };
+
         let rows;
+        let conversation = null;
+        let usedNumberFallback = false;
         if (conversationId) {
+            conversation = await db.get(
+                `SELECT primary_number, title
+                 FROM sms_conversations
+                 WHERE device_id = ?
+                   AND id = ?`,
+                [deviceId, conversationId]
+            );
             rows = await db.all(`
                 SELECT s.id,
                        s.device_id,
@@ -395,56 +447,42 @@ router.get('/thread', async (req, res) => {
                 ORDER BY s.timestamp DESC
                 LIMIT ?
             `, [deviceId, conversationId, ...simParams, limit]);
-        } else {
-            const lookup = getPhoneLookupKeys(number);
-            let phoneWhere = `${COUNTERPART_EXPR} = ?`;
-            const params = [deviceId, number];
-
-            if (lookup.digits) {
-                phoneWhere = `(${COUNTERPART_NORM_SQL} = ? OR ${COUNTERPART_LAST10_SQL} = ? OR ${COUNTERPART_EXPR} = ?)`;
-                params.length = 0;
-                params.push(deviceId, lookup.digits, lookup.last10 || lookup.digits, number);
+            if (!rows.length && number) {
+                rows = await loadRowsByNumber(number);
+                usedNumberFallback = true;
             }
-
-            rows = await db.all(`
-                SELECT s.id,
-                       s.device_id,
-                       s.from_number,
-                       s.to_number,
-                       s.message,
-                       s.timestamp,
-                       s.read,
-                       s.type,
-                       s.status,
-                       s.user_id,
-                       s.conversation_id,
-                       s.source,
-                       s.error,
-                       s.external_id,
-                       s.sim_slot,
-                       u.username AS sent_by
-                FROM sms s
-                LEFT JOIN users u ON s.user_id = u.id
-                WHERE s.device_id = ?
-                  AND ${phoneWhere}
-                  ${simFilter.length ? `AND ${simFilter.join(' AND ')}` : ''}
-                ORDER BY s.timestamp DESC
-                LIMIT ?
-            `, [...params, ...simParams, limit]);
+        } else {
+            rows = await loadRowsByNumber(number);
         }
 
         const messages = rows.map(decodeSmsRecord).reverse();
-        const resolvedNumber = number || String(messages[messages.length - 1]?.to_number || messages[messages.length - 1]?.from_number || '').trim();
+        const resolvedNumber = number
+            || String(conversation?.primary_number || messages[messages.length - 1]?.to_number || messages[messages.length - 1]?.from_number || '').trim();
+        const resolvedTitle = String(conversation?.title || messages[messages.length - 1]?.display_from || resolvedNumber || '').trim();
+        const displayMessages = messages.map((message) => {
+            if (
+                resolvedTitle
+                && !isGenericServiceDisplay(resolvedTitle)
+                && message?.sender_is_phone === false
+                && isGenericServiceDisplay(message.display_from)
+            ) {
+                return { ...message, display_from: resolvedTitle };
+            }
+            return message;
+        });
 
         res.json({
             success: true,
-            data: messages,
+            data: displayMessages,
             meta: {
                 deviceId,
                 simSlot: simScope.simSlot,
                 number: resolvedNumber,
-                conversationId: conversationId || Number(messages[0]?.conversation_id || 0) || null,
-                count: messages.length
+                title: resolvedTitle,
+                conversationId: usedNumberFallback
+                    ? (Number(displayMessages[0]?.conversation_id || 0) || null)
+                    : (conversationId || Number(displayMessages[0]?.conversation_id || 0) || null),
+                count: displayMessages.length
             }
         });
     } catch (error) {

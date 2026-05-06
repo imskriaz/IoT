@@ -12,6 +12,7 @@ const {
 const { getDeviceModuleHealth } = require('../utils/moduleHealth');
 const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
 const { normalizeSsid } = require('../utils/hostWifiDiagnostics');
+const { publishWifiConnectSequence } = require('../utils/runtimeWifiConnect');
 const { readStoredSimRows, applyStoredSimFallback } = require('../services/storedSimService');
 
 const STATUS_REFRESH_COOLDOWN_MS = 3000;
@@ -286,34 +287,14 @@ async function runHeaderModuleAction(req, deviceId, moduleKey) {
                 )
             ).catch(() => null);
 
-            await runQueuedDeviceOperation(deviceId, async () => {
-                await global.mqttService.publishCommand(
-                    deviceId,
-                    'config-set',
-                    { key: 'wifi_ssid', value: storedProfile.desiredSsid },
-                    true,
-                    10000,
-                    buildStatusCommandOptions('config-set', { skipPersistentQueue: true })
-                );
-
-                await global.mqttService.publishCommand(
-                    deviceId,
-                    'config-set',
-                    { key: 'wifi_password', value: storedProfile.desiredPassword },
-                    true,
-                    10000,
-                    buildStatusCommandOptions('config-set', { skipPersistentQueue: true })
-                );
-
-                await global.mqttService.publishCommand(
-                    deviceId,
-                    'wifi-reconnect',
-                    {},
-                    true,
-                    10000,
-                    buildStatusCommandOptions('wifi-reconnect', { skipPersistentQueue: true })
-                );
-            });
+            await runQueuedDeviceOperation(deviceId, () => publishWifiConnectSequence({
+                mqttService: global.mqttService,
+                deviceId,
+                ssid: storedProfile.desiredSsid,
+                password: storedProfile.desiredPassword,
+                timeoutMs: 10000,
+                commandOptionsFactory: (command, options = {}) => buildStatusCommandOptions(command, options)
+            }));
 
             const observedStatus = await statusProbe;
             return {

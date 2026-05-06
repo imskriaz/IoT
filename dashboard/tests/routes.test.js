@@ -1418,23 +1418,14 @@ describe('POST /api/devices/:id/runtime-config/apply', () => {
         expect(global.mqttService.publishCommand).toHaveBeenNthCalledWith(
             1,
             'dev-mqtt',
-            'config-set',
-            { key: 'wifi_ssid', value: 'RiazM' },
+            'wifi-connect',
+            { ssid: 'RiazM', password: '12345678', security: '' },
             true,
             10000,
-            { source: 'dashboard-config', skipPersistentQueue: true }
+            { source: 'dashboard-config', skipPersistentQueue: true, domain: 'network' }
         );
         expect(global.mqttService.publishCommand).toHaveBeenNthCalledWith(
             2,
-            'dev-mqtt',
-            'config-set',
-            { key: 'wifi_password', value: '12345678' },
-            true,
-            10000,
-            { source: 'dashboard-config', skipPersistentQueue: true }
-        );
-        expect(global.mqttService.publishCommand).toHaveBeenNthCalledWith(
-            3,
             'dev-mqtt',
             'config-set',
             { key: 'modem_apn', value: 'internet' },
@@ -1454,14 +1445,6 @@ describe('POST /api/devices/:id/runtime-config/apply', () => {
             'dev-mqtt',
             'config-set',
             { key: 'modem_fallback_enabled', value: 'true' },
-            true,
-            10000,
-            { source: 'dashboard-config', skipPersistentQueue: true }
-        );
-        expect(global.mqttService.publishCommand).toHaveBeenLastCalledWith(
-            'dev-mqtt',
-            'wifi-reconnect',
-            {},
             true,
             10000,
             { source: 'dashboard-config', skipPersistentQueue: true }

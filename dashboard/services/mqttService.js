@@ -14,6 +14,7 @@ const {
     normalizeSmsDeliveryReport,
     parseSmsMessageReference
 } = require('../utils/smsDeliveryReports');
+const { formatPhoneNumber } = require('../utils/phoneNumber');
 
 const FIRMWARE_ACTION_ID_MAX_LENGTH = 31;
 
@@ -2000,13 +2001,16 @@ class MQTTService extends EventEmitter {
              FROM sms s
              WHERE s.type = 'outgoing'
                AND s.status IN ('queued', 'sending')
-               AND s.external_id LIKE 'send-sms%'
+               AND (s.external_id LIKE 'sms_%' OR s.external_id LIKE 'send-sms%')
                AND datetime(REPLACE(substr(s.timestamp, 1, 19), 'T', ' ')) <= datetime(?)
                AND NOT EXISTS (
                    SELECT 1
                    FROM device_command_queue q
                    WHERE q.device_id = s.device_id
-                     AND q.message_id = s.external_id
+                     AND (
+                        q.message_id = s.external_id
+                        OR q.message_id LIKE s.external_id || '_p%'
+                     )
                )
              ORDER BY datetime(REPLACE(substr(s.timestamp, 1, 19), 'T', ' ')) ASC
              LIMIT 50`,
@@ -2208,6 +2212,7 @@ class MQTTService extends EventEmitter {
         }
 
         const deliveredTo = String(data?.to || data?.number || '').trim();
+        const normalizedDeliveredTo = formatPhoneNumber(deliveredTo) || deliveredTo;
         if (!deliveredTo) return null;
 
         const candidates = await db.all(
@@ -2235,7 +2240,8 @@ class MQTTService extends EventEmitter {
             try {
                 const payload = row?.payload ? JSON.parse(row.payload) : {};
                 const rowNumber = String(payload?.to || payload?.number || '').trim();
-                if (rowNumber && rowNumber === deliveredTo) {
+                const normalizedRowNumber = formatPhoneNumber(rowNumber) || rowNumber;
+                if (rowNumber && normalizedRowNumber === normalizedDeliveredTo) {
                     return row;
                 }
             } catch (_) {}

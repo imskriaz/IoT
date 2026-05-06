@@ -7,6 +7,7 @@ const { setupApIp, setupApExampleLabel } = require('../config/onboarding');
 const { resolveDeviceId } = require('../utils/deviceResolver');
 const hostHotspotService = require('../services/hostHotspotService');
 const { normalizeSsid, readHostScanSummary } = require('../utils/hostWifiDiagnostics');
+const { publishWifiConnectSequence } = require('../utils/runtimeWifiConnect');
 
 const runtimeCapabilities = Object.freeze({
     mobile: {
@@ -53,6 +54,22 @@ function emitDeviceEvent(deviceId, event, payload) {
     } else {
         global.io.emit?.(event, payload);
     }
+}
+
+function respondWifiConnectError(res, error, fallbackMessage) {
+    const errorCode = String(error?.code || '');
+    const statusCode = Number(error?.statusCode) || (errorCode.startsWith('WIFI_CONNECT_') ? 502 : 500);
+    return res.status(statusCode).json({
+        success: false,
+        message: error?.message || fallbackMessage,
+        data: errorCode.startsWith('WIFI_CONNECT_')
+            ? {
+                code: error.code,
+                stage: error.stage || null,
+                detail: error.detail || null
+            }
+            : undefined
+    });
 }
 
 // Internet Connection State (initialized with defaults)
@@ -1658,6 +1675,10 @@ router.post('/wifi/client/connect', [
             selected: true,
             connected: false
         });
+        await upsertDeviceProfileFields(req, deviceId, {
+            wifi_ssid: targetSsid,
+            wifi_pass: resolvedPassword
+        });
 
         const statusProbe = waitForMqttEvent(
             'status',
@@ -1670,34 +1691,15 @@ router.post('/wifi/client/connect', [
             )
         ).catch(() => null);
 
-        const reconnectResponse = await runQueuedDeviceOperation(deviceId, async () => {
-            await global.mqttService.publishCommand(
-                deviceId,
-                'config-set',
-                { key: 'wifi_ssid', value: targetSsid },
-                true,
-                10000,
-                buildModemLiveCommandOptions('config-set', { skipPersistentQueue: true })
-            );
-
-            await global.mqttService.publishCommand(
-                deviceId,
-                'config-set',
-                { key: 'wifi_password', value: resolvedPassword },
-                true,
-                10000,
-                buildModemLiveCommandOptions('config-set', { skipPersistentQueue: true })
-            );
-
-            return global.mqttService.publishCommand(
-                deviceId,
-                'wifi-reconnect',
-                {},
-                true,
-                15000,
-                buildModemLiveCommandOptions('wifi-reconnect', { skipPersistentQueue: true })
-            );
-        });
+        const reconnectResponse = await runQueuedDeviceOperation(deviceId, () => publishWifiConnectSequence({
+            mqttService: global.mqttService,
+            deviceId,
+            ssid: targetSsid,
+            password: resolvedPassword,
+            security: resolvedSecurity,
+            timeoutMs: 15000,
+            commandOptionsFactory: (command, options = {}) => buildModemLiveCommandOptions(command, options)
+        }));
 
         const observedStatus = await statusProbe;
         const observedWifiConnected = Boolean(
@@ -1733,10 +1735,7 @@ router.post('/wifi/client/connect', [
         });
     } catch (error) {
         logger.error('API WiFi connect error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to connect to WiFi'
-        });
+        return respondWifiConnectError(res, error, 'Failed to connect to WiFi');
     }
 });
 
@@ -1823,34 +1822,15 @@ router.post('/wifi/client/retry', [
             )
         ).catch(() => null);
 
-        const reconnectResponse = await runQueuedDeviceOperation(deviceId, async () => {
-            await global.mqttService.publishCommand(
-                deviceId,
-                'config-set',
-                { key: 'wifi_ssid', value: retrySsid },
-                true,
-                10000,
-                buildModemLiveCommandOptions('config-set', { skipPersistentQueue: true })
-            );
-
-            await global.mqttService.publishCommand(
-                deviceId,
-                'config-set',
-                { key: 'wifi_password', value: resolvedPassword },
-                true,
-                10000,
-                buildModemLiveCommandOptions('config-set', { skipPersistentQueue: true })
-            );
-
-            return global.mqttService.publishCommand(
-                deviceId,
-                'wifi-reconnect',
-                {},
-                true,
-                10000,
-                buildModemLiveCommandOptions('wifi-reconnect', { skipPersistentQueue: true })
-            );
-        });
+        const reconnectResponse = await runQueuedDeviceOperation(deviceId, () => publishWifiConnectSequence({
+            mqttService: global.mqttService,
+            deviceId,
+            ssid: retrySsid,
+            password: resolvedPassword,
+            security: storedNetwork?.security || '',
+            timeoutMs: 10000,
+            commandOptionsFactory: (command, options = {}) => buildModemLiveCommandOptions(command, options)
+        }));
 
         const observedStatus = await statusProbe;
         const observedWifiConnected = Boolean(
@@ -1864,6 +1844,10 @@ router.post('/wifi/client/retry', [
             password: resolvedPassword,
             selected: true,
             connected: observedWifiConnected
+        });
+        await upsertDeviceProfileFields(req, deviceId, {
+            wifi_ssid: retrySsid,
+            wifi_pass: resolvedPassword
         });
 
         return res.json({
@@ -1884,10 +1868,7 @@ router.post('/wifi/client/retry', [
         });
     } catch (error) {
         logger.error('API WiFi retry error:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Failed to retry saved Wi-Fi network'
-        });
+        return respondWifiConnectError(res, error, 'Failed to retry saved Wi-Fi network');
     }
 });
 

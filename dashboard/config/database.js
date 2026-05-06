@@ -3,7 +3,10 @@ const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const logger = require('../utils/logger');
-const { backfillSmsConversations } = require('../services/smsConversations');
+const {
+    backfillSmsConversations,
+    repairEncodedServiceConversations
+} = require('../services/smsConversations');
 
 // Ensure data directory exists
 const dataDir = path.join(__dirname, '../data');
@@ -1636,6 +1639,7 @@ async function initializeDatabase() {
         }
 
         await backfillSmsConversations(db);
+        await repairEncodedServiceConversations(db);
         return db;
 
     } catch (error) {

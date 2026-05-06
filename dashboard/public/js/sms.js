@@ -130,7 +130,7 @@
             if (text) {
                 text.textContent = total > 0
                     ? `Syncing ${total} message${total === 1 ? '' : 's'} from the phone. Dashboard updates will resume after completion.`
-                    : 'Please wait while messages are copied from the phone.';
+                    : 'Please wait while messages are copied.';
             }
             return;
         }
@@ -2106,7 +2106,7 @@
             return Promise.resolve([]);
         }
         const threadUrl = resolvedConversationId
-            ? `/api/sms/thread?conversationId=${resolvedConversationId}&limit=500`
+            ? `/api/sms/thread?conversationId=${resolvedConversationId}&number=${encodeURIComponent(target)}&limit=500`
             : `/api/sms/thread?number=${encodeURIComponent(target)}&limit=500`;
         return fetchSmsJson(threadUrl).then(function (data) {
             if (!data?.success) {
@@ -2230,7 +2230,7 @@
         }
 
         const threadUrl = conversationId
-            ? `/api/sms/thread?conversationId=${conversationId}&limit=100`
+            ? `/api/sms/thread?conversationId=${conversationId}&number=${encodeURIComponent(target)}&limit=100`
             : `/api/sms/thread?number=${encodeURIComponent(target)}&limit=100`;
 
         return fetchSmsJson(threadUrl)
@@ -2247,9 +2247,11 @@
                     return;
                 }
                 const resolvedConversationId = Math.max(0, Number(data?.meta?.conversationId) || 0) || conversationId || null;
+                const resolvedTitle = String(data?.meta?.title || '').trim();
+                const resolvedNumber = String(data?.meta?.number || target || '').trim();
                 threadState.messages = Array.isArray(data.data) ? data.data : [];
                 threadState.conversationId = resolvedConversationId;
-                threadState.title = title || String(data?.meta?.number || target || '').trim();
+                threadState.title = resolvedTitle || title || resolvedNumber;
                 renderThreadMessages(threadState.messages, target, threadState.title);
                 syncConversationSelection(target, resolvedConversationId);
                 syncThreadUrl(target, 'replace', resolvedConversationId, threadState.title);

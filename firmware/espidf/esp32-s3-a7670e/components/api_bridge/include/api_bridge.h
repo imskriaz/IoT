@@ -7,6 +7,7 @@
 
 #include "action_models.h"
 #include "common_models.h"
+#include "config_mgr.h"
 
 #ifndef CONFIG_UNIFIED_API_BRIDGE_HISTORY_DEPTH
 #define CONFIG_UNIFIED_API_BRIDGE_HISTORY_DEPTH  8
@@ -42,6 +43,7 @@
 
 typedef struct {
     char path[CONFIG_UNIFIED_API_BRIDGE_PATH_LEN];
+    char ssid[CONFIG_MGR_WIFI_SSID_LEN];
     char number[UNIFIED_TEXT_SHORT_LEN];
     char text[UNIFIED_SMS_TEXT_MAX_LEN];
     char sms_encoding[16];

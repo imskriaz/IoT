@@ -818,7 +818,7 @@ describe('status route live refresh', () => {
             recent: []
         });
         mqttService.publishCommand = jest.fn().mockImplementation(async (deviceId, command, payload) => {
-            if (command === 'wifi-reconnect') {
+            if (command === 'wifi-connect') {
                 process.nextTick(() => {
                     const statusPayload = {
                         type: 'device_status',
@@ -872,34 +872,8 @@ describe('status route live refresh', () => {
         expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
             1,
             'device-wifi-action',
-            'config-set',
-            { key: 'wifi_ssid', value: 'RiazM' },
-            true,
-            10000,
-            expect.objectContaining({
-                source: 'dashboard-status-panel',
-                domain: 'network',
-                skipPersistentQueue: true
-            })
-        );
-        expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
-            2,
-            'device-wifi-action',
-            'config-set',
-            { key: 'wifi_password', value: '12345678' },
-            true,
-            10000,
-            expect.objectContaining({
-                source: 'dashboard-status-panel',
-                domain: 'network',
-                skipPersistentQueue: true
-            })
-        );
-        expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
-            3,
-            'device-wifi-action',
-            'wifi-reconnect',
-            {},
+            'wifi-connect',
+            { ssid: 'RiazM', password: '12345678', security: '' },
             true,
             10000,
             expect.objectContaining({

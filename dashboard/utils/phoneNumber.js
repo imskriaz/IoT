@@ -25,7 +25,10 @@ function getPhoneLookupKeys(raw) {
 }
 
 function sqlNormalizePhone(columnName) {
-    return `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(${columnName}, ''), '+', ''), ' ', ''), '-', ''), '(', ''), ')', '')`;
+    return ['+', ' ', '-', '(', ')', ':', ';', '<', '=', '>', '?'].reduce(
+        (expr, ch) => `REPLACE(${expr}, '${ch}', '')`,
+        `COALESCE(${columnName}, '')`
+    );
 }
 
 function sqlPhoneLastDigits(columnName, count = 10) {
