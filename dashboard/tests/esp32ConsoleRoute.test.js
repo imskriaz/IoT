@@ -66,6 +66,26 @@ describe('ESP32 MQTT console route', () => {
         expect(res.body.data.documents).toEqual(expect.arrayContaining([
             expect.objectContaining({ title: 'Runtime Rulebook' })
         ]));
+        expect(res.body.data.vendorCommands).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                command: 'AT+CFTPSGET',
+                requiresInput: true,
+                syntaxExamples: expect.arrayContaining(['AT+CFTPSGET="test.txt"'])
+            }),
+            expect.objectContaining({
+                command: 'AT+CFTPSCWD',
+                requiresInput: false,
+                allowsBare: true,
+                syntaxExamples: expect.arrayContaining(['AT+CFTPSCWD="TEST1129"'])
+            }),
+            expect.objectContaining({
+                command: 'AT+BTPAIRED',
+                requiresInput: false,
+                requiresVariant: true,
+                allowsBare: false,
+                syntaxExamples: expect.arrayContaining(['AT+BTPAIRED?'])
+            })
+        ]));
     });
 
     test('reuses the document catalog between nearby command requests', async () => {
@@ -291,22 +311,26 @@ describe('ESP32 MQTT console route', () => {
         );
     });
 
-    test('keeps short A-style raw probes literal instead of lowercasing them as command topics', async () => {
+    test.each([
+        'A',
+        'AT',
+        'A+P'
+    ])('keeps short raw modem probe %s literal instead of lowercasing it as a command topic', async (rawLine) => {
         const publishCommand = jest.fn().mockResolvedValue({ success: true });
         global.mqttService = { publishCommand };
         const app = buildApp();
 
         const res = await request(app)
             .post('/api/esp32-console/command')
-            .send({ command: 'A+P', payload: {} });
+            .send({ command: rawLine, payload: {} });
 
         expect(res.status).toBe(200);
         expect(res.body.command).toBe('modem-at');
-        expect(res.body.rawLine).toBe('A+P');
+        expect(res.body.rawLine).toBe(rawLine);
         expect(publishCommand).toHaveBeenCalledWith(
             'device-1',
             'modem-at',
-            expect.objectContaining({ line: 'A+P', raw_line: 'A+P' }),
+            expect.objectContaining({ line: rawLine, raw_line: rawLine }),
             true,
             30000,
             expect.any(Object)

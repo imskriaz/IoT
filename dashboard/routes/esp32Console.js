@@ -21,13 +21,13 @@ const DEFAULT_TIMEOUT_MS = 30000;
 const MAX_RAW_MODEM_LINE_LEN = 96;
 const FIRMWARE_DOCS_DIR = path.join(__dirname, '..', '..', 'firmware', 'espidf', 'esp32-s3-a7670e', 'docs');
 const DOCUMENT_CATALOG_CACHE_MS = 60000;
-const VENDOR_COMMANDS = Array.isArray(vendorCommandCatalog?.commands)
-    ? vendorCommandCatalog.commands.filter((command) => command && command.line && Array.isArray(command.transports))
-    : [];
+const VENDOR_MANUALS_DIR = path.join(FIRMWARE_DOCS_DIR, 'vendor', 'esp32-s3-a7670e', 'manuals');
 let documentCatalogCache = {
     docs: null,
     expiresAt: 0
 };
+const vendorManualCache = new Map();
+const vendorManualExampleCache = new Map();
 
 const COMMAND_PRESETS = [
     {
@@ -209,6 +209,106 @@ const COMMAND_PRESETS = [
 ];
 
 const KNOWN_CONSOLE_COMMANDS = new Set(COMMAND_PRESETS.map((preset) => preset.command));
+
+function readVendorManualLines(markdownFile) {
+    if (!markdownFile) return [];
+    if (vendorManualCache.has(markdownFile)) return vendorManualCache.get(markdownFile);
+    const absolutePath = path.join(VENDOR_MANUALS_DIR, markdownFile);
+    const lines = fs.existsSync(absolutePath)
+        ? fs.readFileSync(absolutePath, 'utf8').split(/\r?\n/)
+        : [];
+    vendorManualCache.set(markdownFile, lines);
+    return lines;
+}
+
+function readVendorManualExamples(markdownFile) {
+    if (!markdownFile) return new Map();
+    if (vendorManualExampleCache.has(markdownFile)) return vendorManualExampleCache.get(markdownFile);
+    const commandMap = new Map();
+    readVendorManualLines(markdownFile).forEach((line) => {
+        const trimmed = String(line || '').replace(/\s+/g, ' ').trim();
+        if (!trimmed || !/^(?:AT|A)\S*/i.test(trimmed)) return;
+        const match = trimmed.match(/^((?:AT|A)(?:\+[A-Z0-9]+)+)/i);
+        if (!match) return;
+        const baseCommand = String(match[1] || '').toUpperCase();
+        if (!baseCommand) return;
+        const examples = commandMap.get(baseCommand) || [];
+        if (!examples.includes(trimmed)) examples.push(trimmed);
+        commandMap.set(baseCommand, examples);
+    });
+    vendorManualExampleCache.set(markdownFile, commandMap);
+    return commandMap;
+}
+
+function extractVendorCommandExamples(commandEntry) {
+    const baseCommand = String(commandEntry?.line || commandEntry?.command || '').trim().toUpperCase();
+    if (!baseCommand) return [];
+    const examples = new Set();
+    const sources = Array.isArray(commandEntry?.sources) ? commandEntry.sources : [];
+
+    sources.forEach((source) => {
+        const commandMap = readVendorManualExamples(source?.markdown);
+        const entries = commandMap.get(baseCommand) || [];
+        entries.forEach((entry) => {
+            if (String(entry).toUpperCase() === baseCommand) return;
+            examples.add(entry);
+        });
+    });
+
+    const rankExample = (example) => {
+        const text = String(example || '').trim();
+        if (!text) return 99;
+        if (/^.+="[^"]+"/.test(text) || /^.+=\d/.test(text)) return 0;
+        if (/^.+=(?!\?$).+/.test(text) && !/<[^>]+>/.test(text)) return 1;
+        if (/^.+=<[^>]+>/.test(text)) return 2;
+        if (/^.+=\?$/.test(text)) return 3;
+        if (/^.+\?$/.test(text)) return 4;
+        return 5;
+    };
+
+    return Array.from(examples)
+        .sort((left, right) => rankExample(left) - rankExample(right) || left.localeCompare(right))
+        .slice(0, 3);
+}
+
+function vendorCommandAllowsBare(commandEntry) {
+    const baseCommand = String(commandEntry?.line || commandEntry?.command || '').trim().toUpperCase();
+    if (!baseCommand) return false;
+    const sources = Array.isArray(commandEntry?.sources) ? commandEntry.sources : [];
+    return sources.some((source) => {
+        const lines = readVendorManualLines(source?.markdown);
+        return lines.some((line, index) => {
+            if (String(line || '').trim().toUpperCase() !== baseCommand) return false;
+            const lookahead = lines.slice(index + 1, index + 5)
+                .map((item) => String(item || '').trim().toUpperCase())
+                .filter(Boolean);
+            return lookahead.some((item) => item === 'OK' || item.startsWith(`+${baseCommand.slice(3)}:`));
+        });
+    });
+}
+
+function enrichVendorCommand(commandEntry) {
+    const syntaxExamples = extractVendorCommandExamples(commandEntry);
+    const allowsBare = vendorCommandAllowsBare(commandEntry);
+    const requiresInput = syntaxExamples.some((example) => {
+        const suffix = String(example).slice(String(commandEntry.line || commandEntry.command || '').trim().length).trim();
+        return suffix.startsWith('=') || suffix.startsWith('"');
+    }) && !allowsBare;
+    const requiresVariant = !allowsBare && syntaxExamples.length > 0;
+    return {
+        ...commandEntry,
+        syntaxExamples,
+        requiresInput,
+        allowsBare,
+        requiresVariant
+    };
+}
+
+const VENDOR_COMMANDS = Array.isArray(vendorCommandCatalog?.commands)
+    ? vendorCommandCatalog.commands
+        .filter((command) => command && command.line && Array.isArray(command.transports))
+        .map(enrichVendorCommand)
+    : [];
 
 function pushDoc(docs, title, absolutePath, group = 'Documents') {
     if (!absolutePath || !fs.existsSync(absolutePath)) return;

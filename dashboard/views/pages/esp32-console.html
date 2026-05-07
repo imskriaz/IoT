@@ -197,7 +197,12 @@ AT+CSQ</textarea>
                                 <span class="small fw-semibold" id="esp32CommandResultTitle">
                                     <i class="bi bi-clipboard-check me-1"></i>Result
                                 </span>
-                                <span class="badge text-bg-secondary" id="esp32CommandResultBadge">idle</span>
+                                <div class="d-flex align-items-center gap-2">
+                                    <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" id="esp32CommandResultCopyBtn" title="Copy result JSON" aria-label="Copy result JSON">
+                                        <i class="bi bi-copy"></i>
+                                    </button>
+                                    <span class="badge text-bg-secondary" id="esp32CommandResultBadge">idle</span>
+                                </div>
                             </div>
                             <div class="small command-result-summary" id="esp32CommandResultSummary">No result yet.</div>
                             <pre class="command-result-json mb-0" id="esp32CommandResultJson">{}</pre>
@@ -214,7 +219,12 @@ AT+CSQ</textarea>
         <div class="modal-content">
             <div class="modal-header py-2">
                 <h5 class="modal-title fs-6" id="esp32EventDetailTitle">Event details</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" id="esp32EventDetailCopyBtn" title="Copy detail JSON" aria-label="Copy detail JSON">
+                        <i class="bi bi-copy"></i>
+                    </button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
             </div>
             <div class="modal-body">
                 <dl class="row small mb-2" id="esp32EventDetailSummary"></dl>
@@ -280,7 +290,7 @@ AT+CSQ</textarea>
 .esp32-console-page .console-event {
     width: 100%;
     display: grid;
-    grid-template-columns: 72px 82px minmax(0, 1fr);
+    grid-template-columns: 72px 82px 74px minmax(0, 1fr);
     gap: 0.45rem;
     align-items: center;
     border: 0;
@@ -303,6 +313,36 @@ AT+CSQ</textarea>
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.esp32-console-page .event-level {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 58px;
+    padding: 0.08rem 0.35rem;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    line-height: 1.1;
+    color: #0f1419;
+    text-transform: uppercase;
+}
+
+.esp32-console-page .event-level-pass {
+    background: #75d487;
+}
+
+.esp32-console-page .event-level-fail {
+    background: #ff7676;
+}
+
+.esp32-console-page .event-level-processing {
+    background: #ffd666;
+}
+
+.esp32-console-page .event-level-input {
+    background: #78b7ff;
 }
 
 .esp32-console-page .event-message {

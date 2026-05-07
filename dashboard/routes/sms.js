@@ -774,8 +774,9 @@ router.post('/bulk-import', [
 });
 
 router.post('/sync', async (req, res) => {
+    let deviceId = '';
     try {
-        const deviceId = String(req.body?.deviceId || req.query?.deviceId || resolveDeviceId(req, DEFAULT_DEVICE_ID)).trim();
+        deviceId = String(req.body?.deviceId || req.query?.deviceId || resolveDeviceId(req, DEFAULT_DEVICE_ID)).trim();
         if (!deviceId) {
             return res.status(400).json({ success: false, message: 'No active device selected' });
         }
@@ -813,6 +814,18 @@ router.post('/sync', async (req, res) => {
         res.json({ success: true, message: 'Message pull requested' });
     } catch (error) {
         logger.error('POST /api/sms/sync error:', error);
+        if (deviceId) {
+            const payload = {
+                deviceId,
+                device_id: deviceId,
+                synced: 0,
+                requested: true,
+                error: error.message || 'Failed to request message pull',
+                timestamp: new Date().toISOString()
+            };
+            emitDeviceEvent(deviceId, 'sms:sync-failed', payload);
+            emitDeviceEvent(deviceId, 'sms:sync-completed', payload);
+        }
         res.status(500).json({ success: false, message: error.message || 'Failed to request message pull' });
     }
 });

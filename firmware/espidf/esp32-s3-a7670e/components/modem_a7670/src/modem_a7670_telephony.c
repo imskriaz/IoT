@@ -1,6 +1,7 @@
 #include "modem_a7670_internal.h"
 
 #include <ctype.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -1008,6 +1009,35 @@ static bool modem_a7670_concat_indexes_contain(const int *indexes, size_t count,
     return false;
 }
 
+static void modem_a7670_build_concat_ref(
+    char *buffer,
+    size_t buffer_len,
+    const int *indexes,
+    size_t index_count
+) {
+    uint32_t hash = 2166136261U;
+
+    if (!buffer || buffer_len == 0U) {
+        return;
+    }
+    buffer[0] = '\0';
+    if (!indexes || index_count == 0U) {
+        return;
+    }
+
+    for (size_t i = 0U; i < index_count; ++i) {
+        uint32_t value = (uint32_t)(indexes[i] >= 0 ? indexes[i] : 0);
+        hash ^= value & 0xFFU;
+        hash *= 16777619U;
+        hash ^= (value >> 8U) & 0xFFU;
+        hash *= 16777619U;
+    }
+    hash ^= (uint32_t)index_count;
+    hash *= 16777619U;
+
+    snprintf(buffer, buffer_len, "esp32_concat_%08" PRIx32, hash);
+}
+
 static esp_err_t modem_a7670_consume_concat_sms_indexes_locked(
     unified_sms_payload_t *out_payload,
     const int *indexes,
@@ -1045,6 +1075,12 @@ static esp_err_t modem_a7670_consume_concat_sms_indexes_locked(
             err = ESP_ERR_INVALID_SIZE;
             goto cleanup;
         }
+        modem_a7670_build_concat_ref(
+            out_payload->multipart_ref,
+            sizeof(out_payload->multipart_ref),
+            indexes,
+            index_count
+        );
         out_payload->multipart_part_index = 1U;
         out_payload->multipart_part_count = (uint16_t)index_count;
         out_payload->sim_slot = 0U;

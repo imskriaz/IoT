@@ -8,7 +8,7 @@
     const LOG_SOURCES = ['app', 'mqtt', 'error'];
     const LOG_LEVELS = ['', 'error', 'warn', 'info', 'debug'];
     const LOG_LIMITS = ['50', '100', '200', '500'];
-    const MANUAL_EVENT_SOURCES = ['send', 'response', 'console', 'serial', 'serial-tx', 'serial-rx', 'error', 'scenario', 'wait', 'validation'];
+    const MANUAL_EVENT_SOURCES = ['command', 'send', 'response', 'console', 'serial', 'serial-tx', 'serial-rx', 'error', 'scenario', 'wait', 'validation'];
     const CHAIN_SCENARIOS = [
         {
             key: 'custom',
@@ -141,6 +141,7 @@
         resultBadge: document.getElementById('esp32CommandResultBadge'),
         resultSummary: document.getElementById('esp32CommandResultSummary'),
         resultJson: document.getElementById('esp32CommandResultJson'),
+        resultCopy: document.getElementById('esp32CommandResultCopyBtn'),
         serialConnect: document.getElementById('esp32SerialConnectBtn'),
         serialBaud: document.getElementById('esp32SerialBaudSelect'),
         serialEnding: document.getElementById('esp32SerialLineEndingSelect'),
@@ -148,6 +149,7 @@
         detailTitle: document.getElementById('esp32EventDetailTitle'),
         detailSummary: document.getElementById('esp32EventDetailSummary'),
         detailJson: document.getElementById('esp32EventDetailJson'),
+        detailCopy: document.getElementById('esp32EventDetailCopyBtn'),
         page: document.querySelector('.esp32-console-page'),
         commandPanel: document.getElementById('esp32CommandPanel'),
         systemLogPanel: document.getElementById('esp32SystemLogPanel'),
@@ -169,6 +171,7 @@
     }
 
     async function init() {
+        resetLiveConsoleViews();
         attachEvents();
         attachSocketEvents();
         updateDeviceBadge();
@@ -189,11 +192,19 @@
         renderEvents();
     }
 
+    function resetLiveConsoleViews() {
+        const now = Date.now();
+        state.clearedViews.serial = now;
+        state.clearedViews.mqtt = now;
+    }
+
     function attachEvents() {
         elements.send?.addEventListener('click', sendSelected);
         elements.clear?.addEventListener('click', clearConsole);
         elements.export?.addEventListener('click', exportConsole);
         elements.format?.addEventListener('click', formatPayload);
+        elements.resultCopy?.addEventListener('click', () => copyTextBlock(elements.resultJson?.textContent || '{}', 'Result JSON copied.'));
+        elements.detailCopy?.addEventListener('click', () => copyTextBlock(elements.detailJson?.textContent || '{}', 'Detail JSON copied.'));
         document.querySelectorAll('[data-console-tab]').forEach((button) => {
             button.addEventListener('click', () => setConsoleTab(button.dataset.consoleTab || 'mqtt'));
         });
@@ -587,7 +598,7 @@
                 <dt>How to use</dt>
                 <dd>${escapeHtml(help.howToUse)}</dd>
                 <dt>Example</dt>
-                <dd>${help.exampleIsCode ? `<code>${escapeHtml(help.example)}</code>` : escapeHtml(help.example)}</dd>
+                <dd>${help.exampleIsCode ? `<pre class="mb-0"><code>${escapeHtml(help.example)}</code></pre>` : escapeHtml(help.example)}</dd>
                 ${supportLine}
             </dl>
         `;
@@ -612,41 +623,61 @@
                     task: 'Run USSD balance/menu code or cancel an active USSD session.',
                     parameter: 'Format: AT+CUSD=<n>,"<code>",<dcs>. n=1 starts or replies; n=2 cancels. code is *123# or a menu digit. dcs is 15 for this firmware.',
                     howToUse: 'Edit the Command line value, test from Serial first, then send through MQTT if the same line works.',
-                    example: 'AT+CUSD=1,"*123#",15',
+                    example: [
+                        'AT+CUSD=?              # test supported modes',
+                        'AT+CUSD?               # read current setting',
+                        'AT+CUSD=1,"*123#",15   # start USSD request',
+                        'AT+CUSD=1,"1",15       # reply to a USSD menu',
+                        'AT+CUSD=2              # cancel active session'
+                    ].join('\n'),
                     exampleIsCode: true
                 };
             }
+            const vendorExample = vendorExamples(option.source);
+            const needsInput = Boolean(option.source?.requiresInput);
+            const allowsBare = Boolean(option.source?.allowsBare);
+            const needsVariant = Boolean(option.source?.requiresVariant);
             return {
                 module: vendorModule(option),
                 task: option.note || 'Vendor AT command.',
-                parameter: 'Fill values after = if the vendor command form needs them. Keep quotes and comma order exactly.',
-                howToUse: 'Edit Command line when parameters are needed. Start with safe test/read form when available, then send the write form.',
-                example: 'Use the vendor write/read form for this command; do not assume the base command includes all parameters.',
-                exampleIsCode: false
+                parameter: needsInput
+                    ? 'This command needs parameters or a target value. Keep quotes and comma order exactly as the vendor form shows.'
+                    : (needsVariant
+                        ? 'This command does not use the bare base form. Use one of the documented query/test/example forms.'
+                        : (allowsBare ? 'This command supports the base form and parameterized forms.' : 'No parameter is required for the selected base command.')),
+                howToUse: needsInput
+                    ? 'Use the example form below as the starting point, replace the target values, then send.'
+                    : (needsVariant
+                        ? 'Start from the example form below and send that exact variant, instead of the bare command name.'
+                        : (allowsBare ? 'Send the base command directly, or use one of the example forms when you need a target value.' : 'Select the command and Send. Use Chain mode if it must be part of a larger scenario.'))),
+                example: vendorExample || String(option.command || 'AT').trim(),
+                exampleIsCode: true
             };
         }
         if (option?.type === 'command') {
+            const hasPayload = Object.keys(option.payload || {}).length > 0;
             return {
                 module: runtimeModule(option),
                 task: option.note || 'Dashboard-owned runtime action sent over MQTT.',
                 parameter: option.category === 'manual'
                     ? 'Line is sent through modem-at. For parameterized AT commands, edit Command line before sending.'
-                    : 'Payload JSON fields are the action inputs; Timeout controls how long MQTT waits for a response.',
+                    : (hasPayload ? 'Payload JSON fields are the action inputs; Timeout controls how long MQTT waits for a response.' : 'No parameter is required.'),
                 howToUse: option.category === 'manual'
                     ? 'Edit Command line if needed, validate, then Send.'
-                    : 'Use the payload shown below, change only needed values, then Send.',
-                example: Object.keys(option.payload || {}).length ? JSON.stringify(option.payload) : 'Send with the default empty payload.',
-                exampleIsCode: Object.keys(option.payload || {}).length > 0
+                    : (hasPayload ? 'Use the payload shown below, change only needed values, then Send.' : 'Select the action and Send.'),
+                example: hasPayload ? JSON.stringify(option.payload, null, 2) : `${option.label || option.command || 'Action'}: Send without payload.`,
+                exampleIsCode: hasPayload
             };
         }
         if (option?.type === 'test') {
+            const hasPayload = Object.keys(option.payload || {}).length > 0;
             return {
                 module: runtimeModule(option),
                 task: option.note || option.source?.description || 'Run a dashboard function/test.',
                 parameter: describeFunctionParameters(option.source),
                 howToUse: 'Review the Payload JSON defaults, fill any required values, then Run.',
-                example: Object.keys(option.payload || {}).length ? JSON.stringify(option.payload) : 'Run with empty payload.',
-                exampleIsCode: Object.keys(option.payload || {}).length > 0
+                example: hasPayload ? JSON.stringify(option.payload, null, 2) : 'Run with empty payload.',
+                exampleIsCode: hasPayload
             };
         }
         return {
@@ -670,6 +701,9 @@
         if (option?.type === 'vendor' && command === 'AT+CUSD') {
             return 'AT+CUSD=1,"*123#",15';
         }
+        if (option?.type === 'vendor' && option?.source?.requiresVariant) {
+            return firstVendorExample(option.source) || String(option?.command || '').trim();
+        }
         return String(option?.command || '').trim();
     }
 
@@ -683,6 +717,25 @@
         if (group.includes('audio')) return 'Audio';
         if (group.includes('ftp') || group.includes('http') || group.includes('mqtt') || group.includes('ssl') || group.includes('tcp')) return 'Modem data';
         return 'Modem';
+    }
+
+    function findVendorCommandByLine(command) {
+        const normalized = String(command || '').trim().toUpperCase();
+        if (!normalized) return null;
+        return state.vendorCommands.find((entry) => {
+            const base = String(entry?.line || entry?.command || '').trim().toUpperCase();
+            return base === normalized;
+        }) || null;
+    }
+
+    function firstVendorExample(commandEntry) {
+        const examples = Array.isArray(commandEntry?.syntaxExamples) ? commandEntry.syntaxExamples : [];
+        return String(examples[0] || '').trim();
+    }
+
+    function vendorExamples(commandEntry) {
+        const examples = Array.isArray(commandEntry?.syntaxExamples) ? commandEntry.syntaxExamples : [];
+        return examples.map((example) => String(example || '').trim()).filter(Boolean).join('\n');
     }
 
     function runtimeModule(option) {
@@ -869,9 +922,14 @@
 
     function commandNeedsLineInput(option) {
         if (!option) return false;
-        if (option.type === 'vendor') return true;
+        if (option.type === 'vendor') return vendorCommandNeedsParameters(option);
         if (option.type === 'command') return option.category === 'manual' || option.raw === true;
         return false;
+    }
+
+    function vendorCommandNeedsParameters(option) {
+        const command = String(option?.command || option?.source?.command || '').toUpperCase();
+        return command === 'AT+CUSD' || option?.source?.requiresInput === true;
     }
 
     function normalizeMode(mode) {
@@ -996,6 +1054,22 @@
             return errors;
         }
         if (looksLikeRawModemLine(text)) {
+            const vendorCommand = findVendorCommandByLine(text);
+            if (vendorCommand?.requiresVariant) {
+                const example = firstVendorExample(vendorCommand);
+                errors.push({
+                    line: lineNumber,
+                    command: text,
+                    message: example
+                        ? (vendorCommand.requiresInput
+                            ? `This command needs parameters or a target. Example: ${example}`
+                            : `This command needs a non-bare command form. Example: ${example}`)
+                        : (vendorCommand.requiresInput
+                            ? 'This command needs parameters or a target value before sending.'
+                            : 'This command needs a query/test/example form instead of the bare base command.')
+                });
+                return errors;
+            }
             if (text.length > 96) {
                 errors.push({ line: lineNumber, command: text, message: 'Raw modem line must be 96 characters or less.' });
             }
@@ -1109,9 +1183,9 @@
                 level: waitForResponse ? 'info' : 'primary',
                 data: requestData
             });
-            appendLine('send', raw ? `${command} -> modem-at` : command, 'primary', {
+            const commandEntry = appendLine('command', raw ? `${command} -> modem-at` : command, 'warning', {
                 ...requestData
-            });
+            }, { persist: false, status: waitForResponse ? 'waiting' : 'published' });
             try {
                 const response = await fetch('/api/esp32-console/command', {
                     method: 'POST',
@@ -1134,7 +1208,13 @@
                 const resultText = summarizeCommandResult(command, data);
                 const resultLevel = commandResultLevel(data);
                 const resultStatus = commandResultStatus(data, resultLevel);
-                appendLine('response', resultText, resultLevel, data);
+                updateLine(commandEntry, {
+                    source: 'command',
+                    message: resultText,
+                    level: resultLevel,
+                    status: resultStatus,
+                    data
+                });
                 renderCommandResult({
                     transport: 'mqtt',
                     status: resultStatus,
@@ -1144,7 +1224,13 @@
                 });
                 if (elements.lastRun) elements.lastRun.textContent = `${command} / ${resultText}`;
             } catch (error) {
-                appendLine('error', `${command}: ${error.message}`, 'danger', { command, message: error.message });
+                updateLine(commandEntry, {
+                    source: 'command',
+                    message: `${command}: ${error.message}`,
+                    level: 'danger',
+                    status: 'error',
+                    data: { command, message: error.message }
+                });
                 renderCommandResult({
                     transport: 'mqtt',
                     status: 'error',
@@ -1452,7 +1538,7 @@
     }
 
     function appendLine(source, message, level, data, options = {}) {
-        if (!elements.output) return;
+        if (!elements.output) return null;
         const scope = options.scope || (state.activeTab !== 'system' && MANUAL_EVENT_SOURCES.includes(source) ? 'manual' : 'system');
         const entry = {
             timestamp: new Date().toISOString(),
@@ -1463,6 +1549,7 @@
             source,
             message,
             level: level || 'info',
+            status: options.status || '',
             data: data === undefined ? null : data
         };
         state.entries.push(entry);
@@ -1470,6 +1557,18 @@
         if (scope === 'manual') updateSystemCount('manual', visibleManualLogRows().length);
         renderEvents();
         if (options.persist !== false) persistEvent(entry).catch(() => {});
+        return entry;
+    }
+
+    function updateLine(entry, updates = {}, options = {}) {
+        if (!entry) return null;
+        Object.assign(entry, {
+            ...updates,
+            timestamp: updates.timestamp || new Date().toISOString()
+        });
+        renderEvents();
+        if (options.persist !== false) persistEvent(entry).catch(() => {});
+        return entry;
     }
 
     async function persistEvent(entry) {
@@ -1505,9 +1604,10 @@
         }
 
         elements.output.innerHTML = rows.map((entry) => `
-            <button type="button" class="console-event ${levelClass(entry.level)}" data-entry-index="${entry.__entryIndex ?? ''}" data-system-index="${entry.__systemIndex ?? ''}">
+            <button type="button" class="console-event" data-entry-index="${entry.__entryIndex ?? ''}" data-system-index="${entry.__systemIndex ?? ''}">
                 <span class="event-time">${escapeHtml(formatEventTime(entry.timestamp))}</span>
                 <span class="event-source">${escapeHtml(entry.source)}</span>
+                <span class="event-level ${escapeAttr(entryTagClass(entry))}">${escapeHtml(entryTagLabel(entry))}</span>
                 <span class="event-message">${escapeHtml(entry.message)}</span>
             </button>
         `).join('');
@@ -1560,13 +1660,16 @@
     function showEventDetails(index) {
         const entry = state.entries[index];
         if (!entry) return;
+        const level = effectiveEntryLevel(entry);
+        const status = effectiveEntryStatus(entry);
         if (elements.detailTitle) elements.detailTitle.textContent = `${entry.source} / ${entry.message}`;
         if (elements.detailSummary) {
             elements.detailSummary.innerHTML = `
                 <dt class="col-sm-3">Time</dt><dd class="col-sm-9">${escapeHtml(entry.timestamp)}</dd>
                 <dt class="col-sm-3">Device</dt><dd class="col-sm-9">${escapeHtml(entry.deviceId || '--')} ${escapeHtml(entry.deviceType || '')}</dd>
                 <dt class="col-sm-3">Source</dt><dd class="col-sm-9">${escapeHtml(entry.source)}</dd>
-                <dt class="col-sm-3">Level</dt><dd class="col-sm-9">${escapeHtml(entry.level || 'info')}</dd>
+                <dt class="col-sm-3">Status</dt><dd class="col-sm-9">${escapeHtml(status || '--')}</dd>
+                <dt class="col-sm-3">Level</dt><dd class="col-sm-9">${escapeHtml(level || 'info')}</dd>
                 <dt class="col-sm-3">Message</dt><dd class="col-sm-9">${escapeHtml(entry.message)}</dd>
             `;
         }
@@ -1601,13 +1704,31 @@
         const summary = {
             timestamp: entry?.timestamp || '',
             source: entry?.source || '',
-            level: entry?.level || 'info',
+            status: effectiveEntryStatus(entry),
+            level: effectiveEntryLevel(entry),
             tab: displayTabName(entry?.consoleTab || state.activeTab),
             scope: entry?.scope || ''
         };
         return chain.length
             ? { summary, chain, parsed }
             : { summary, parsed };
+    }
+
+    function effectiveEntryLevel(entry) {
+        if (!entry || typeof entry !== 'object') return 'info';
+        if (entry.scope === 'manual' && entry.data && typeof entry.data === 'object') {
+            return commandResultLevel(entry.data);
+        }
+        return String(entry.level || 'info');
+    }
+
+    function effectiveEntryStatus(entry) {
+        if (!entry || typeof entry !== 'object') return '';
+        if (entry.status) return String(entry.status);
+        if (entry.scope === 'manual' && entry.data && typeof entry.data === 'object') {
+            return commandResultStatus(entry.data, effectiveEntryLevel(entry));
+        }
+        return '';
     }
 
     async function clearConsole() {
@@ -1677,11 +1798,16 @@
     function normalizeConsoleEvent(entry) {
         const event = entry && typeof entry === 'object' ? entry : {};
         const source = String(event.source || 'console');
-        return {
+        const normalized = {
             ...event,
             consoleTab: event.consoleTab || (source.startsWith('serial') ? 'serial' : (MANUAL_EVENT_SOURCES.includes(source) ? 'mqtt' : 'system')),
             scope: event.scope || (MANUAL_EVENT_SOURCES.includes(source) ? 'manual' : 'system')
         };
+        if (normalized.scope === 'manual' && normalized.data && typeof normalized.data === 'object') {
+            normalized.level = effectiveEntryLevel(normalized);
+            normalized.status = effectiveEntryStatus(normalized);
+        }
+        return normalized;
     }
 
     function parseNestedJson(value, depth = 0) {
@@ -1847,15 +1973,40 @@
 
     function commandResultLevel(payload) {
         const data = parseNestedJson(payload || {});
-        const statusText = JSON.stringify([
+        const result = data.result && typeof data.result === 'object' ? data.result : {};
+        const nestedResult = data.data?.result && typeof data.data.result === 'object' ? data.data.result : {};
+        const signals = [
             data.status,
             data.message,
-            data.result,
+            data.detail,
+            data.error,
             data.data?.status,
-            data.data?.result
-        ]).toLowerCase();
-        if (data.success === false || /fail|error|timeout|denied|invalid/.test(statusText)) return 'danger';
+            data.data?.message,
+            data.data?.detail,
+            data.data?.error,
+            result.status,
+            result.result,
+            result.message,
+            result.detail,
+            result.error,
+            nestedResult.status,
+            nestedResult.result,
+            nestedResult.message,
+            nestedResult.detail,
+            nestedResult.error
+        ]
+            .map((value) => String(value || '').trim().toLowerCase())
+            .filter(Boolean);
+        const statusText = signals.join(' ');
+        const successFlags = [
+            data.success,
+            data.data?.success,
+            result.success,
+            nestedResult.success
+        ].filter((value) => typeof value === 'boolean');
+        if (successFlags.includes(false) || /fail|timeout|denied|invalid/.test(statusText)) return 'danger';
         if (/warn|skip|partial/.test(statusText)) return 'warning';
+        if (/success|completed|ok|passed|done/.test(statusText)) return 'success';
         return 'success';
     }
 
@@ -1878,15 +2029,74 @@
         return fallbackLevel === 'danger' ? 'error' : (fallbackLevel === 'warning' ? 'warning' : 'ok');
     }
 
-    function levelClass(level) {
-        switch (level) {
-            case 'success': return 'text-success';
-            case 'danger': return 'text-danger';
-            case 'warning': return 'text-warning';
-            case 'primary': return 'text-info';
-            case 'info': return 'text-info';
-            default: return 'text-light';
+    function normalizedLevelTag(level) {
+        switch (String(level || '').toLowerCase()) {
+            case 'success':
+            case 'pass':
+            case 'ok':
+            case 'completed':
+                return 'pass';
+            case 'danger':
+            case 'error':
+            case 'fail':
+            case 'failed':
+            case 'invalid':
+                return 'fail';
+            case 'primary':
+            case 'input':
+            case 'published':
+                return 'input';
+            case 'warning':
+            case 'processing':
+            case 'pending':
+            case 'info':
+            case 'waiting':
+                return 'processing';
+            default:
+                return 'processing';
         }
+    }
+
+    function logLevelTag(level) {
+        switch (String(level || '').toLowerCase()) {
+            case 'error':
+            case 'danger':
+            case 'fail':
+            case 'failed':
+                return 'fail';
+            case 'warn':
+            case 'warning':
+                return 'processing';
+            case 'debug':
+                return 'input';
+            case 'success':
+                return 'pass';
+            case 'info':
+            default:
+                return 'input';
+        }
+    }
+
+    function levelTagClass(level) {
+        return `event-level-${normalizedLevelTag(level)}`;
+    }
+
+    function levelTagLabel(level) {
+        return normalizedLevelTag(level);
+    }
+
+    function entryTagClass(entry) {
+        if (entry?.scope === 'manual') {
+            return `event-level-${normalizedLevelTag(entry.status || entry.level)}`;
+        }
+        return `event-level-${logLevelTag(entry?.level)}`;
+    }
+
+    function entryTagLabel(entry) {
+        if (entry?.scope === 'manual') {
+            return levelTagLabel(entry.status || entry.level);
+        }
+        return String(entry?.level || 'info').toUpperCase();
     }
 
     function getCurrentDeviceId() {
@@ -1924,5 +2134,31 @@
 
     function escapeAttr(value) {
         return escapeHtml(value);
+    }
+
+    async function copyTextBlock(text, successMessage) {
+        const value = String(text || '').trim();
+        if (!value) {
+            if (window.showToast) window.showToast('Nothing to copy.', 'warning');
+            return;
+        }
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(value);
+            } else {
+                const area = document.createElement('textarea');
+                area.value = value;
+                area.setAttribute('readonly', 'readonly');
+                area.style.position = 'fixed';
+                area.style.opacity = '0';
+                document.body.appendChild(area);
+                area.select();
+                document.execCommand('copy');
+                document.body.removeChild(area);
+            }
+            if (window.showToast) window.showToast(successMessage || 'Copied.', 'success');
+        } catch (error) {
+            if (window.showToast) window.showToast(error.message || 'Copy failed.', 'danger');
+        }
     }
 })();

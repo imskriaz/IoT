@@ -151,6 +151,12 @@ function mergeMultipartThreadMessages(messages = []) {
         const groupKey = cleanText(start.multipart_group_key);
 
         if (!groupKey) {
+            const fallbackGroup = collectFallbackMultipartGroup(sorted, index);
+            if (fallbackGroup.length > 1) {
+                merged.push(combineMultipartGroup(fallbackGroup));
+                index += fallbackGroup.length;
+                continue;
+            }
             merged.push(start);
             index += 1;
             continue;
@@ -168,6 +174,53 @@ function mergeMultipartThreadMessages(messages = []) {
     }
 
     return merged;
+}
+
+function collectFallbackMultipartGroup(sorted, startIndex) {
+    const group = [sorted[startIndex]];
+    let cursor = startIndex + 1;
+
+    while (cursor < sorted.length && isLikelyFallbackMultipartPair(group[group.length - 1], sorted[cursor])) {
+        group.push(sorted[cursor]);
+        cursor += 1;
+    }
+
+    return group;
+}
+
+function isLikelyFallbackMultipartPair(left, right) {
+    if (!left || !right) return false;
+    if (cleanText(left.multipart_group_key) || cleanText(right.multipart_group_key)) return false;
+    if (parsePositiveInt(left.multipart_part_count) || parsePositiveInt(right.multipart_part_count)) return false;
+    if (cleanText(left.type).toLowerCase() === 'outgoing' || cleanText(right.type).toLowerCase() === 'outgoing') return false;
+
+    const leftFrom = cleanText(left.from_number || left.from || left.sender).toLowerCase();
+    const rightFrom = cleanText(right.from_number || right.from || right.sender).toLowerCase();
+    const leftTo = cleanText(left.to_number || left.to).toLowerCase();
+    const rightTo = cleanText(right.to_number || right.to).toLowerCase();
+    if (leftFrom !== rightFrom || leftTo !== rightTo) return false;
+
+    const leftDevice = cleanText(left.device_id || left.deviceId).toLowerCase();
+    const rightDevice = cleanText(right.device_id || right.deviceId).toLowerCase();
+    if (leftDevice && rightDevice && leftDevice !== rightDevice) return false;
+
+    const leftTime = Date.parse(left.timestamp || '');
+    const rightTime = Date.parse(right.timestamp || '');
+    if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) return false;
+    const deltaMs = rightTime - leftTime;
+    if (deltaMs < 0 || deltaMs > 10000) return false;
+
+    const text = String(left.message || left.text || '');
+    if (!text.trim()) return false;
+    return textLength(text) >= likelySmsSegmentBoundary(text);
+}
+
+function textLength(value) {
+    return Array.from(String(value || '')).length;
+}
+
+function likelySmsSegmentBoundary(text) {
+    return /[^\u0000-\u007f]/.test(String(text || '')) ? 60 : 145;
 }
 
 function combineMultipartGroup(group) {

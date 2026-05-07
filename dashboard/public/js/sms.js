@@ -9,6 +9,7 @@
     let smsSyncStartedHandler = null;
     let smsSyncCompletedHandler = null;
     let smsSyncHideTimer = null;
+    let smsSyncWatchdogTimer = null;
     let refreshTimer = null;
     let threadRefreshTimer = null;
     let smsRefreshToken = 0;
@@ -125,6 +126,10 @@
             clearTimeout(smsSyncHideTimer);
             smsSyncHideTimer = null;
         }
+        if (smsSyncWatchdogTimer) {
+            clearTimeout(smsSyncWatchdogTimer);
+            smsSyncWatchdogTimer = null;
+        }
         if (visible) {
             const total = Number(payload.total || 0);
             overlay.classList.remove('d-none');
@@ -133,17 +138,29 @@
                     ? `Syncing ${total} message${total === 1 ? '' : 's'} from the phone. Dashboard updates will resume after completion.`
                     : 'Please wait while messages are copied.';
             }
+            smsSyncWatchdogTimer = setTimeout(function () {
+                setSmsSyncOverlay(false, {
+                    timedOut: true,
+                    message: 'SMS sync is taking too long. Refreshing the dashboard now.'
+                });
+                scheduleSmsRefresh(80);
+                scheduleThreadRefresh(80);
+            }, 120000);
             return;
         }
         if (text) {
             const synced = Number(payload.synced || 0);
-            text.textContent = synced > 0
+            text.textContent = payload?.message
+                ? String(payload.message)
+                : payload?.error
+                    ? `SMS sync stopped: ${String(payload.error)}`
+                    : synced > 0
                 ? `Sync complete. ${synced} message${synced === 1 ? '' : 's'} copied.`
                 : 'Sync complete. Refreshing dashboard.';
         }
         smsSyncHideTimer = setTimeout(function () {
             overlay.classList.add('d-none');
-        }, 700);
+        }, payload?.error || payload?.timedOut ? 2500 : 700);
     }
 
     async function pullDeviceMessages(button) {
@@ -961,13 +978,16 @@
         });
         window.socket.on('sms:sync-started', smsSyncStartedHandler);
         window.socket.on('sms:sync-completed', smsSyncCompletedHandler);
+        window.socket.on('sms:sync-failed', smsSyncCompletedHandler);
         window.addEventListener('beforeunload', function cleanupLiveSms() {
             if (refreshTimer) clearTimeout(refreshTimer);
+            if (smsSyncWatchdogTimer) clearTimeout(smsSyncWatchdogTimer);
             Object.entries(liveSmsHandlers).forEach(function (entry) {
                 window.socket?.off?.(entry[0], entry[1]);
             });
             window.socket?.off?.('sms:sync-started', smsSyncStartedHandler);
             window.socket?.off?.('sms:sync-completed', smsSyncCompletedHandler);
+            window.socket?.off?.('sms:sync-failed', smsSyncCompletedHandler);
             liveSmsHandlers = {};
             window.removeEventListener('beforeunload', cleanupLiveSms);
         });

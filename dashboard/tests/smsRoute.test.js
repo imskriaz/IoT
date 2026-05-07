@@ -156,6 +156,44 @@ describe('sms route queue-first delivery', () => {
         }));
     });
 
+    test('pull messages emits a closing sync event when device sync fails', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+        global.mqttService.publishCommand.mockRejectedValueOnce(new Error('sync timed out'));
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/sync')
+            .send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(500);
+        expect(res.body.success).toBe(false);
+        expectDeviceEvent('device-1', 'sms:sync-started', {
+            deviceId: 'device-1',
+            total: 0,
+            requested: true
+        });
+        expect(roomEmit).toHaveBeenCalledWith('sms:sync-failed', expect.objectContaining({
+            deviceId: 'device-1',
+            device_id: 'device-1',
+            synced: 0,
+            requested: true,
+            error: 'sync timed out'
+        }));
+        expect(roomEmit).toHaveBeenCalledWith('sms:sync-completed', expect.objectContaining({
+            deviceId: 'device-1',
+            device_id: 'device-1',
+            synced: 0,
+            requested: true,
+            error: 'sync timed out'
+        }));
+    });
+
     test('accepts multipart SMS under the device limit and queues dashboard-built PDU parts', async () => {
         const db = {
             run: jest.fn(async (sql) => {
@@ -923,6 +961,98 @@ describe('sms route queue-first delivery', () => {
             merged_sms_count: 2,
             merged_sms_ids: [347, 348],
             message: '\u09b8\u09aa\u09cd\u09a4\u09be\u09b9 \u0995\u09bf\u0982\u09ac\u09be \u09ae\u09be\u09b8\u09c7\u09b0- \u09b8\u09c1\u09aa\u09be\u09b0 \u0985\u09ab\u09be\u09b0 \u09b0\u09ac\u09bf\'\u09a4\u09c7\u0987! \u0986\u099c \u09f3\u09ef\u09eb-\u09eb\u099c\u09bf\u09ac\u09bf-\u09ed\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ee\u09e7#, \u09f3\u09e8\u09eb\u09ec-\u09e8\u09e6\u099c\u09bf\u09ac\u09bf+\u09e7\u09eb\u09e6\u09ae\u09bf\u09a8\u09bf\u099f-\u09e9\u09e6\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09ec#; \u09f3\u09e8\u09ee\u09ea-\u09e8\u09eb\u099c\u09bf\u09ac\u09bf-\u09e9\u09e6\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09e7#'
+        }));
+    });
+
+    test('thread view merges close Android multipart fragments when metadata is missing', async () => {
+        const rows = [
+            {
+                id: 352,
+                device_id: '7hd7g-xkdvx7-kv753n',
+                from_number: '2<2?<9>112693<<6',
+                to_number: null,
+                message: '\u09aa\u09c7\u09a4\u09c7 \u09a1\u09be\u09df\u09be\u09b2 \u09ac\u09be \u09ad\u09bf\u099c\u09bf\u099f https://cutt.ly/myRobiOffer',
+                timestamp: '2026-05-07T10:03:03.405Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 56,
+                source: 'android-mqtt',
+                error: null,
+                external_id: null,
+                multipart_ref: null,
+                multipart_part_index: null,
+                multipart_part_count: null,
+                multipart_group_key: null,
+                sent_by: null
+            },
+            {
+                id: 351,
+                device_id: '7hd7g-xkdvx7-kv753n',
+                from_number: '2<2?<9>112693<<6',
+                to_number: null,
+                message: '\u09bf\u09ac\u09bf+\u09e9\u09e6\u09ae\u09bf\u09a8\u09bf\u099f-\u09e9\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09e6# \u0993 \u09f3\u09e7\u09ec\u09e7-\u09e7\u09e6\u099c\u09bf\u09ac\u09bf+\u09e7\u09e6\u09e6\u09ae\u09bf\u09a8\u09bf\u099f-\u09e9\u09e6\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09eb#; ',
+                timestamp: '2026-05-07T10:03:02.396Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 56,
+                source: 'android-mqtt',
+                error: null,
+                external_id: null,
+                multipart_ref: null,
+                multipart_part_index: null,
+                multipart_part_count: null,
+                multipart_group_key: null,
+                sent_by: null
+            },
+            {
+                id: 350,
+                device_id: '7hd7g-xkdvx7-kv753n',
+                from_number: '2<2?<9>112693<<6',
+                to_number: null,
+                message: '\u09b0\u09ac\u09bf \u09ae\u09be\u09a8\u09c7\u0987 \u09b8\u09c1\u09aa\u09be\u09b0 \u0985\u09ab\u09be\u09b0! \u0986\u099c \u09f3\u09e8\u09ee-\u09e8\u099c\u09bf\u09ac\u09bf-\u09ee \u0998\u09a8\u09cd\u099f\u09be (\u09e7\u09ac\u09be\u09b0) *\u09ea\u09e7\u09e8*\u09ef\u09ef\u09e7#; \u09f3\u09ec\u09ed-\u09ea\u099c',
+                timestamp: '2026-05-07T10:03:01.276Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 56,
+                source: 'android-mqtt',
+                error: null,
+                external_id: null,
+                multipart_ref: null,
+                multipart_part_index: null,
+                multipart_part_count: null,
+                multipart_group_key: null,
+                sent_by: null
+            }
+        ];
+
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue({ primary_number: '+880324828386241', title: 'Robi' }),
+            all: jest.fn().mockResolvedValue(rows)
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/thread?deviceId=7hd7g-xkdvx7-kv753n&conversationId=56&number=%2B880324828386241&limit=20');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.meta.count).toBe(1);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            id: 350,
+            display_from: 'Robi',
+            merged_multipart: true,
+            merged_sms_count: 3,
+            merged_sms_ids: [350, 351, 352],
+            message: expect.stringContaining('https://cutt.ly/myRobiOffer')
         }));
     });
 
