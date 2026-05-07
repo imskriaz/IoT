@@ -110,6 +110,18 @@ describe('Settings routes', () => {
         jest.restoreAllMocks();
     });
 
+    test('MQTT test clients use isolated client IDs so they do not kick the live dashboard client offline', () => {
+        const settingsRoute = fs.readFileSync(path.join(__dirname, '..', 'routes', 'settings.js'), 'utf8');
+        const mqttRoute = fs.readFileSync(path.join(__dirname, '..', 'routes', 'mqtt.js'), 'utf8');
+
+        expect(settingsRoute).toContain('function buildIsolatedMqttTestClientId(clientId)');
+        expect(settingsRoute).toContain('clientId: buildIsolatedMqttTestClientId(clientId),');
+        expect(settingsRoute).not.toContain("clientId: clientId || process.env.MQTT_CLIENT_ID || `test_${Date.now()}");
+        expect(mqttRoute).toContain('function buildIsolatedMqttTestClientId(clientId)');
+        expect(mqttRoute).toContain('clientId: buildIsolatedMqttTestClientId(clientId),');
+        expect(mqttRoute).not.toContain("clientId: clientId || process.env.MQTT_CLIENT_ID || `test_${Date.now()}");
+    });
+
     test('GET /api/settings returns dashboard and MQTT runtime fields used by the page', async () => {
         process.env.MQTT_HOST = 'broker.example.com';
         process.env.MQTT_PORT = '8883';

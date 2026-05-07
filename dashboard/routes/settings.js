@@ -28,6 +28,16 @@ function isValidTimezone(value) {
 const ENV_PATH = path.join(__dirname, '../.env');
 const MQTT_PROTOCOLS = new Set(['mqtt', 'mqtts', 'ws', 'wss']);
 
+function buildIsolatedMqttTestClientId(clientId) {
+    const base = String(clientId || process.env.MQTT_CLIENT_ID || 'dashboard').trim()
+        .replace(/[^a-zA-Z0-9_-]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 32) || 'dashboard';
+    const suffix = `test-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    return `${base}-${suffix}`.slice(0, 64);
+}
+
 function parseBooleanEnv(value, fallback = false) {
     if (value === undefined || value === null || value === '') return fallback;
     return String(value).trim().toLowerCase() === 'true';
@@ -428,7 +438,7 @@ router.post('/test/mqtt', async (req, res) => {
             port: parseInt(port),
             username,
             password: password || process.env.MQTT_PASSWORD,
-            clientId: clientId || process.env.MQTT_CLIENT_ID || `test_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+            clientId: buildIsolatedMqttTestClientId(clientId),
             connectTimeout: 10000,
             reconnectPeriod: 0,
             rejectUnauthorized: rejectUnauthorized === undefined

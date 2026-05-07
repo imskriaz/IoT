@@ -118,10 +118,12 @@ static uint16_t automation_bridge_command_priority(unified_action_command_t comm
         case UNIFIED_ACTION_CMD_MOBILE_APN:
         case UNIFIED_ACTION_CMD_GPIO_WRITE:
         case UNIFIED_ACTION_CMD_GPIO_PULSE:
+        case UNIFIED_ACTION_CMD_GPIO_STATUS:
         case UNIFIED_ACTION_CMD_SENSOR_READ:
             return 40U;
         case UNIFIED_ACTION_CMD_CONFIG_SET:
         case UNIFIED_ACTION_CMD_ROUTING_CONFIGURE:
+        case UNIFIED_ACTION_CMD_STORAGE_INFO:
         case UNIFIED_ACTION_CMD_FILE_LIST:
         case UNIFIED_ACTION_CMD_FILE_READ_META:
         case UNIFIED_ACTION_CMD_FILE_DELETE:
@@ -136,6 +138,7 @@ static uint16_t automation_bridge_command_priority(unified_action_command_t comm
         case UNIFIED_ACTION_CMD_CARD_READ:
         case UNIFIED_ACTION_CMD_CARD_WRITE:
             return 80U;
+        case UNIFIED_ACTION_CMD_RESTART_MODEM:
         case UNIFIED_ACTION_CMD_REBOOT_DEVICE:
             return 120U;
         case UNIFIED_ACTION_CMD_GET_STATUS:
@@ -355,6 +358,59 @@ static const char *automation_bridge_command_name_from_topic(
     return topic_suffix;
 }
 
+typedef struct {
+    const char *name;
+    unified_action_command_t command;
+} automation_bridge_command_alias_t;
+
+static const automation_bridge_command_alias_t s_command_aliases[] = {
+    {"config_set", UNIFIED_ACTION_CMD_CONFIG_SET},
+    {"wifi_connect", UNIFIED_ACTION_CMD_WIFI_CONNECT},
+    {"wifi_reconnect", UNIFIED_ACTION_CMD_WIFI_RECONNECT},
+    {"wifi_toggle", UNIFIED_ACTION_CMD_WIFI_TOGGLE},
+    {"wifi_disconnect", UNIFIED_ACTION_CMD_WIFI_DISCONNECT},
+    {"wifi_scan", UNIFIED_ACTION_CMD_WIFI_SCAN},
+    {"mobile_toggle", UNIFIED_ACTION_CMD_MOBILE_TOGGLE},
+    {"mobile_apn", UNIFIED_ACTION_CMD_MOBILE_APN},
+    {"routing_configure", UNIFIED_ACTION_CMD_ROUTING_CONFIGURE},
+    {"status_watch", UNIFIED_ACTION_CMD_STATUS_WATCH},
+    {"get_sms_history", UNIFIED_ACTION_CMD_GET_SMS_HISTORY},
+    {"sync_sms", UNIFIED_ACTION_CMD_GET_SMS_HISTORY},
+    {"pull_sms", UNIFIED_ACTION_CMD_GET_SMS_HISTORY},
+    {"pull_messages", UNIFIED_ACTION_CMD_GET_SMS_HISTORY},
+    {"get_status", UNIFIED_ACTION_CMD_GET_STATUS},
+    {"ota_update", UNIFIED_ACTION_CMD_OTA_UPDATE},
+    {"storage_info", UNIFIED_ACTION_CMD_STORAGE_INFO},
+    {"modem_at", UNIFIED_ACTION_CMD_MODEM_AT},
+    {"raw_at", UNIFIED_ACTION_CMD_MODEM_AT},
+    {"send_sms", UNIFIED_ACTION_CMD_SEND_SMS},
+    {"send_sms_multipart", UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART},
+    {"send_ussd", UNIFIED_ACTION_CMD_SEND_USSD},
+    {"cancel_ussd", UNIFIED_ACTION_CMD_CANCEL_USSD},
+    {"dial_number", UNIFIED_ACTION_CMD_DIAL_NUMBER},
+    {"hangup_call", UNIFIED_ACTION_CMD_HANGUP_CALL},
+    {"reboot_device", UNIFIED_ACTION_CMD_REBOOT_DEVICE},
+    {"restart_modem", UNIFIED_ACTION_CMD_RESTART_MODEM},
+    {"gpio_status", UNIFIED_ACTION_CMD_GPIO_STATUS},
+    {"gpio_read", UNIFIED_ACTION_CMD_GPIO_STATUS},
+    {"gpio_write", UNIFIED_ACTION_CMD_GPIO_WRITE},
+    {"gpio_pulse", UNIFIED_ACTION_CMD_GPIO_PULSE},
+    {"sensor_read", UNIFIED_ACTION_CMD_SENSOR_READ},
+    {"file_list", UNIFIED_ACTION_CMD_FILE_LIST},
+    {"file_read_meta", UNIFIED_ACTION_CMD_FILE_READ_META},
+    {"file_delete", UNIFIED_ACTION_CMD_FILE_DELETE},
+    {"file_export", UNIFIED_ACTION_CMD_FILE_EXPORT},
+    {"start_camera", UNIFIED_ACTION_CMD_START_CAMERA},
+    {"stop_camera", UNIFIED_ACTION_CMD_STOP_CAMERA},
+    {"take_snapshot", UNIFIED_ACTION_CMD_TAKE_SNAPSHOT},
+    {"start_stream", UNIFIED_ACTION_CMD_START_STREAM},
+    {"stop_stream", UNIFIED_ACTION_CMD_STOP_STREAM},
+    {"card_scan_start", UNIFIED_ACTION_CMD_CARD_SCAN_START},
+    {"card_scan_stop", UNIFIED_ACTION_CMD_CARD_SCAN_STOP},
+    {"card_read", UNIFIED_ACTION_CMD_CARD_READ},
+    {"card_write", UNIFIED_ACTION_CMD_CARD_WRITE},
+};
+
 static unified_action_command_t automation_bridge_parse_command_name(const char *command_name) {
     char normalized[UNIFIED_TEXT_MEDIUM_LEN] = {0};
     size_t index = 0U;
@@ -369,120 +425,10 @@ static unified_action_command_t automation_bridge_parse_command_name(const char 
         }
     }
 
-    if (strcmp(normalized, "config_set") == 0) {
-        return UNIFIED_ACTION_CMD_CONFIG_SET;
-    }
-    if (strcmp(normalized, "wifi_connect") == 0) {
-        return UNIFIED_ACTION_CMD_WIFI_CONNECT;
-    }
-    if (strcmp(normalized, "wifi_reconnect") == 0) {
-        return UNIFIED_ACTION_CMD_WIFI_RECONNECT;
-    }
-    if (strcmp(normalized, "wifi_toggle") == 0) {
-        return UNIFIED_ACTION_CMD_WIFI_TOGGLE;
-    }
-    if (strcmp(normalized, "wifi_disconnect") == 0) {
-        return UNIFIED_ACTION_CMD_WIFI_DISCONNECT;
-    }
-    if (strcmp(normalized, "wifi_scan") == 0) {
-        return UNIFIED_ACTION_CMD_WIFI_SCAN;
-    }
-    if (strcmp(normalized, "mobile_toggle") == 0) {
-        return UNIFIED_ACTION_CMD_MOBILE_TOGGLE;
-    }
-    if (strcmp(normalized, "mobile_apn") == 0) {
-        return UNIFIED_ACTION_CMD_MOBILE_APN;
-    }
-    if (strcmp(normalized, "routing_configure") == 0) {
-        return UNIFIED_ACTION_CMD_ROUTING_CONFIGURE;
-    }
-    if (strcmp(normalized, "status_watch") == 0) {
-        return UNIFIED_ACTION_CMD_STATUS_WATCH;
-    }
-    if (strcmp(normalized, "get_sms_history") == 0 ||
-        strcmp(normalized, "sync_sms") == 0 ||
-        strcmp(normalized, "pull_sms") == 0 ||
-        strcmp(normalized, "pull_messages") == 0) {
-        return UNIFIED_ACTION_CMD_GET_SMS_HISTORY;
-    }
-    if (strcmp(normalized, "get_status") == 0) {
-        return UNIFIED_ACTION_CMD_GET_STATUS;
-    }
-    if (strcmp(normalized, "ota_update") == 0) {
-        return UNIFIED_ACTION_CMD_OTA_UPDATE;
-    }
-    if (strcmp(normalized, "modem_at") == 0 ||
-        strcmp(normalized, "raw_at") == 0) {
-        return UNIFIED_ACTION_CMD_MODEM_AT;
-    }
-    if (strcmp(normalized, "send_sms") == 0) {
-        return UNIFIED_ACTION_CMD_SEND_SMS;
-    }
-    if (strcmp(normalized, "send_sms_multipart") == 0) {
-        return UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART;
-    }
-    if (strcmp(normalized, "send_ussd") == 0) {
-        return UNIFIED_ACTION_CMD_SEND_USSD;
-    }
-    if (strcmp(normalized, "cancel_ussd") == 0) {
-        return UNIFIED_ACTION_CMD_CANCEL_USSD;
-    }
-    if (strcmp(normalized, "dial_number") == 0) {
-        return UNIFIED_ACTION_CMD_DIAL_NUMBER;
-    }
-    if (strcmp(normalized, "hangup_call") == 0) {
-        return UNIFIED_ACTION_CMD_HANGUP_CALL;
-    }
-    if (strcmp(normalized, "reboot_device") == 0) {
-        return UNIFIED_ACTION_CMD_REBOOT_DEVICE;
-    }
-    if (strcmp(normalized, "gpio_write") == 0) {
-        return UNIFIED_ACTION_CMD_GPIO_WRITE;
-    }
-    if (strcmp(normalized, "gpio_pulse") == 0) {
-        return UNIFIED_ACTION_CMD_GPIO_PULSE;
-    }
-    if (strcmp(normalized, "sensor_read") == 0) {
-        return UNIFIED_ACTION_CMD_SENSOR_READ;
-    }
-    if (strcmp(normalized, "file_list") == 0) {
-        return UNIFIED_ACTION_CMD_FILE_LIST;
-    }
-    if (strcmp(normalized, "file_read_meta") == 0) {
-        return UNIFIED_ACTION_CMD_FILE_READ_META;
-    }
-    if (strcmp(normalized, "file_delete") == 0) {
-        return UNIFIED_ACTION_CMD_FILE_DELETE;
-    }
-    if (strcmp(normalized, "file_export") == 0) {
-        return UNIFIED_ACTION_CMD_FILE_EXPORT;
-    }
-    if (strcmp(normalized, "start_camera") == 0) {
-        return UNIFIED_ACTION_CMD_START_CAMERA;
-    }
-    if (strcmp(normalized, "stop_camera") == 0) {
-        return UNIFIED_ACTION_CMD_STOP_CAMERA;
-    }
-    if (strcmp(normalized, "take_snapshot") == 0) {
-        return UNIFIED_ACTION_CMD_TAKE_SNAPSHOT;
-    }
-    if (strcmp(normalized, "start_stream") == 0) {
-        return UNIFIED_ACTION_CMD_START_STREAM;
-    }
-    if (strcmp(normalized, "stop_stream") == 0) {
-        return UNIFIED_ACTION_CMD_STOP_STREAM;
-    }
-    if (strcmp(normalized, "card_scan_start") == 0) {
-        return UNIFIED_ACTION_CMD_CARD_SCAN_START;
-    }
-    if (strcmp(normalized, "card_scan_stop") == 0) {
-        return UNIFIED_ACTION_CMD_CARD_SCAN_STOP;
-    }
-    if (strcmp(normalized, "card_read") == 0) {
-        return UNIFIED_ACTION_CMD_CARD_READ;
-    }
-    if (strcmp(normalized, "card_write") == 0) {
-        return UNIFIED_ACTION_CMD_CARD_WRITE;
+    for (index = 0U; index < sizeof(s_command_aliases) / sizeof(s_command_aliases[0]); ++index) {
+        if (strcmp(normalized, s_command_aliases[index].name) == 0) {
+            return s_command_aliases[index].command;
+        }
     }
     return UNIFIED_ACTION_CMD_NONE;
 }
@@ -694,6 +640,19 @@ static esp_err_t automation_bridge_parse_item(
     node = cJSON_GetObjectItemCaseSensitive(payload, "max_entries");
     if (cJSON_IsNumber(node) && node->valuedouble > 0) {
         out_request->max_entries = (uint16_t)node->valuedouble;
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "pin");
+    if (cJSON_IsNumber(node) && node->valuedouble >= 0 && node->valuedouble <= 255) {
+        out_request->gpio_pin_present = true;
+        out_request->gpio_pin = (uint8_t)node->valuedouble;
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "value");
+    if (cJSON_IsBool(node)) {
+        out_request->gpio_value_present = true;
+        out_request->gpio_value = cJSON_IsTrue(node);
+    } else if (cJSON_IsNumber(node)) {
+        out_request->gpio_value_present = true;
+        out_request->gpio_value = node->valuedouble != 0;
     }
     node = cJSON_GetObjectItemCaseSensitive(payload, "sms_parts");
     if (cJSON_IsNumber(node) && node->valuedouble > 0) {

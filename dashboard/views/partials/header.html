@@ -123,7 +123,7 @@
 
             <button class="btn btn-link text-white p-1 position-relative" type="button" data-bs-toggle="modal" data-bs-target="#dashboardNotificationsModal" title="Notifications" aria-label="Open notifications">
                 <i class="bi bi-bell-fill"></i>
-                <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" id="headerNotificationBadge">3</span>
+                <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger app-hidden" id="headerNotificationBadge">0</span>
             </button>
 
             <!-- Dark Mode Toggle -->
@@ -164,25 +164,55 @@
 </nav>
 
 <div class="modal fade" id="dashboardNotificationsModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-scrollable">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable dashboard-notifications-dialog">
         <div class="modal-content text-dark">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-bell me-2"></i>Dashboard Updates</h5>
+            <div class="modal-header align-items-start gap-3">
+                <div>
+                    <h5 class="modal-title"><i class="bi bi-bell me-2"></i>Notifications</h5>
+                    <div class="text-muted small" id="dashboardNotificationSubtitle">Live device and dashboard events</div>
+                </div>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body p-0">
-                <div class="list-group list-group-flush">
-                    <div class="list-group-item">
-                        <div class="fw-semibold">Queue page moved</div>
-                        <div class="small text-muted">Queue Manager is now available at /devices/queue.</div>
+                <div class="notification-modal-toolbar border-bottom">
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Notification read filter">
+                        <input type="radio" class="btn-check" name="notificationModalReadFilter" id="notificationModalUnread" value="unread" autocomplete="off" checked onchange="window.setHeaderNotificationFilter && window.setHeaderNotificationFilter('read', this.value)">
+                        <label class="btn btn-outline-primary" for="notificationModalUnread">Unread</label>
+                        <input type="radio" class="btn-check" name="notificationModalReadFilter" id="notificationModalAll" value="all" autocomplete="off" onchange="window.setHeaderNotificationFilter && window.setHeaderNotificationFilter('read', this.value)">
+                        <label class="btn btn-outline-primary" for="notificationModalAll">All</label>
                     </div>
-                    <div class="list-group-item">
-                        <div class="fw-semibold">SMS schedule planner</div>
-                        <div class="small text-muted">Scheduled SMS items are listed from the conversation header.</div>
-                    </div>
-                    <div class="list-group-item">
-                        <div class="fw-semibold">Internet usage location</div>
-                        <div class="small text-muted">Data counters now live under Share Internet.</div>
+                    <select class="form-select form-select-sm notification-modal-select" id="notificationModalCategory" onchange="window.setHeaderNotificationFilter && window.setHeaderNotificationFilter('category', this.value)" aria-label="Notification category">
+                        <option value="all">All categories</option>
+                        <option value="device">Device</option>
+                        <option value="sms">SMS</option>
+                        <option value="call">Calls</option>
+                        <option value="automation">Automation</option>
+                        <option value="queue">Queue</option>
+                        <option value="network">Network</option>
+                        <option value="system">System</option>
+                    </select>
+                    <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" onclick="window.refreshHeaderNotificationPreview && window.refreshHeaderNotificationPreview()">
+                        <i class="bi bi-arrow-repeat me-1"></i>Refresh
+                    </button>
+                </div>
+                <div class="list-group list-group-flush" id="dashboardNotificationPreview">
+                    <div class="list-group-item text-muted small">Loading notifications...</div>
+                </div>
+                <div class="notification-modal-footer border-top">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="window.markHeaderNotificationsRead && window.markHeaderNotificationsRead()">
+                        <i class="bi bi-check2-all me-1"></i>Mark filtered read
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="window.clearHeaderNotifications && window.clearHeaderNotifications()">
+                        <i class="bi bi-trash3 me-1"></i>Clear all
+                    </button>
+                    <div class="notification-modal-pagination ms-auto">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="notificationModalPrev" onclick="window.changeHeaderNotificationPage && window.changeHeaderNotificationPage(-1)">
+                            <i class="bi bi-chevron-left"></i>
+                        </button>
+                        <span class="small text-muted" id="notificationModalPageLabel">Page 1</span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="notificationModalNext" onclick="window.changeHeaderNotificationPage && window.changeHeaderNotificationPage(1)">
+                            <i class="bi bi-chevron-right"></i>
+                        </button>
                     </div>
                 </div>
             </div>

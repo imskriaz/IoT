@@ -18,5 +18,6 @@ router.use('/ota', require('./ota'));
 router.use('/devices', require('./devices'));
 router.use('/gpio', require('./gpio'));
 router.use('/queue', require('./queue'));
+router.use('/notifications', require('./notifications'));
 
 module.exports = router;

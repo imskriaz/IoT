@@ -46,6 +46,7 @@ const automationEngine = require('./services/automationEngine');
 // Swagger UI (available in all environments; auth-guarded below)
 const swaggerUi   = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
+const { getApiCatalog } = require('./config/api-catalog');
 
 const app = express();
 const server = http.createServer(app);
@@ -836,6 +837,7 @@ try {
     app.use('/api/mqtt', authMiddleware, mqttRoutes);
     app.use('/admin', authMiddleware, usersRoute);
     app.get('/api-docs.json', authMiddleware, (_req, res) => res.json(swaggerSpec));
+    app.get('/api-docs/catalog', authMiddleware, (_req, res) => res.json(getApiCatalog()));
     app.use('/api-docs', authMiddleware, swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
         customSiteTitle: 'ESP32 Dashboard API',
         swaggerOptions: { persistAuthorization: true }

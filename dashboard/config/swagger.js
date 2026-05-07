@@ -1,5 +1,6 @@
 'use strict';
 const swaggerJsdoc = require('swagger-jsdoc');
+const { applyApiCatalogToSpec } = require('./api-catalog');
 
 const options = {
     definition: {
@@ -9,7 +10,7 @@ const options = {
             version: '2.1.0',
             description: 'REST API for remotely controlling and monitoring IoT boards over MQTT.'
         },
-        servers: [{ url: '/api', description: 'API base path' }],
+        servers: [{ url: '/', description: 'Dashboard origin' }],
         components: {
             securitySchemes: {
                 apiKey: {
@@ -172,4 +173,4 @@ const options = {
     apis: ['./routes/*.js']
 };
 
-module.exports = swaggerJsdoc(options);
+module.exports = applyApiCatalogToSpec(swaggerJsdoc(options));

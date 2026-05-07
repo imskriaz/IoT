@@ -79,6 +79,10 @@ typedef struct {
     bool sms_multipart_present;
     bool sms_multipart;
     uint16_t max_entries;
+    bool gpio_pin_present;
+    uint8_t gpio_pin;
+    bool gpio_value_present;
+    bool gpio_value;
 } api_bridge_request_t;
 
 typedef struct {

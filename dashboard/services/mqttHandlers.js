@@ -1014,6 +1014,17 @@ class MQTTHandlers {
             if (!this._onlineDevices.has(deviceId)) {
                 this._onlineDevices.add(deviceId);
                 this.fireEvent('device.online', deviceId, { deviceId });
+                notificationService.capture({
+                    deviceId,
+                    type: 'success',
+                    severity: 'success',
+                    category: 'device',
+                    source: 'device',
+                    title: 'Device online',
+                    message: `Device ${deviceId} is online`,
+                    actionUrl: '/devices/about',
+                    eventKey: `device.online:${deviceId}`
+                }).catch(() => {});
             }
 
             // Emit status update — use normalised device object (signal already % not raw RSSI)
@@ -1050,7 +1061,10 @@ class MQTTHandlers {
             if (battery !== undefined && battery <= 20 && !charging) {
                 if (!this._lowBatteryNotified.has(deviceId)) {
                     this._lowBatteryNotified.add(deviceId);
-                    notificationService.notifyLowBattery(battery).catch(() => {});
+                    notificationService.notifyLowBattery(battery, {
+                        deviceId,
+                        eventKey: `device.low_battery:${deviceId}`
+                    }).catch(() => {});
                 }
             } else if (battery > 25) {
                 // Reset so we notify again if battery drops again
@@ -1368,18 +1382,38 @@ class MQTTHandlers {
             const emittedStatus = successful
                 ? (['sent', 'delivered'].includes(storedStatus) ? storedStatus : (isPartMessage ? 'sending' : 'sent'))
                 : 'failed';
+            const smsError = successful ? null : (data?.error || data?.message || data?.detail || 'SMS send failed');
+            const smsRecipient = smsRow?.to_number || data?.number || data?.to || data?.payload?.number || data?.payload?.to || null;
 
             this.toDevice(deviceId, successful ? 'sms:sent' : 'sms:send-failed', {
                 deviceId,
                 id: Number(smsRow?.id || 0) || null,
                 conversationId: Number(smsRow?.conversation_id || 0) || null,
                 messageId: smsRow?.external_id || baseMessageId || messageId || null,
-                to: smsRow?.to_number || data?.number || data?.to || data?.payload?.number || data?.payload?.to || null,
+                to: smsRecipient,
                 sim_slot: smsRow?.sim_slot ?? null,
                 status: emittedStatus,
-                error: successful ? null : (data?.error || data?.message || data?.detail || 'SMS send failed'),
+                error: smsError,
                 timestamp: new Date().toISOString()
             });
+            if (!successful) {
+                notificationService.capture({
+                    deviceId,
+                    type: 'danger',
+                    severity: 'danger',
+                    category: 'sms',
+                    source: 'device',
+                    title: 'SMS send failed',
+                    message: smsRecipient ? `To ${smsRecipient}: ${smsError}` : smsError,
+                    actionUrl: '/sms',
+                    metadata: {
+                        messageId: smsRow?.external_id || baseMessageId || messageId || null,
+                        to: smsRecipient,
+                        error: smsError
+                    },
+                    eventKey: messageId ? `sms.failed:${deviceId}:${messageId}` : null
+                }).catch(() => {});
+            }
         });
 
         this.mqttService.on('sms:incoming', async (deviceId, data) => {
@@ -1530,7 +1564,11 @@ class MQTTHandlers {
                             simSlot: simScope.simSlot
                         });
                         // Fire notification + webhooks (non-blocking)
-                        notificationService.notifySms(fromNumber, decodedMessage).catch(() => {});
+                        notificationService.notifySms(fromNumber, decodedMessage, {
+                            deviceId,
+                            actionUrl: '/sms',
+                            eventKey: externalId ? `sms.incoming:${deviceId}:${externalId}` : null
+                        }).catch(() => {});
                         pushNotificationService.notifyLinkedDevices(deviceId, {
                             title: 'New SMS received',
                             body: `From ${decodedFrom}: ${decodedMessage}`,
@@ -1648,6 +1686,22 @@ class MQTTHandlers {
                     : (deliveryStatus === 'failed' ? 'sms:send-failed' : 'sms:delivery'),
                 { deviceId, ...normalizedData, status: deliveryStatus, error: errorText }
             );
+            if (deliveryStatus === 'failed') {
+                notificationService.capture({
+                    deviceId,
+                    type: 'danger',
+                    severity: 'danger',
+                    category: 'sms',
+                    source: 'device',
+                    title: 'SMS delivery failed',
+                    message: errorText || 'SMS delivery failed',
+                    actionUrl: '/sms',
+                    metadata: normalizedData,
+                    eventKey: normalizedData?.messageId || normalizedData?.action_id
+                        ? `sms.delivery_failed:${deviceId}:${normalizedData.messageId || normalizedData.action_id}`
+                        : null
+                }).catch(() => {});
+            }
         });
     }
 
@@ -1721,7 +1775,11 @@ class MQTTHandlers {
 
             // Notify on missed call
             if (!syncPayload && data.status === 'missed') {
-                notificationService.notifyMissedCall(data.number).catch(() => {});
+                notificationService.notifyMissedCall(data.number, {
+                    deviceId,
+                    actionUrl: '/calls',
+                    eventKey: `call.missed:${deviceId}:${data.number || 'unknown'}`
+                }).catch(() => {});
                 pushNotificationService.notifyLinkedDevices(deviceId, {
                     title: 'Missed call',
                     body: `From ${data.number || 'Unknown number'}`,
@@ -2384,6 +2442,17 @@ class MQTTHandlers {
                     if (!dev.online && this._onlineDevices.has(id)) {
                         this._onlineDevices.delete(id);
                         this.fireEvent('device.offline', id, { deviceId: id });
+                        notificationService.capture({
+                            deviceId: id,
+                            type: 'warning',
+                            severity: 'warning',
+                            category: 'device',
+                            source: 'device',
+                            title: 'Device offline',
+                            message: `Device ${id} went offline`,
+                            actionUrl: '/devices/about',
+                            eventKey: `device.offline:${id}`
+                        }).catch(() => {});
                         // Clear any pending GPS debounce timer for this device
                         if (this._gpsDebounce.has(id)) {
                             clearTimeout(this._gpsDebounce.get(id));

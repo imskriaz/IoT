@@ -36,16 +36,16 @@ describe('main.js device HTTP helper export', () => {
         expect(source).not.toContain("document.getElementById('incomingCallModal')");
     });
 
-    test('redirects to MQTT settings after a sustained dashboard MQTT outage', () => {
+    test('keeps dashboard usable during MQTT outage instead of showing a blocking overlay', () => {
         const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'main.js'), 'utf8');
 
-        expect(source).toContain('const MQTT_DOWN_SETTINGS_REDIRECT_DELAY_MS = 15000;');
-        expect(source).toContain('function scheduleMQTTDownSettingsRedirect()');
-        expect(source).toContain("return '/settings?mqttDown=1#mqtt-broker';");
-        expect(source).toContain('scheduleMQTTDownSettingsRedirect();');
-        expect(source).toContain('cancelMQTTDownSettingsRedirect();');
-        expect(source).toContain("nextTitle = 'MQTT';");
-        expect(source).toContain("nextMessage = mqttState.reconnecting || mqttState.connecting ? 'Connecting' : 'Offline';");
+        expect(source).toContain("nextTitle = 'Dashboard Socket Down';");
+        expect(source).toContain("reason = 'Unavailable while dashboard MQTT reconnects.';");
+        expect(source).not.toContain('MQTT_DOWN_SETTINGS_REDIRECT_DELAY_MS');
+        expect(source).not.toContain('function scheduleMQTTDownSettingsRedirect()');
+        expect(source).not.toContain("return '/settings?mqttDown=1#mqtt-broker';");
+        expect(source).not.toContain("nextTitle = 'MQTT';");
+        expect(source).not.toContain("nextMessage = mqttState.reconnecting || mqttState.connecting ? 'Connecting' : 'Offline';");
         expect(source).not.toContain('Opening System Settings in ${getMQTTDownRedirectSecondsRemaining()} seconds');
     });
 

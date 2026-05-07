@@ -526,14 +526,21 @@ async function initializeDatabase() {
             CREATE TABLE IF NOT EXISTS notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
+                device_id TEXT,
                 type TEXT DEFAULT 'info',
+                severity TEXT DEFAULT 'info',
+                category TEXT DEFAULT 'system',
+                source TEXT DEFAULT 'dashboard',
                 title TEXT NOT NULL,
                 message TEXT,
                 read BOOLEAN DEFAULT 0,
+                read_at DATETIME,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 expires_at DATETIME,
                 action_url TEXT,
                 action_text TEXT,
+                metadata TEXT,
+                event_key TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
         `);
@@ -753,6 +760,22 @@ async function initializeDatabase() {
             ['device_profiles', 'current_package_limits', 'TEXT'],
             ['device_profiles', 'current_package_status', 'TEXT'],
             ['device_profiles', 'current_package_approved_at', 'DATETIME']
+        ]) {
+            const cols = await db.all(`PRAGMA table_info(${table})`);
+            if (cols && !cols.some(c => c.name === col)) {
+                await db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+                logger.info(`Migration: added column ${col} to ${table}`);
+            }
+        }
+
+        for (const [table, col, def] of [
+            ['notifications', 'device_id', 'TEXT'],
+            ['notifications', 'severity', "TEXT DEFAULT 'info'"],
+            ['notifications', 'category', "TEXT DEFAULT 'system'"],
+            ['notifications', 'source', "TEXT DEFAULT 'dashboard'"],
+            ['notifications', 'read_at', 'DATETIME'],
+            ['notifications', 'metadata', 'TEXT'],
+            ['notifications', 'event_key', 'TEXT']
         ]) {
             const cols = await db.all(`PRAGMA table_info(${table})`);
             if (cols && !cols.some(c => c.name === col)) {
@@ -1320,6 +1343,9 @@ async function initializeDatabase() {
 
             CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
             CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read);
+            CREATE INDEX IF NOT EXISTS idx_notifications_device ON notifications(device_id);
+            CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at);
+            CREATE INDEX IF NOT EXISTS idx_notifications_category ON notifications(category);
 
             CREATE INDEX IF NOT EXISTS idx_logs_level     ON system_logs(level);
             CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);

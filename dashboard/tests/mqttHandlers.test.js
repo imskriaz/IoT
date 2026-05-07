@@ -16,6 +16,7 @@ jest.mock('../services/smsCache', () => ({
 }));
 
 jest.mock('../services/notificationService', () => ({
+    capture: jest.fn().mockResolvedValue(undefined),
     notifySms: jest.fn().mockResolvedValue(undefined),
     notifyMissedCall: jest.fn().mockResolvedValue(undefined),
     notifyLowBattery: jest.fn().mockResolvedValue(undefined)
@@ -532,7 +533,14 @@ describe('MQTTHandlers SMS storage', () => {
                 unreadCount: 4
             })
         );
-        expect(notificationService.notifySms).toHaveBeenCalledWith('+8801555123456', 'hello from modem');
+        expect(notificationService.notifySms).toHaveBeenCalledWith(
+            '+8801555123456',
+            'hello from modem',
+            expect.objectContaining({
+                deviceId: 'test-device-1',
+                actionUrl: '/sms'
+            })
+        );
         expect(pushNotificationService.notifyLinkedDevices).toHaveBeenCalledWith(
             'test-device-1',
             expect.objectContaining({

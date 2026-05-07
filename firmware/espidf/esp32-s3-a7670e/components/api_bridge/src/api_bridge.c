@@ -9,6 +9,8 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "driver/gpio.h"
+
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_crt_bundle.h"
@@ -35,6 +37,8 @@ enum {
     API_BRIDGE_OTA_MIN_TIMEOUT_MS = 180000,
     API_BRIDGE_OTA_DEFAULT_TIMEOUT_MS = 300000,
     API_BRIDGE_OTA_RESTART_DELAY_MS = 1500,
+    API_BRIDGE_MODEM_RESTART_DEFAULT_TIMEOUT_MS = 45000,
+    API_BRIDGE_GPIO_DIAGNOSTIC_PIN = 2,
 };
 
 typedef struct {
@@ -155,6 +159,25 @@ static unified_action_response_t api_bridge_build_response(
     return response;
 }
 
+static unified_action_result_t api_bridge_result_from_err(esp_err_t err) {
+    if (err == ESP_OK) {
+        return UNIFIED_ACTION_RESULT_COMPLETED;
+    }
+    return err == ESP_ERR_TIMEOUT ? UNIFIED_ACTION_RESULT_TIMEOUT : UNIFIED_ACTION_RESULT_FAILED;
+}
+
+static const char *api_bridge_detail_from_err(
+    esp_err_t err,
+    const char *completed_detail,
+    const char *timeout_detail,
+    const char *failed_detail
+) {
+    if (err == ESP_OK) {
+        return completed_detail;
+    }
+    return err == ESP_ERR_TIMEOUT ? timeout_detail : failed_detail;
+}
+
 static void api_bridge_escape_json(const char *input, char *output, size_t output_len) {
     const char *cursor = input ? input : "";
     size_t write_index = 0;
@@ -180,6 +203,64 @@ static void api_bridge_escape_json(const char *input, char *output, size_t outpu
         }
     }
     output[write_index] = '\0';
+}
+
+static bool api_bridge_payload_missing(char *payload, size_t payload_len) {
+    return !payload || payload_len == 0U;
+}
+
+static esp_err_t api_bridge_write_response_payload(
+    char *payload,
+    size_t payload_len,
+    const char *response
+) {
+    char escaped_response[512] = {0};
+
+    if (api_bridge_payload_missing(payload, payload_len)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    api_bridge_escape_json(response, escaped_response, sizeof(escaped_response));
+    if (snprintf(payload, payload_len, "{\"response\":\"%s\"}", escaped_response) >= (int)payload_len) {
+        payload[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return ESP_OK;
+}
+
+static unified_action_response_t api_bridge_finish_modem_response(
+    const unified_action_envelope_t *action,
+    esp_err_t err,
+    char *payload,
+    size_t payload_len,
+    const char *response,
+    const char *completed_detail,
+    const char *timeout_detail,
+    const char *failed_detail,
+    const char *payload_failed_detail
+) {
+    esp_err_t payload_err = ESP_OK;
+
+    if (payload && payload_len > 0U) {
+        payload_err = api_bridge_write_response_payload(payload, payload_len, response);
+        if (payload_err != ESP_OK) {
+            return api_bridge_build_response(
+                action,
+                UNIFIED_ACTION_RESULT_FAILED,
+                payload_err,
+                UNIFIED_FEATURE_REASON_NONE,
+                payload_failed_detail
+            );
+        }
+    }
+
+    return api_bridge_build_response(
+        action,
+        api_bridge_result_from_err(err),
+        err,
+        UNIFIED_FEATURE_REASON_NONE,
+        api_bridge_detail_from_err(err, completed_detail, timeout_detail, failed_detail)
+    );
 }
 
 static bool api_bridge_raw_modem_line_is_valid(const char *line) {
@@ -285,6 +366,262 @@ static unified_action_response_t api_bridge_execute_modem_at(
         err,
         UNIFIED_FEATURE_REASON_NONE,
         err == ESP_OK ? "modem_at_completed" : (err == ESP_ERR_TIMEOUT ? "modem_at_timeout" : "modem_at_failed")
+    );
+}
+
+static unified_action_response_t api_bridge_execute_storage_info(
+    const unified_action_envelope_t *action,
+    char *payload,
+    size_t payload_len
+) {
+    storage_mgr_status_t storage = {0};
+
+    if (!payload || payload_len == 0U) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            ESP_ERR_INVALID_ARG,
+            UNIFIED_FEATURE_REASON_NONE,
+            "storage_info_payload_missing"
+        );
+    }
+
+    storage_mgr_get_status(&storage);
+    if (snprintf(
+            payload,
+            payload_len,
+            "{\"enabled\":%s,\"media_available\":%s,\"buffered_only\":%s,\"total_bytes\":%" PRIu64 ",\"used_bytes\":%" PRIu64 ",\"free_bytes\":%" PRIu64 ",\"record_count\":%" PRIu32 ",\"dropped_count\":%" PRIu32 ",\"persist_failures\":%" PRIu32 ",\"mount_failures\":%" PRIu32 ",\"sd_write_failures\":%" PRIu32 ",\"sd_flush_count\":%" PRIu32 ",\"runtime\":{\"initialized\":%s,\"running\":%s,\"last_error\":%d,\"state\":%d}}",
+            storage.enabled ? "true" : "false",
+            storage.media_available ? "true" : "false",
+            storage.buffered_only ? "true" : "false",
+            storage.total_bytes,
+            storage.used_bytes,
+            storage.free_bytes,
+            storage.record_count,
+            storage.dropped_count,
+            storage.persist_failures,
+            storage.mount_failures,
+            storage.sd_write_failures,
+            storage.sd_flush_count,
+            storage.runtime.initialized ? "true" : "false",
+            storage.runtime.running ? "true" : "false",
+            (int)storage.runtime.last_error,
+            (int)storage.runtime.state
+        ) >= (int)payload_len) {
+        payload[0] = '\0';
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            ESP_ERR_INVALID_SIZE,
+            UNIFIED_FEATURE_REASON_NONE,
+            "storage_info_payload_failed"
+        );
+    }
+
+    return api_bridge_build_response(
+        action,
+        UNIFIED_ACTION_RESULT_COMPLETED,
+        ESP_OK,
+        UNIFIED_FEATURE_REASON_NONE,
+        "storage_info_completed"
+    );
+}
+
+static bool api_bridge_gpio_pin_is_allowed(uint8_t pin) {
+    return pin == API_BRIDGE_GPIO_DIAGNOSTIC_PIN;
+}
+
+static esp_err_t api_bridge_write_gpio_payload(
+    char *payload,
+    size_t payload_len,
+    uint8_t pin,
+    int level,
+    bool include_value,
+    bool value
+) {
+    int written = 0;
+
+    if (api_bridge_payload_missing(payload, payload_len)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    written = include_value
+        ? snprintf(
+            payload,
+            payload_len,
+            "{\"pin\":%u,\"value\":%s,\"level\":%d,\"allowed_pins\":[%u]}",
+            (unsigned)pin,
+            value ? "true" : "false",
+            level,
+            (unsigned)API_BRIDGE_GPIO_DIAGNOSTIC_PIN
+        )
+        : snprintf(
+            payload,
+            payload_len,
+            "{\"pin\":%u,\"level\":%d,\"allowed_pins\":[%u]}",
+            (unsigned)pin,
+            level,
+            (unsigned)API_BRIDGE_GPIO_DIAGNOSTIC_PIN
+        );
+
+    if (written >= (int)payload_len) {
+        payload[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return ESP_OK;
+}
+
+static unified_action_response_t api_bridge_execute_gpio_status(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    const uint8_t pin = (request && request->gpio_pin_present)
+        ? request->gpio_pin
+        : API_BRIDGE_GPIO_DIAGNOSTIC_PIN;
+    const gpio_num_t gpio = (gpio_num_t)pin;
+    esp_err_t err = ESP_OK;
+    int level = 0;
+
+    if (!api_bridge_gpio_pin_is_allowed(pin) || !GPIO_IS_VALID_GPIO(gpio)) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_NOT_SUPPORTED,
+            UNIFIED_FEATURE_REASON_NONE,
+            "unsupported_gpio_pin"
+        );
+    }
+    if (!payload || payload_len == 0U) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            ESP_ERR_INVALID_ARG,
+            UNIFIED_FEATURE_REASON_NONE,
+            "gpio_status_payload_missing"
+        );
+    }
+
+    level = gpio_get_level(gpio);
+    err = api_bridge_write_gpio_payload(payload, payload_len, pin, level, false, false);
+    if (err != ESP_OK) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            err,
+            UNIFIED_FEATURE_REASON_NONE,
+            "gpio_status_payload_failed"
+        );
+    }
+
+    return api_bridge_build_response(
+        action,
+        UNIFIED_ACTION_RESULT_COMPLETED,
+        ESP_OK,
+        UNIFIED_FEATURE_REASON_NONE,
+        "gpio_status_completed"
+    );
+}
+
+static unified_action_response_t api_bridge_execute_gpio_write(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    const uint8_t pin = (request && request->gpio_pin_present)
+        ? request->gpio_pin
+        : API_BRIDGE_GPIO_DIAGNOSTIC_PIN;
+    const gpio_num_t gpio = (gpio_num_t)pin;
+    const bool value = request && request->gpio_value_present && request->gpio_value;
+    esp_err_t err = ESP_OK;
+    int level = 0;
+
+    if (!request || !request->gpio_value_present) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_INVALID_ARG,
+            UNIFIED_FEATURE_REASON_NONE,
+            "missing_gpio_value"
+        );
+    }
+    if (!api_bridge_gpio_pin_is_allowed(pin) || !GPIO_IS_VALID_OUTPUT_GPIO(gpio)) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_NOT_SUPPORTED,
+            UNIFIED_FEATURE_REASON_NONE,
+            "unsupported_gpio_pin"
+        );
+    }
+    if (!payload || payload_len == 0U) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            ESP_ERR_INVALID_ARG,
+            UNIFIED_FEATURE_REASON_NONE,
+            "gpio_write_payload_missing"
+        );
+    }
+
+    err = gpio_set_direction(gpio, GPIO_MODE_INPUT_OUTPUT);
+    if (err == ESP_OK) {
+        err = gpio_set_level(gpio, value ? 1 : 0);
+    }
+    if (err != ESP_OK) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            err,
+            UNIFIED_FEATURE_REASON_NONE,
+            "gpio_write_failed"
+        );
+    }
+
+    level = gpio_get_level(gpio);
+    err = api_bridge_write_gpio_payload(payload, payload_len, pin, level, true, value);
+    if (err != ESP_OK) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            err,
+            UNIFIED_FEATURE_REASON_NONE,
+            "gpio_write_payload_failed"
+        );
+    }
+
+    return api_bridge_build_response(
+        action,
+        UNIFIED_ACTION_RESULT_COMPLETED,
+        ESP_OK,
+        UNIFIED_FEATURE_REASON_NONE,
+        "gpio_write_completed"
+    );
+}
+
+static unified_action_response_t api_bridge_execute_restart_modem(
+    const unified_action_envelope_t *action,
+    char *payload,
+    size_t payload_len
+) {
+    char modem_response[256] = {0};
+    const uint32_t timeout_ms = action && action->timeout_ms > 0
+        ? action->timeout_ms
+        : API_BRIDGE_MODEM_RESTART_DEFAULT_TIMEOUT_MS;
+    esp_err_t err = modem_a7670_reset_modem(modem_response, sizeof(modem_response), timeout_ms);
+
+    return api_bridge_finish_modem_response(
+        action,
+        err,
+        payload,
+        payload_len,
+        modem_response,
+        "restart_modem_completed",
+        "restart_modem_timeout",
+        "restart_modem_failed",
+        "restart_modem_payload_failed"
     );
 }
 
@@ -1147,31 +1484,94 @@ static unified_action_response_t api_bridge_execute_cancel_ussd(
     size_t payload_len
 ) {
     char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
-    char escaped_response[UNIFIED_TEXT_MEDIUM_LEN * 2U] = {0};
     const uint32_t timeout_ms = action && action->timeout_ms ? action->timeout_ms : 15000U;
     esp_err_t err = modem_a7670_cancel_ussd(response, sizeof(response), timeout_ms);
 
-    api_bridge_escape_json(response, escaped_response, sizeof(escaped_response));
-    if (payload && payload_len > 0U) {
-        (void)snprintf(payload, payload_len, "{\"response\":\"%s\"}", escaped_response);
-    }
+    return api_bridge_finish_modem_response(
+        action,
+        err,
+        payload,
+        payload_len,
+        response,
+        "ussd_cancelled",
+        "ussd_cancel_timeout",
+        "ussd_cancel_failed",
+        "ussd_cancel_payload_failed"
+    );
+}
 
-    if (err != ESP_OK) {
+static unified_action_response_t api_bridge_execute_dial_number(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
+    char escaped_number[UNIFIED_TEXT_SHORT_LEN * 2U] = {0};
+    char escaped_response[UNIFIED_TEXT_MEDIUM_LEN * 2U] = {0};
+    const uint32_t timeout_ms = action && action->timeout_ms ? action->timeout_ms : 45000U;
+    esp_err_t err = ESP_OK;
+
+    if (!request || request->number[0] == '\0') {
         return api_bridge_build_response(
             action,
-            err == ESP_ERR_TIMEOUT ? UNIFIED_ACTION_RESULT_TIMEOUT : UNIFIED_ACTION_RESULT_FAILED,
-            err,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_INVALID_ARG,
             UNIFIED_FEATURE_REASON_NONE,
-            "ussd_cancel_failed"
+            "dial_number_required"
         );
+    }
+
+    err = modem_a7670_dial(request->number, response, sizeof(response), timeout_ms);
+    if (payload && payload_len > 0U) {
+        api_bridge_escape_json(request->number, escaped_number, sizeof(escaped_number));
+        api_bridge_escape_json(response, escaped_response, sizeof(escaped_response));
+        if (snprintf(
+                payload,
+                payload_len,
+                "{\"number\":\"%s\",\"response\":\"%s\"}",
+                escaped_number,
+                escaped_response
+            ) >= (int)payload_len) {
+            payload[0] = '\0';
+            return api_bridge_build_response(
+                action,
+                UNIFIED_ACTION_RESULT_FAILED,
+                ESP_ERR_INVALID_SIZE,
+                UNIFIED_FEATURE_REASON_NONE,
+                "dial_payload_failed"
+            );
+        }
     }
 
     return api_bridge_build_response(
         action,
-        UNIFIED_ACTION_RESULT_COMPLETED,
-        ESP_OK,
+        api_bridge_result_from_err(err),
+        err,
         UNIFIED_FEATURE_REASON_NONE,
-        "ussd_cancelled"
+        api_bridge_detail_from_err(err, "dial_requested", "dial_timeout", "dial_failed")
+    );
+}
+
+static unified_action_response_t api_bridge_execute_hangup_call(
+    const unified_action_envelope_t *action,
+    char *payload,
+    size_t payload_len
+) {
+    char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
+    const uint32_t timeout_ms = action && action->timeout_ms ? action->timeout_ms : 15000U;
+    esp_err_t err = modem_a7670_hangup(response, sizeof(response), timeout_ms);
+
+    return api_bridge_finish_modem_response(
+        action,
+        err,
+        payload,
+        payload_len,
+        response,
+        "hangup_completed",
+        "hangup_timeout",
+        "hangup_failed",
+        "hangup_payload_failed"
     );
 }
 
@@ -1459,8 +1859,16 @@ static unified_action_response_t api_bridge_dispatch_action(
             return api_bridge_execute_status_watch(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_OTA_UPDATE:
             return api_bridge_execute_ota_update(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_STORAGE_INFO:
+            return api_bridge_execute_storage_info(action, payload, payload_len);
         case UNIFIED_ACTION_CMD_MODEM_AT:
             return api_bridge_execute_modem_at(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_GPIO_STATUS:
+            return api_bridge_execute_gpio_status(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_GPIO_WRITE:
+            return api_bridge_execute_gpio_write(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_RESTART_MODEM:
+            return api_bridge_execute_restart_modem(action, payload, payload_len);
         case UNIFIED_ACTION_CMD_SEND_SMS:
         case UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART:
             return api_bridge_execute_send_sms(action, request, payload, payload_len);
@@ -1468,6 +1876,10 @@ static unified_action_response_t api_bridge_dispatch_action(
             return api_bridge_execute_send_ussd(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_CANCEL_USSD:
             return api_bridge_execute_cancel_ussd(action, payload, payload_len);
+        case UNIFIED_ACTION_CMD_DIAL_NUMBER:
+            return api_bridge_execute_dial_number(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_HANGUP_CALL:
+            return api_bridge_execute_hangup_call(action, payload, payload_len);
         case UNIFIED_ACTION_CMD_REBOOT_DEVICE:
             response = api_bridge_build_response(action, UNIFIED_ACTION_RESULT_ACCEPTED, ESP_OK, UNIFIED_FEATURE_REASON_NONE, "reboot_scheduled");
             vTaskDelay(pdMS_TO_TICKS(250));

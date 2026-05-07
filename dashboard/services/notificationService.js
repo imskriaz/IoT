@@ -128,25 +128,136 @@ async function notify(subject, body) {
     }
 }
 
-async function notifySms(from, message) {
+function normalizeSeverity(value) {
+    const severity = String(value || '').trim().toLowerCase();
+    if (['success', 'info', 'warning', 'danger', 'error'].includes(severity)) {
+        return severity === 'error' ? 'danger' : severity;
+    }
+    return 'info';
+}
+
+function safeMetadata(value) {
+    if (value === undefined || value === null) return null;
+    try {
+        return JSON.stringify(value);
+    } catch (_) {
+        return JSON.stringify({ value: String(value) });
+    }
+}
+
+async function capture(options = {}) {
+    try {
+        const db = global.app && global.app.locals.db;
+        if (!db) return null;
+
+        const title = String(options.title || '').trim();
+        if (!title) return null;
+
+        const severity = normalizeSeverity(options.severity || options.type);
+        const type = String(options.type || severity || 'info').trim().toLowerCase();
+        const category = String(options.category || 'system').trim().toLowerCase();
+        const source = String(options.source || 'dashboard').trim().toLowerCase();
+        const deviceId = options.deviceId || options.device_id || null;
+        const userId = Number.isInteger(options.userId) ? options.userId : null;
+        const eventKey = options.eventKey ? String(options.eventKey).trim() : null;
+
+        if (eventKey) {
+            const existing = await db.get(
+                `SELECT id FROM notifications
+                 WHERE event_key = ?
+                   AND datetime(created_at) >= datetime('now', '-10 minutes')
+                 ORDER BY id DESC LIMIT 1`,
+                [eventKey]
+            );
+            if (existing) return existing;
+        }
+
+        const result = await db.run(
+            `INSERT INTO notifications (
+                user_id, device_id, type, severity, category, source,
+                title, message, action_url, action_text, metadata, event_key
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                userId,
+                deviceId,
+                type,
+                severity,
+                category,
+                source,
+                title,
+                options.message == null ? null : String(options.message),
+                options.actionUrl || options.action_url || null,
+                options.actionText || options.action_text || null,
+                safeMetadata(options.metadata),
+                eventKey
+            ]
+        );
+
+        const notification = await db.get(`SELECT * FROM notifications WHERE id = ?`, [result.lastID]);
+        const io = global.io || global.app?.locals?.io;
+        io?.emit?.('notification:created', notification);
+        return notification;
+    } catch (e) {
+        logger.error('notificationService: capture error', e);
+        return null;
+    }
+}
+
+async function notifySms(from, message, options = {}) {
+    await capture({
+        deviceId: options.deviceId,
+        type: 'info',
+        severity: 'info',
+        category: 'sms',
+        source: 'device',
+        title: 'New SMS received',
+        message: `From: ${from}\nMessage: ${message}`,
+        actionUrl: options.actionUrl || '/sms',
+        metadata: { from, message },
+        eventKey: options.eventKey
+    });
     await notify(
         'New SMS received',
         `From: ${from}\nMessage: ${message}`
     );
 }
 
-async function notifyMissedCall(number) {
+async function notifyMissedCall(number, options = {}) {
+    await capture({
+        deviceId: options.deviceId,
+        type: 'warning',
+        severity: 'warning',
+        category: 'call',
+        source: 'device',
+        title: 'Missed call',
+        message: `You missed a call from ${number || 'Unknown number'}`,
+        actionUrl: options.actionUrl || '/calls',
+        metadata: { number },
+        eventKey: options.eventKey
+    });
     await notify(
         'Missed call',
         `You missed a call from ${number}`
     );
 }
 
-async function notifyLowBattery(level) {
+async function notifyLowBattery(level, options = {}) {
+    await capture({
+        deviceId: options.deviceId,
+        type: 'warning',
+        severity: 'warning',
+        category: 'device',
+        source: 'device',
+        title: 'Low battery warning',
+        message: `Device battery is at ${level}%`,
+        actionUrl: options.actionUrl || '/devices/about',
+        metadata: { level },
+        eventKey: options.eventKey
+    });
     await notify(
         'Low battery warning',
         `Device battery is at ${level}%`
     );
 }
 
-module.exports = { notify, notifySms, notifyMissedCall, notifyLowBattery };
+module.exports = { notify, capture, notifySms, notifyMissedCall, notifyLowBattery };

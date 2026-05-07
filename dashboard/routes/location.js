@@ -5,6 +5,7 @@ const https = require('https');
 const logger = require('../utils/logger');
 const { DEFAULT_DEVICE_ID } = require('../config/device');
 const { resolveDeviceId } = require('../utils/deviceResolver');
+const notificationService = require('../services/notificationService');
 
 // Simple rate limiter for Nominatim: max 1 req/sec per OSM usage policy
 let _lastGeocodeMs = 0;
@@ -858,6 +859,25 @@ async function checkGeofences(deviceId, lat, lon) {
                         timestamp: new Date().toISOString()
                     });
                 }
+                notificationService.capture({
+                    deviceId,
+                    type: entered ? 'warning' : 'info',
+                    severity: entered ? 'warning' : 'info',
+                    category: 'device',
+                    source: 'device',
+                    title: `Geofence ${event}`,
+                    message: `${fence.name} ${event} by ${deviceId}`,
+                    actionUrl: '/location',
+                    metadata: {
+                        fenceId: fence.id,
+                        fenceName: fence.name,
+                        event,
+                        latitude: lat,
+                        longitude: lon,
+                        distanceMetres: Math.round(dist)
+                    },
+                    eventKey: `geofence:${deviceId}:${fence.id}:${event}`
+                }).catch(() => {});
                 global.automationEngine?.onEvent?.('gps.geofence', {
                     deviceId,
                     fenceId: fence.id,

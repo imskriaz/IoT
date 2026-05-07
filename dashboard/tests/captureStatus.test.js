@@ -15,7 +15,7 @@ jest.mock('child_process', () => ({
 
 const mqtt = require('mqtt');
 const { spawnSync } = require('child_process');
-const { captureStatus, parseArgs } = require('../utils/capture_status');
+const { buildCaptureClientId, captureStatus, parseArgs } = require('../utils/capture_status');
 
 class MockMqttClient extends EventEmitter {
     constructor() {
@@ -109,8 +109,10 @@ describe('capture_status helper', () => {
         const result = await capturePromise;
 
         expect(mqtt.connect).toHaveBeenCalledWith('mqtt://127.0.0.1:1883', expect.objectContaining({
+            clientId: expect.stringMatching(/^status-capture-/),
             reconnectPeriod: 0
         }));
+        expect(mqtt.connect.mock.calls[0][1].clientId).not.toBe(process.env.MQTT_CLIENT_ID);
         expect(client.subscribe).toHaveBeenCalledWith(
             'device/esp-a7670e-476178/status',
             { qos: 0 },
@@ -134,5 +136,15 @@ describe('capture_status helper', () => {
             expect.objectContaining({ encoding: 'utf8' })
         );
         expect(client.end).toHaveBeenCalledWith(true);
+    });
+
+    test('buildCaptureClientId never reuses the configured dashboard client id', () => {
+        process.env.MQTT_CLIENT_ID = 'dashboard-server';
+
+        const clientId = buildCaptureClientId();
+
+        expect(clientId).toMatch(/^status-capture-/);
+        expect(clientId).not.toBe('dashboard-server');
+        expect(clientId.length).toBeLessThanOrEqual(64);
     });
 });

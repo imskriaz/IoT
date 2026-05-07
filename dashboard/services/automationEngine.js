@@ -459,6 +459,17 @@ class AutomationEngine {
                         title,
                         message
                     });
+                    await notificationService.capture({
+                        deviceId: context.deviceId,
+                        type: 'info',
+                        severity: 'info',
+                        category: 'automation',
+                        source: 'automation',
+                        title,
+                        message,
+                        actionUrl: '/automation',
+                        metadata: { flowId: flow.id }
+                    });
                     await notificationService.notify(title, message);
                     break;
                 }
@@ -737,11 +748,16 @@ class AutomationEngine {
     }
 
     async _createAlert(severity, message, deviceId) {
-        await this.db?.run?.(
-            `INSERT INTO notifications (type, title, message, action_url)
-             VALUES (?, 'Automation Alert', ?, ?)`,
-            [severity || 'warning', message, deviceId ? `/devices/${deviceId}` : null]
-        );
+        await notificationService.capture({
+            deviceId,
+            type: severity || 'warning',
+            severity: severity || 'warning',
+            category: 'automation',
+            source: 'automation',
+            title: 'Automation Alert',
+            message,
+            actionUrl: '/automation'
+        });
     }
 
     async _updateTwin(deviceId, property, value) {

@@ -20,9 +20,14 @@ const MAX_TIMEOUT_MS = 120000;
 const DEFAULT_TIMEOUT_MS = 30000;
 const MAX_RAW_MODEM_LINE_LEN = 96;
 const FIRMWARE_DOCS_DIR = path.join(__dirname, '..', '..', 'firmware', 'espidf', 'esp32-s3-a7670e', 'docs');
+const DOCUMENT_CATALOG_CACHE_MS = 60000;
 const VENDOR_COMMANDS = Array.isArray(vendorCommandCatalog?.commands)
     ? vendorCommandCatalog.commands.filter((command) => command && command.line && Array.isArray(command.transports))
     : [];
+let documentCatalogCache = {
+    docs: null,
+    expiresAt: 0
+};
 
 const COMMAND_PRESETS = [
     {
@@ -166,7 +171,7 @@ const COMMAND_PRESETS = [
         payload: {},
         waitForResponse: true,
         timeoutMs: 10000,
-        note: 'Reads GPIO state if the active firmware exposes it.'
+        note: 'Reads the guarded GPIO2 diagnostic lane exposed by the active ESP32 firmware.'
     },
     {
         group: 'GPIO',
@@ -177,7 +182,7 @@ const COMMAND_PRESETS = [
         payload: { pin: 2, value: 1 },
         waitForResponse: true,
         timeoutMs: 10000,
-        note: 'Writes a pin through the firmware GPIO lane. Check board pin docs first.'
+        note: 'Writes only the guarded GPIO2 diagnostic lane; arbitrary board pins are not exposed.'
     },
     {
         group: 'System',
@@ -187,7 +192,7 @@ const COMMAND_PRESETS = [
         label: 'Restart Modem',
         payload: {},
         waitForResponse: false,
-        timeoutMs: 10000,
+        timeoutMs: 45000,
         note: 'Disruptive. Use only when the modem lane needs recovery.'
     },
     {
@@ -243,6 +248,19 @@ function buildDocumentCatalog() {
             });
     };
     walk(vendorRoot);
+    return docs;
+}
+
+function getDocumentCatalog() {
+    const now = Date.now();
+    if (documentCatalogCache.docs && documentCatalogCache.expiresAt > now) {
+        return documentCatalogCache.docs;
+    }
+    const docs = buildDocumentCatalog();
+    documentCatalogCache = {
+        docs,
+        expiresAt: now + DOCUMENT_CATALOG_CACHE_MS
+    };
     return docs;
 }
 
@@ -330,7 +348,7 @@ router.get('/commands', (req, res) => {
                 version: vendorCommandCatalog.version || 1,
                 generatedFrom: vendorCommandCatalog.generatedFrom || []
             },
-            documents: buildDocumentCatalog(),
+            documents: getDocumentCatalog(),
             defaults: {
                 waitForResponse: true,
                 timeoutMs: DEFAULT_TIMEOUT_MS,

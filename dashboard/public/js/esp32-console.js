@@ -2,6 +2,78 @@
     'use strict';
 
     const MAX_EVENTS = 350;
+    const STORAGE_PREFIX = 'esp32Console.';
+    const CONSOLE_TABS = ['system', 'serial', 'mqtt'];
+    const SYSTEM_LOG_SOURCES = ['app', 'mqtt', 'error', 'manual'];
+    const LOG_SOURCES = ['app', 'mqtt', 'error'];
+    const LOG_LEVELS = ['', 'error', 'warn', 'info', 'debug'];
+    const LOG_LIMITS = ['50', '100', '200', '500'];
+    const MANUAL_EVENT_SOURCES = ['send', 'response', 'console', 'serial', 'serial-tx', 'serial-rx', 'error', 'scenario', 'wait', 'validation'];
+    const CHAIN_SCENARIOS = [
+        {
+            key: 'custom',
+            label: 'Custom',
+            group: 'Custom',
+            module: 'Scenario',
+            task: 'Build your own command chain from scratch.',
+            chain: [
+                '# Custom scenario',
+                'AT',
+                'wait 500',
+                'AT+CSQ'
+            ].join('\n')
+        },
+        {
+            key: 'readiness',
+            label: 'Modem Readiness',
+            group: 'Modem',
+            module: 'Modem',
+            task: 'Check SIM, signal, network registration, and operator before a real modem task.',
+            chain: [
+                '# Modem readiness flow',
+                'AT',
+                'wait 500',
+                'AT+CPIN?',
+                'wait 500',
+                'AT+CSQ',
+                'wait 500',
+                'AT+CREG?',
+                'AT+COPS?'
+            ].join('\n')
+        },
+        {
+            key: 'ussd-balance',
+            label: 'USSD Balance Menu',
+            group: 'USSD',
+            module: 'Modem',
+            task: 'Simulate a USSD balance request and leave a cancel step ready if the network keeps the session open.',
+            chain: [
+                '# USSD balance/menu flow',
+                'AT',
+                'wait 500',
+                'AT+CUSD=1,"*123#",15',
+                'wait 8000',
+                '# Optional cancel if the session stays open',
+                'AT+CUSD=2'
+            ].join('\n')
+        },
+        {
+            key: 'sms-ready',
+            label: 'SMS Readiness',
+            group: 'SMS',
+            module: 'Modem',
+            task: 'Prepare and inspect the SMS lane before a send/read test.',
+            chain: [
+                '# SMS readiness flow',
+                'AT',
+                'wait 500',
+                'AT+CMGF=1',
+                'wait 500',
+                'AT+CPMS?',
+                'AT+CNMI=2,2'
+            ].join('\n')
+        }
+    ];
 
     const state = {
         presets: [],
@@ -36,6 +108,10 @@
             writer: null,
             readLoopActive: false,
             buffer: ''
+        },
+        results: {
+            serial: null,
+            mqtt: null
         }
     };
 
@@ -49,6 +125,8 @@
         clear: document.getElementById('esp32ConsoleClearBtn'),
         export: document.getElementById('esp32ConsoleExportBtn'),
         format: document.getElementById('esp32FormatPayloadBtn'),
+        commandLine: document.getElementById('esp32CommandLineInput'),
+        presetLabel: document.getElementById('esp32CommandPresetLabel'),
         deviceBadge: document.getElementById('esp32ConsoleDeviceBadge'),
         mqttBadge: document.getElementById('esp32ConsoleMqttBadge'),
         serialBadge: document.getElementById('esp32ConsoleSerialBadge'),
@@ -58,6 +136,11 @@
         mode: document.getElementById('esp32CommandModeSelect'),
         preset: document.getElementById('esp32CommandPresetSelect'),
         optionDetails: document.getElementById('esp32OptionDetails'),
+        resultPanel: document.getElementById('esp32CommandResultPanel'),
+        resultTitle: document.getElementById('esp32CommandResultTitle'),
+        resultBadge: document.getElementById('esp32CommandResultBadge'),
+        resultSummary: document.getElementById('esp32CommandResultSummary'),
+        resultJson: document.getElementById('esp32CommandResultJson'),
         serialConnect: document.getElementById('esp32SerialConnectBtn'),
         serialBaud: document.getElementById('esp32SerialBaudSelect'),
         serialEnding: document.getElementById('esp32SerialLineEndingSelect'),
@@ -89,10 +172,11 @@
         attachEvents();
         attachSocketEvents();
         updateDeviceBadge();
+        restoreLogPreferences();
         renderMqttStatus(window.INITIAL_MQTT_STATUS || window._mqttStatus || { connected: false, state: 'connecting', connecting: true });
         renderSerialStatus();
         setConsoleTab(initialTab());
-        setMode('single');
+        setMode(normalizeMode(readPreference('mode')));
         await Promise.allSettled([
             loadCatalog(),
             loadTests(),
@@ -100,6 +184,7 @@
             loadSystemLogs(),
             refreshMqttStatus()
         ]);
+        await loadSystemLogCounts();
         rebuildOptions();
         renderEvents();
     }
@@ -115,14 +200,27 @@
         document.querySelectorAll('[data-system-log-source]').forEach((button) => {
             button.addEventListener('click', () => setSystemLogSource(button.dataset.systemLogSource || 'app'));
         });
-        elements.systemLogLevel?.addEventListener('change', () => loadSystemLogs());
-        elements.systemLogLimit?.addEventListener('change', () => loadSystemLogs());
+        elements.systemLogLevel?.addEventListener('change', () => {
+            savePreference('logLevel', elements.systemLogLevel.value || '');
+            loadSystemLogCounts();
+            loadSystemLogs();
+        });
+        elements.systemLogLimit?.addEventListener('change', () => {
+            savePreference('logLimit', elements.systemLogLimit.value || '100');
+            loadSystemLogCounts();
+            loadSystemLogs();
+        });
         elements.systemLogSearch?.addEventListener('input', () => {
             state.systemLogSearch = String(elements.systemLogSearch.value || '').toLowerCase();
+            savePreference('logSearch', elements.systemLogSearch.value || '');
             renderEvents();
         });
-        elements.mode?.addEventListener('change', () => setMode(elements.mode.value));
+        elements.mode?.addEventListener('change', () => {
+            setMode(elements.mode.value);
+            savePreference('mode', state.mode);
+        });
         elements.preset?.addEventListener('change', () => applySelectedOption(true));
+        elements.commandLine?.addEventListener('input', () => renderOptionDetails());
         elements.serialConnect?.addEventListener('click', toggleSerialConnection);
 
         [elements.payload, elements.chain].forEach((node) => {
@@ -153,7 +251,15 @@
         window.socket.off?.('command:response');
         window.socket.on('command:response', (payload) => {
             if (!sameDevice(payload?.deviceId)) return;
-            appendLine('console', summarizeAsyncResponse(payload), 'info', payload);
+            const summary = summarizeAsyncResponse(payload);
+            appendLine('console', summary, 'info', payload);
+            renderCommandResult({
+                transport: 'mqtt',
+                status: payload?.status || 'response',
+                summary,
+                level: commandResultLevel(payload),
+                data: payload
+            });
         });
         window.socket.off?.('mqtt:status');
         window.socket.on('mqtt:status', renderMqttStatus);
@@ -215,6 +321,7 @@
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.success) return;
         state.entries = (data.data || []).map(normalizeConsoleEvent).slice(-MAX_EVENTS);
+        updateSystemCount('manual', visibleManualLogRows().length);
         renderEvents();
     }
 
@@ -262,6 +369,28 @@
         }
     }
 
+    async function loadSystemLogCounts() {
+        const level = String(elements.systemLogLevel?.value || '').trim();
+        const limit = String(elements.systemLogLimit?.value || 100);
+        const requests = LOG_SOURCES.map(async (source) => {
+            const params = new URLSearchParams({ source, limit });
+            if (level) params.set('level', level);
+            const response = await fetch('/api/logs?' + params.toString(), {
+                credentials: 'same-origin',
+                cache: 'no-store'
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) throw new Error(data.message || 'Failed to load logs');
+            return { source, count: Number(data.count || data.entries?.length || 0) };
+        });
+        const results = await Promise.allSettled(requests);
+        results.forEach((result, index) => {
+            const source = LOG_SOURCES[index];
+            updateSystemCount(source, result.status === 'fulfilled' ? result.value.count : 0);
+        });
+        updateSystemCount('manual', visibleManualLogRows().length);
+    }
+
     function rebuildOptions() {
         const options = [];
         state.hidden = { unsupported: 0, device: 0 };
@@ -279,7 +408,10 @@
                 return;
             }
             const category = preset.category === 'manual' ? 'manual' : 'system';
-            if (state.activeTab === 'serial' && category !== 'manual') return;
+            if (state.mode === 'command' && category !== 'manual') return;
+            if (state.mode === 'action' && category !== 'system') return;
+            if (!['command', 'action'].includes(state.mode)) return;
+            if (state.activeTab === 'serial' && state.mode !== 'command') return;
             if (state.activeTab === 'mqtt' && category !== 'manual' && category !== 'system') return;
             options.push({
                 key: `command:${index}`,
@@ -304,6 +436,7 @@
         });
 
         state.vendorCommands.forEach((vendorCommand, commandIndex) => {
+            if (state.mode !== 'command') return;
             const transports = Array.isArray(vendorCommand.transports) ? vendorCommand.transports : [];
             if (!transports.includes(state.activeTab)) return;
             if (activeDeviceType() === 'android') {
@@ -316,7 +449,7 @@
                 key: `vendor:${commandIndex}:${state.activeTab}`,
                 type: 'vendor',
                 category: 'manual',
-                group: `${state.activeTab === 'mqtt' ? 'MQTT AT' : 'Serial AT'} / ${vendorCommand.group || 'Vendor'}`,
+                group: vendorCommand.group || 'Vendor',
                 label: vendorCommand.label || command,
                 command,
                 payload: {},
@@ -328,6 +461,42 @@
             });
         });
 
+        if (state.mode === 'function') {
+            Object.entries(state.tests || {}).forEach(([testId, test]) => {
+                options.push({
+                    key: `function:${testId}`,
+                    type: 'test',
+                    category: 'function',
+                    group: test.category || 'Functions',
+                    label: test.name || testId,
+                    command: `test:${testId}`,
+                    payload: parameterDefaults(test),
+                    timeoutMs: test.timeout || 30000,
+                    waitForResponse: true,
+                    note: test.description || '',
+                    source: { ...test, id: testId }
+                });
+            });
+        }
+
+        if (state.mode === 'chain') {
+            CHAIN_SCENARIOS.forEach((scenario) => {
+                options.push({
+                    key: `scenario:${scenario.key}`,
+                    type: 'scenario',
+                    category: 'chain',
+                    group: scenario.group || 'Scenarios',
+                    label: scenario.label,
+                    command: scenario.key,
+                    payload: {},
+                    timeoutMs: 30000,
+                    waitForResponse: true,
+                    note: scenario.task || '',
+                    source: scenario
+                });
+            });
+        }
+
         state.options = options;
         renderOptionPicker();
         applySelectedOption(false);
@@ -335,7 +504,7 @@
 
     function renderOptionPicker() {
         if (!elements.preset) return;
-        const previous = elements.preset.value;
+        const previous = readPreference(`command:${state.activeTab}:${state.mode}`) || elements.preset.value;
         const grouped = {};
         state.options.forEach((option) => {
             const group = option.group || 'Commands';
@@ -374,11 +543,13 @@
             return;
         }
         if (elements.payload) elements.payload.value = JSON.stringify(option.payload || {}, null, 2);
+        if (elements.commandLine) elements.commandLine.value = defaultCommandLine(option);
+        if (option.type === 'scenario' && elements.chain) elements.chain.value = option.source?.chain || '';
         if (elements.timeout) elements.timeout.value = String(option.timeoutMs || 30000);
         if (elements.wait) elements.wait.value = option.waitForResponse === false ? 'false' : 'true';
         renderOptionDetails(option);
         updateControlVisibility();
-        if (announce) appendLine('picker', `Loaded ${option.label}`, 'info', option);
+        if (announce) savePreference(`command:${state.activeTab}:${state.mode}`, option.key);
     }
 
     function renderOptionDetails(override) {
@@ -398,47 +569,165 @@
             return;
         }
 
+        const help = commandHelp(option);
         const supportLine = option.type === 'test'
-            ? `<dt>Support</dt><dd>${escapeHtml(option.source?.supportMessage || 'Ready to run')}</dd>`
+            ? detailRow('Support', option.source?.supportMessage || 'Ready to run')
             : '';
-        const sourceLine = option.source?.sources?.length
-            ? `<dt>Source</dt><dd>${escapeHtml(option.source.sources.map((source) => source.file).join(', '))}</dd>`
-            : '';
-        const manualLine = option.category === 'manual'
-            ? '<dt>Category</dt><dd>Vendor AT command. Serial sends direct; MQTT sends through modem-at passthrough.</dd>'
-            : '<dt>Category</dt><dd>Dashboard-owned runtime action sent over MQTT.</dd>';
 
         elements.optionDetails.innerHTML = `
             <dl class="mb-0">
-                <dt>${escapeHtml(option.label || option.command || 'Option')}</dt>
-                <dd>${escapeHtml(option.note || 'No extra detail for this option.')}</dd>
-                ${manualLine}
                 <dt>Command</dt>
-                <dd><code>${escapeHtml(option.command || '')}</code></dd>
-                ${sourceLine}
+                <dd><code>${escapeHtml(currentCommandLine(option))}</code></dd>
+                <dt>Module</dt>
+                <dd>${escapeHtml(help.module)}</dd>
+                <dt>Task</dt>
+                <dd>${escapeHtml(help.task)}</dd>
+                <dt>Parameter</dt>
+                <dd>${escapeHtml(help.parameter)}</dd>
+                <dt>How to use</dt>
+                <dd>${escapeHtml(help.howToUse)}</dd>
+                <dt>Example</dt>
+                <dd>${help.exampleIsCode ? `<code>${escapeHtml(help.example)}</code>` : escapeHtml(help.example)}</dd>
                 ${supportLine}
             </dl>
         `;
     }
 
+    function commandHelp(option) {
+        if (option?.type === 'scenario') {
+            return {
+                module: option.source?.module || 'Modem',
+                task: option.source?.task || 'Run a multi-step scenario.',
+                parameter: 'Chain lines can be AT commands, wait <milliseconds>, or comments starting with #.',
+                howToUse: 'Select a scenario, edit the chain lines for the real case, validate, then Send. The console runs each step in order.',
+                example: option.source?.chain || '',
+                exampleIsCode: true
+            };
+        }
+        if (option?.type === 'vendor') {
+            const command = String(option.command || option.source?.command || '').toUpperCase();
+            if (command === 'AT+CUSD') {
+                return {
+                    module: 'Modem',
+                    task: 'Run USSD balance/menu code or cancel an active USSD session.',
+                    parameter: 'Format: AT+CUSD=<n>,"<code>",<dcs>. n=1 starts or replies; n=2 cancels. code is *123# or a menu digit. dcs is 15 for this firmware.',
+                    howToUse: 'Edit the Command line value, test from Serial first, then send through MQTT if the same line works.',
+                    example: 'AT+CUSD=1,"*123#",15',
+                    exampleIsCode: true
+                };
+            }
+            return {
+                module: vendorModule(option),
+                task: option.note || 'Vendor AT command.',
+                parameter: 'Fill values after = if the vendor command form needs them. Keep quotes and comma order exactly.',
+                howToUse: 'Edit Command line when parameters are needed. Start with safe test/read form when available, then send the write form.',
+                example: 'Use the vendor write/read form for this command; do not assume the base command includes all parameters.',
+                exampleIsCode: false
+            };
+        }
+        if (option?.type === 'command') {
+            return {
+                module: runtimeModule(option),
+                task: option.note || 'Dashboard-owned runtime action sent over MQTT.',
+                parameter: option.category === 'manual'
+                    ? 'Line is sent through modem-at. For parameterized AT commands, edit Command line before sending.'
+                    : 'Payload JSON fields are the action inputs; Timeout controls how long MQTT waits for a response.',
+                howToUse: option.category === 'manual'
+                    ? 'Edit Command line if needed, validate, then Send.'
+                    : 'Use the payload shown below, change only needed values, then Send.',
+                example: Object.keys(option.payload || {}).length ? JSON.stringify(option.payload) : 'Send with the default empty payload.',
+                exampleIsCode: Object.keys(option.payload || {}).length > 0
+            };
+        }
+        if (option?.type === 'test') {
+            return {
+                module: runtimeModule(option),
+                task: option.note || option.source?.description || 'Run a dashboard function/test.',
+                parameter: describeFunctionParameters(option.source),
+                howToUse: 'Review the Payload JSON defaults, fill any required values, then Run.',
+                example: Object.keys(option.payload || {}).length ? JSON.stringify(option.payload) : 'Run with empty payload.',
+                exampleIsCode: Object.keys(option.payload || {}).length > 0
+            };
+        }
+        return {
+            module: 'System',
+            task: 'Selected console operation.',
+            parameter: 'No parameter detail is available.',
+            howToUse: 'Select a command, review the inputs, then send.',
+            example: 'Select a command to see an example.',
+            exampleIsCode: false
+        };
+    }
+
+    function detailRow(label, value) {
+        return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`;
+    }
+
+    function defaultCommandLine(option) {
+        if (option?.type === 'test') return option.command || '';
+        if (option?.type === 'scenario') return option.label || option.command || '';
+        const command = String(option?.command || '').toUpperCase();
+        if (option?.type === 'vendor' && command === 'AT+CUSD') {
+            return 'AT+CUSD=1,"*123#",15';
+        }
+        return String(option?.command || '').trim();
+    }
+
+    function currentCommandLine(option) {
+        return String(elements.commandLine?.value || defaultCommandLine(option)).trim();
+    }
+
+    function vendorModule(option) {
+        const group = String(option?.source?.group || option?.group || '').toLowerCase();
+        if (group.includes('gnss') || group.includes('gps')) return 'GPS';
+        if (group.includes('audio')) return 'Audio';
+        if (group.includes('ftp') || group.includes('http') || group.includes('mqtt') || group.includes('ssl') || group.includes('tcp')) return 'Modem data';
+        return 'Modem';
+    }
+
+    function runtimeModule(option) {
+        const group = String(option?.source?.group || option?.group || '').toLowerCase();
+        const category = String(option?.source?.category || '').toLowerCase();
+        if (category.includes('camera')) return 'Camera';
+        if (category.includes('gps')) return 'GPS';
+        if (category.includes('audio')) return 'Audio';
+        if (group.includes('network') || group.includes('telephony')) return 'Modem';
+        if (group.includes('gpio')) return 'GPIO';
+        if (group.includes('storage')) return 'Storage';
+        return 'System';
+    }
+
+    function describeFunctionParameters(test) {
+        const params = Array.isArray(test?.parameters) ? test.parameters : [];
+        if (!params.length) return 'No parameters required.';
+        return params.map((param) => {
+            const required = param.required ? ' required' : '';
+            const defaultText = param.default !== undefined ? ` default=${param.default}` : '';
+            return `${param.name}${required}${defaultText}`;
+        }).join('; ');
+    }
+
     function setSystemLogSource(source) {
-        const normalized = ['app', 'mqtt', 'error', 'manual'].includes(source) ? source : 'app';
+        const normalized = SYSTEM_LOG_SOURCES.includes(source) ? source : 'app';
         state.systemLogSource = normalized;
-        document.querySelectorAll('[data-system-log-source]').forEach((button) => {
-            const isActive = button.dataset.systemLogSource === normalized;
-            button.classList.toggle('active', isActive);
-            button.setAttribute('aria-selected', isActive ? 'true' : 'false');
-        });
+        savePreference('logSource', normalized);
+        renderSystemLogSourceButtons();
         loadSystemLogs(normalized);
     }
 
+    function renderSystemLogSourceButtons() {
+        document.querySelectorAll('[data-system-log-source]').forEach((button) => {
+            const isActive = button.dataset.systemLogSource === state.systemLogSource;
+            button.classList.toggle('active', isActive);
+            button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+    }
+
     function setConsoleTab(tab) {
-        const normalizedTab = ['system', 'serial', 'mqtt'].includes(tab) ? tab : 'system';
+        const normalizedTab = CONSOLE_TABS.includes(tab) ? tab : 'system';
         state.activeTab = normalizedTab;
         state.transport = normalizedTab === 'serial' ? 'serial' : 'mqtt';
-        if (normalizedTab === 'system') {
-            setMode('single');
-        }
+        savePreference('activeTab', normalizedTab);
         document.querySelectorAll('[data-console-tab]').forEach((button) => {
             const isActive = button.dataset.consoleTab === normalizedTab;
             button.classList.toggle('active', isActive);
@@ -461,11 +750,13 @@
         elements.page?.classList.toggle('is-mqtt-tab', normalizedTab === 'mqtt');
         if (elements.sessionLabel) elements.sessionLabel.textContent = normalizedTab === 'system' ? 'logs' : normalizedTab;
         renderTabHint();
+        renderCommandResult();
         renderSerialStatus();
         rebuildOptions();
         updateControlVisibility();
         if (normalizedTab === 'system') {
             loadSystemLogs();
+            loadSystemLogCounts();
             startSystemLogRefresh();
         } else {
             stopSystemLogRefresh();
@@ -483,20 +774,114 @@
         elements.tabHint.textContent = hints[state.activeTab] || '';
     }
 
+    function renderCommandResult(update = null) {
+        const updateTransport = update?.transport === 'serial' ? 'serial' : (update?.transport === 'mqtt' ? 'mqtt' : null);
+        if (update && updateTransport) {
+            state.results[updateTransport] = {
+                ...(state.results[updateTransport] || {}),
+                ...update,
+                transport: updateTransport,
+                timestamp: update.timestamp || new Date().toISOString()
+            };
+        }
+
+        const activeTransport = state.activeTab === 'serial' ? 'serial' : (state.activeTab === 'mqtt' ? 'mqtt' : null);
+        if (elements.resultPanel) elements.resultPanel.style.display = activeTransport ? '' : 'none';
+        if (!activeTransport) return;
+
+        const result = state.results[activeTransport];
+        const transportLabel = activeTransport === 'mqtt' ? 'MQTT' : 'Serial';
+        if (elements.resultTitle) {
+            elements.resultTitle.innerHTML = `<i class="bi bi-clipboard-check me-1"></i>${transportLabel} Result`;
+        }
+
+        const idleSummary = activeTransport === 'mqtt'
+            ? 'No MQTT result yet. Send a command to see the response here.'
+            : 'No serial result yet. Send a command or wait for serial RX.';
+        const level = result?.level || 'secondary';
+        const status = result?.status || 'idle';
+        if (elements.resultBadge) {
+            elements.resultBadge.className = `badge ${resultBadgeClass(level)}`;
+            elements.resultBadge.textContent = String(status);
+        }
+        if (elements.resultSummary) {
+            elements.resultSummary.textContent = result?.summary || idleSummary;
+        }
+        if (elements.resultJson) {
+            elements.resultJson.textContent = result?.data === undefined || result?.data === null
+                ? '{}'
+                : JSON.stringify(buildResultDetail(result), null, 2);
+        }
+    }
+
+    function buildResultDetail(result) {
+        const entry = {
+            timestamp: result.timestamp || '',
+            source: `${result.transport || state.transport}:result`,
+            level: result.level || 'info',
+            consoleTab: result.transport || state.transport,
+            scope: 'manual',
+            data: result.data
+        };
+        return {
+            result: {
+                transport: result.transport || state.transport,
+                status: result.status || '',
+                summary: result.summary || '',
+                timestamp: result.timestamp || ''
+            },
+            detail: buildReadableDetail(entry, result.data)
+        };
+    }
+
+    function resultBadgeClass(level) {
+        switch (level) {
+            case 'success': return 'text-bg-success';
+            case 'danger': return 'text-bg-danger';
+            case 'warning': return 'text-bg-warning';
+            case 'primary': return 'text-bg-primary';
+            case 'info': return 'text-bg-info';
+            default: return 'text-bg-secondary';
+        }
+    }
+
     function setMode(mode) {
-        state.mode = mode === 'chain' ? 'chain' : 'single';
+        state.mode = normalizeMode(mode);
         if (elements.mode) elements.mode.value = state.mode;
-        document.querySelectorAll('.single-command-row').forEach((node) => {
-            node.style.display = state.mode === 'single' ? '' : 'none';
-        });
+        if (elements.presetLabel) {
+            elements.presetLabel.textContent = state.mode === 'function' ? 'Function' : (state.mode === 'chain' ? 'Scenario' : (state.mode === 'action' ? 'Action' : 'Command'));
+        }
+        updateCommandLineVisibility();
         document.querySelectorAll('.chain-command-row').forEach((node) => {
             node.style.display = state.mode === 'chain' ? '' : 'none';
         });
+        rebuildOptions();
         updateControlVisibility();
+    }
+
+    function updateCommandLineVisibility() {
+        const option = selectedOption();
+        const shouldShow = state.mode === 'command' && commandNeedsLineInput(option);
+        document.querySelectorAll('.command-line-row').forEach((node) => {
+            node.style.display = shouldShow ? '' : 'none';
+        });
+    }
+
+    function commandNeedsLineInput(option) {
+        if (!option) return false;
+        if (option.type === 'vendor') return true;
+        if (option.type === 'command') return option.category === 'manual' || option.raw === true;
+        return false;
+    }
+
+    function normalizeMode(mode) {
+        if (mode === 'single') return 'command';
+        return ['command', 'action', 'chain', 'function'].includes(mode) ? mode : 'command';
     }
 
     function updateControlVisibility() {
         const option = selectedOption();
+        updateCommandLineVisibility();
         if (elements.send) {
             const icon = option?.type === 'test' ? 'bi-play-fill' : 'bi-send';
             const label = option?.type === 'test' ? 'Run' : 'Send';
@@ -504,7 +889,7 @@
         }
         const payloadPanel = document.getElementById('esp32PayloadPanel');
         if (payloadPanel) {
-            payloadPanel.style.display = state.transport === 'mqtt' ? '' : 'none';
+            payloadPanel.style.display = state.mode === 'function' || state.mode === 'action' || (state.transport === 'mqtt' && state.mode === 'command') ? '' : 'none';
         }
         if (elements.mode) {
             elements.mode.disabled = state.activeTab === 'system';
@@ -519,26 +904,137 @@
             return;
         }
 
-        const commands = state.mode === 'chain'
-            ? String(elements.chain?.value || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-            : [String(option?.command || '').trim()].filter(Boolean);
+        const plan = state.mode === 'chain'
+            ? parseChainPlan(elements.chain?.value || '')
+            : [{ type: 'command', line: 1, command: currentCommandLine(option) }];
+        const commands = plan.filter((step) => step.type === 'command').map((step) => step.command);
+
+        const validationErrors = validateCommandPlan(plan, state.transport);
+        if (validationErrors.length) {
+            reportCommandValidationErrors(validationErrors);
+            return;
+        }
 
         if (commands.length === 0) {
             appendLine('error', 'Command is required.', 'danger');
+            renderCommandResult({
+                transport: state.transport === 'serial' ? 'serial' : 'mqtt',
+                status: 'invalid',
+                summary: 'Command is required.',
+                level: 'danger',
+                data: { message: 'Command is required.' }
+            });
             return;
         }
 
         setSending(true, option?.type === 'test');
         try {
             if (state.transport === 'serial') {
-                await sendSerialCommands(commands);
+                await sendSerialPlan(plan);
             } else {
-                await sendConsoleCommands(commands);
+                await sendConsolePlan(plan);
             }
         } finally {
             setSending(false, false);
             if (state.transport === 'mqtt') refreshMqttStatus();
         }
+    }
+
+    function parseChainPlan(value) {
+        return String(value || '').split(/\r?\n/).map((line, index) => {
+            const text = String(line || '').trim();
+            if (!text) return { type: 'blank', line: index + 1, raw: line };
+            if (text.startsWith('#')) return { type: 'comment', line: index + 1, text: text.replace(/^#\s?/, '') };
+            const waitMatch = text.match(/^wait\s+(\d{1,6})(?:\s*ms)?$/i);
+            if (waitMatch) return { type: 'wait', line: index + 1, ms: Number(waitMatch[1]), raw: text };
+            return { type: 'command', line: index + 1, command: text };
+        }).filter((step) => step.type !== 'blank');
+    }
+
+    function validateCommandPlan(plan, transport) {
+        const errors = [];
+        const commandSteps = plan.filter((step) => step.type === 'command');
+        if (!plan.length || !commandSteps.length) {
+            errors.push({ line: 1, command: '', message: 'At least one command is required.' });
+            return errors;
+        }
+
+        plan.forEach((step) => {
+            if (step.type === 'comment') return;
+            if (step.type === 'wait') {
+                if (!Number.isFinite(step.ms) || step.ms < 100 || step.ms > 120000) {
+                    errors.push({ line: step.line, command: step.raw || '', message: 'Wait must be between 100 and 120000 ms.' });
+                }
+                return;
+            }
+            if (step.type !== 'command') {
+                errors.push({ line: step.line, command: step.raw || '', message: 'Unknown chain step. Use AT command, wait 1000, or # comment.' });
+                return;
+            }
+            validateCommandText(step.command, step.line, transport).forEach((error) => errors.push(error));
+        });
+        return errors;
+    }
+
+    function validateCommandList(commands, transport) {
+        return validateCommandPlan(commands.map((command, index) => ({
+            type: 'command',
+            line: index + 1,
+            command
+        })), transport);
+    }
+
+    function validateCommandText(command, lineNumber, transport) {
+        const errors = [];
+        const text = String(command || '').trim();
+        if (!text) {
+            errors.push({ line: lineNumber, command: text, message: 'Command is empty.' });
+            return errors;
+        }
+        if (/[\r\n\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(text)) {
+            errors.push({ line: lineNumber, command: text, message: 'Command must be one printable line.' });
+            return errors;
+        }
+        if (looksLikeRawModemLine(text)) {
+            if (text.length > 96) {
+                errors.push({ line: lineNumber, command: text, message: 'Raw modem line must be 96 characters or less.' });
+            }
+            const upper = text.toUpperCase();
+            if (upper === 'AT+CUSD') {
+                errors.push({ line: lineNumber, command: text, message: 'AT+CUSD needs parameters. Use AT+CUSD=1,"*123#",15, AT+CUSD=2, AT+CUSD?, or AT+CUSD=?' });
+            } else if (upper.startsWith('AT+CUSD=') && !isValidCusdLine(text)) {
+                errors.push({ line: lineNumber, command: text, message: 'Invalid CUSD format. Use AT+CUSD=1,"*123#",15 for send/reply or AT+CUSD=2 to cancel.' });
+            }
+            return errors;
+        }
+        if (transport === 'serial') {
+            errors.push({ line: lineNumber, command: text, message: 'Serial command must be an AT/modem line, for example AT or AT+CSQ.' });
+            return errors;
+        }
+        if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(text)) {
+            errors.push({ line: lineNumber, command: text, message: 'MQTT command must be a known command name or one raw AT/modem line.' });
+        }
+        return errors;
+    }
+
+    function isValidCusdLine(command) {
+        const text = String(command || '').trim();
+        if (/^AT\+CUSD=\?$/i.test(text) || /^AT\+CUSD\?$/i.test(text)) return true;
+        if (/^AT\+CUSD=2$/i.test(text)) return true;
+        return /^AT\+CUSD=1,"[^"\r\n]+",(?:15|17)$/i.test(text);
+    }
+
+    function reportCommandValidationErrors(errors) {
+        const summary = errors.map((error) => `Line ${error.line}: ${error.message}`).join(' ');
+        appendLine('validation', summary, 'danger', { errors }, { scope: 'manual', tab: state.activeTab });
+        renderCommandResult({
+            transport: state.transport === 'serial' ? 'serial' : 'mqtt',
+            status: 'invalid',
+            summary,
+            level: 'danger',
+            data: { errors }
+        });
+        if (window.showToast) window.showToast(summary, 'danger');
     }
 
     async function runTestOption(option) {
@@ -585,6 +1081,13 @@
             payload = parsePayload();
         } catch (error) {
             appendLine('error', error.message, 'danger');
+            renderCommandResult({
+                transport: 'mqtt',
+                status: 'invalid payload',
+                summary: error.message,
+                level: 'danger',
+                data: { message: error.message }
+            });
             return;
         }
 
@@ -592,12 +1095,22 @@
         const timeoutMs = Number(elements.timeout?.value || 30000);
         for (const command of commands) {
             const raw = looksLikeRawModemLine(command);
-            appendLine('send', raw ? `${command} -> modem-at` : command, 'primary', {
+            const requestData = {
                 command,
                 payload,
                 raw,
                 waitForResponse,
                 timeoutMs
+            };
+            renderCommandResult({
+                transport: 'mqtt',
+                status: waitForResponse ? 'waiting' : 'published',
+                summary: raw ? `${command} -> modem-at` : command,
+                level: waitForResponse ? 'info' : 'primary',
+                data: requestData
+            });
+            appendLine('send', raw ? `${command} -> modem-at` : command, 'primary', {
+                ...requestData
             });
             try {
                 const response = await fetch('/api/esp32-console/command', {
@@ -619,12 +1132,45 @@
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok || !data.success) throw new Error(data.message || `Command failed with HTTP ${response.status}`);
                 const resultText = summarizeCommandResult(command, data);
-                appendLine('response', resultText, commandResultLevel(data), data);
+                const resultLevel = commandResultLevel(data);
+                const resultStatus = commandResultStatus(data, resultLevel);
+                appendLine('response', resultText, resultLevel, data);
+                renderCommandResult({
+                    transport: 'mqtt',
+                    status: resultStatus,
+                    summary: resultText,
+                    level: resultLevel,
+                    data
+                });
                 if (elements.lastRun) elements.lastRun.textContent = `${command} / ${resultText}`;
             } catch (error) {
                 appendLine('error', `${command}: ${error.message}`, 'danger', { command, message: error.message });
+                renderCommandResult({
+                    transport: 'mqtt',
+                    status: 'error',
+                    summary: `${command}: ${error.message}`,
+                    level: 'danger',
+                    data: { command, message: error.message }
+                });
                 if (window.showToast) window.showToast(error.message || 'Command failed', 'danger');
                 if (state.mode !== 'chain') return;
+            }
+        }
+    }
+
+    async function sendConsolePlan(plan) {
+        for (const step of plan) {
+            if (step.type === 'comment') {
+                appendLine('scenario', step.text || 'scenario note', 'info', { step });
+                continue;
+            }
+            if (step.type === 'wait') {
+                appendLine('wait', `Wait ${step.ms}ms`, 'info', { step });
+                await delay(step.ms);
+                continue;
+            }
+            if (step.type === 'command') {
+                await sendConsoleCommands([step.command]);
             }
         }
     }
@@ -632,19 +1178,57 @@
     async function sendSerialCommands(commands) {
         if (!state.serial.port || !state.serial.writer) {
             appendLine('error', 'Connect serial monitor first.', 'danger');
+            renderCommandResult({
+                transport: 'serial',
+                status: 'not connected',
+                summary: 'Connect serial monitor first.',
+                level: 'warning',
+                data: { message: 'Connect serial monitor first.' }
+            });
             if (window.showToast) window.showToast('Connect serial monitor first', 'warning');
             return;
         }
         const encoder = new TextEncoder();
         for (const command of commands) {
             await state.serial.writer.write(encoder.encode(command + serialLineEnding()));
-            appendLine('serial-tx', command, 'primary', {
+            const data = {
                 command,
                 baudRate: Number(elements.serialBaud?.value || 115200),
                 ending: elements.serialEnding?.value || 'crlf'
+            };
+            appendLine('serial-tx', command, 'primary', {
+                ...data
+            });
+            renderCommandResult({
+                transport: 'serial',
+                status: 'sent',
+                summary: `TX ${command}`,
+                level: 'primary',
+                data
             });
             if (elements.lastRun) elements.lastRun.textContent = `serial / ${command}`;
         }
+    }
+
+    async function sendSerialPlan(plan) {
+        for (const step of plan) {
+            if (step.type === 'comment') {
+                appendLine('scenario', step.text || 'scenario note', 'info', { step });
+                continue;
+            }
+            if (step.type === 'wait') {
+                appendLine('wait', `Wait ${step.ms}ms`, 'info', { step });
+                await delay(step.ms);
+                continue;
+            }
+            if (step.type === 'command') {
+                await sendSerialCommands([step.command]);
+            }
+        }
+    }
+
+    function delay(ms) {
+        return new Promise((resolve) => window.setTimeout(resolve, ms));
     }
 
     function startStatusPoll() {
@@ -661,7 +1245,10 @@
     function startSystemLogRefresh() {
         stopSystemLogRefresh();
         state.systemLogTimer = window.setInterval(() => {
-            if (state.activeTab === 'system') loadSystemLogs();
+            if (state.activeTab === 'system') {
+                loadSystemLogs();
+                loadSystemLogCounts();
+            }
         }, 10000);
     }
 
@@ -702,6 +1289,13 @@
         if (state.serial.port) {
             await closeSerialConnection();
             appendLine('serial', 'Serial monitor disconnected.', 'info');
+            renderCommandResult({
+                transport: 'serial',
+                status: 'disconnected',
+                summary: 'Serial monitor disconnected.',
+                level: 'info',
+                data: { connected: false }
+            });
             return;
         }
         await openSerialConnection();
@@ -710,6 +1304,13 @@
     async function openSerialConnection() {
         if (!navigator.serial) {
             appendLine('serial', 'Web Serial is not supported in this browser.', 'warning');
+            renderCommandResult({
+                transport: 'serial',
+                status: 'unsupported',
+                summary: 'Web Serial is not supported in this browser.',
+                level: 'warning',
+                data: { supported: false }
+            });
             if (window.showToast) window.showToast('Web Serial is not supported in this browser', 'warning');
             return;
         }
@@ -724,9 +1325,23 @@
             state.serial.buffer = '';
             renderSerialStatus();
             appendLine('serial', `Serial monitor connected at ${baudRate}.`, 'success', { baudRate });
+            renderCommandResult({
+                transport: 'serial',
+                status: 'connected',
+                summary: `Serial monitor connected at ${baudRate}.`,
+                level: 'success',
+                data: { baudRate, connected: true }
+            });
             readSerialLoop();
         } catch (error) {
             appendLine('serial', error.message || 'Serial connect failed.', 'danger', { message: error.message });
+            renderCommandResult({
+                transport: 'serial',
+                status: 'error',
+                summary: error.message || 'Serial connect failed.',
+                level: 'danger',
+                data: { message: error.message }
+            });
             if (window.showToast) window.showToast(error.message || 'Serial connect failed', 'danger');
             await closeSerialConnection();
         }
@@ -742,9 +1357,28 @@
                 state.serial.buffer += decoder.decode(value);
                 const lines = state.serial.buffer.split(/\r?\n/);
                 state.serial.buffer = lines.pop() || '';
-                lines.filter(Boolean).forEach((line) => appendLine('serial-rx', line, 'info', { line }));
+                lines.filter(Boolean).forEach((line) => {
+                    const data = { line };
+                    appendLine('serial-rx', line, 'info', data);
+                    renderCommandResult({
+                        transport: 'serial',
+                        status: 'rx',
+                        summary: line,
+                        level: 'info',
+                        data
+                    });
+                });
             } catch (error) {
-                if (state.serial.readLoopActive) appendLine('serial', error.message || 'Serial read failed.', 'danger', { message: error.message });
+                if (state.serial.readLoopActive) {
+                    appendLine('serial', error.message || 'Serial read failed.', 'danger', { message: error.message });
+                    renderCommandResult({
+                        transport: 'serial',
+                        status: 'read error',
+                        summary: error.message || 'Serial read failed.',
+                        level: 'danger',
+                        data: { message: error.message }
+                    });
+                }
                 break;
             }
         }
@@ -819,8 +1453,7 @@
 
     function appendLine(source, message, level, data, options = {}) {
         if (!elements.output) return;
-        const manualSources = new Set(['send', 'response', 'console', 'serial', 'serial-tx', 'serial-rx', 'picker', 'error']);
-        const scope = options.scope || (state.activeTab !== 'system' && manualSources.has(source) ? 'manual' : 'system');
+        const scope = options.scope || (state.activeTab !== 'system' && MANUAL_EVENT_SOURCES.includes(source) ? 'manual' : 'system');
         const entry = {
             timestamp: new Date().toISOString(),
             deviceId: state.currentDeviceId || getCurrentDeviceId(),
@@ -834,6 +1467,7 @@
         };
         state.entries.push(entry);
         if (state.entries.length > MAX_EVENTS) state.entries.shift();
+        if (scope === 'manual') updateSystemCount('manual', visibleManualLogRows().length);
         renderEvents();
         if (options.persist !== false) persistEvent(entry).catch(() => {});
     }
@@ -1019,17 +1653,13 @@
     }
 
     function commandLabel(option) {
-        const prefix = option.type === 'test'
-            ? 'Test'
-            : (option.type === 'vendor'
-                ? (state.activeTab === 'mqtt' ? 'MQTT AT' : 'Serial AT')
-                : (option.category === 'system' ? 'MQTT Runtime' : (state.activeTab === 'mqtt' ? 'MQTT Manual' : 'Serial Manual')));
-        return `${prefix} - ${option.label || option.command || 'Command'}`;
+        if (option.type === 'test') return `Test - ${option.label || option.command || 'Command'}`;
+        return option.label || option.command || 'Command';
     }
 
     function commandGroupPrefix(category) {
-        if (category === 'system') return 'MQTT Runtime';
-        return state.activeTab === 'mqtt' ? 'MQTT Manual' : 'Serial Manual';
+        if (category === 'system') return 'Action';
+        return 'Manual';
     }
 
     function normalizeSystemLogEntry(entry, source) {
@@ -1047,11 +1677,10 @@
     function normalizeConsoleEvent(entry) {
         const event = entry && typeof entry === 'object' ? entry : {};
         const source = String(event.source || 'console');
-        const manualSources = new Set(['send', 'response', 'serial', 'serial-tx', 'serial-rx', 'picker', 'error']);
         return {
             ...event,
-            consoleTab: event.consoleTab || (source.startsWith('serial') ? 'serial' : (manualSources.has(source) ? 'mqtt' : 'system')),
-            scope: event.scope || (manualSources.has(source) ? 'manual' : 'system')
+            consoleTab: event.consoleTab || (source.startsWith('serial') ? 'serial' : (MANUAL_EVENT_SOURCES.includes(source) ? 'mqtt' : 'system')),
+            scope: event.scope || (MANUAL_EVENT_SOURCES.includes(source) ? 'manual' : 'system')
         };
     }
 
@@ -1112,13 +1741,49 @@
         if (badge) badge.textContent = String(count || 0);
     }
 
+    function restoreLogPreferences() {
+        const logSource = readPreference('logSource');
+        if (SYSTEM_LOG_SOURCES.includes(logSource)) {
+            state.systemLogSource = logSource;
+        }
+        if (elements.systemLogLevel) {
+            const level = readPreference('logLevel');
+            if (LOG_LEVELS.includes(level)) elements.systemLogLevel.value = level || '';
+        }
+        if (elements.systemLogLimit) {
+            const limit = readPreference('logLimit');
+            if (LOG_LIMITS.includes(limit)) elements.systemLogLimit.value = limit;
+        }
+        if (elements.systemLogSearch) {
+            elements.systemLogSearch.value = readPreference('logSearch') || '';
+            state.systemLogSearch = String(elements.systemLogSearch.value || '').toLowerCase();
+        }
+        renderSystemLogSourceButtons();
+    }
+
     function initialTab() {
         try {
             const tab = new URL(window.location.href).searchParams.get('tab');
-            if (['system', 'serial', 'mqtt'].includes(tab)) return tab;
+            if (CONSOLE_TABS.includes(tab)) return tab;
             if (tab === 'logs') return 'system';
         } catch (_) {}
+        const storedTab = readPreference('activeTab');
+        if (CONSOLE_TABS.includes(storedTab)) return storedTab;
         return 'system';
+    }
+
+    function readPreference(key) {
+        try {
+            return localStorage.getItem(STORAGE_PREFIX + key) || '';
+        } catch (_) {
+            return '';
+        }
+    }
+
+    function savePreference(key, value) {
+        try {
+            localStorage.setItem(STORAGE_PREFIX + key, String(value ?? ''));
+        } catch (_) {}
     }
 
     function displayTabName(tab) {
@@ -1192,6 +1857,25 @@
         if (data.success === false || /fail|error|timeout|denied|invalid/.test(statusText)) return 'danger';
         if (/warn|skip|partial/.test(statusText)) return 'warning';
         return 'success';
+    }
+
+    function commandResultStatus(payload, fallbackLevel = 'success') {
+        const data = parseNestedJson(payload || {});
+        const result = data.result && typeof data.result === 'object' ? data.result : {};
+        const candidates = [
+            data.status,
+            data.data?.status,
+            result.status,
+            result.result,
+            data.message,
+            data.data?.message,
+            result.message
+        ];
+        for (const candidate of candidates) {
+            const normalized = String(candidate || '').trim();
+            if (normalized) return normalized;
+        }
+        return fallbackLevel === 'danger' ? 'error' : (fallbackLevel === 'warning' ? 'warning' : 'ok');
     }
 
     function levelClass(level) {

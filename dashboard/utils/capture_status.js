@@ -8,6 +8,11 @@ const dotenv = require('dotenv');
 
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
+function buildCaptureClientId() {
+    const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    return `status-capture-${suffix}`.slice(0, 64);
+}
+
 function parseArgs(argv) {
     const args = {
         host: process.env.MQTT_HOST || '127.0.0.1',
@@ -199,6 +204,7 @@ async function captureStatus(options = {}) {
 
     const brokerUrl = `${args.protocol}://${args.host}:${args.port}`;
     const client = mqtt.connect(brokerUrl, {
+        clientId: buildCaptureClientId(),
         username: args.username || undefined,
         password: args.password || undefined,
         reconnectPeriod: 0,
@@ -287,6 +293,7 @@ async function main() {
 }
 
 module.exports = {
+    buildCaptureClientId,
     captureStatus,
     parseArgs
 };

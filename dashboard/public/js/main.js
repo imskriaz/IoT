@@ -9,7 +9,6 @@ let reconnectAttempts = 0;
 const maxReconnectAttempts = 10;
 const DEFAULT_STATUS_REFRESH_INTERVAL_MS = 60000;
 const STATUS_REFRESH_COOLDOWN_MS = 3000;
-const MQTT_DOWN_SETTINGS_REDIRECT_DELAY_MS = 15000;
 let statusRefreshIntervalMs = DEFAULT_STATUS_REFRESH_INTERVAL_MS;
 let latestDeviceStatus = null;
 let latestQueueState = { dashboard: null, device: null };
@@ -21,11 +20,15 @@ let dashboardSmsRefreshTimer = null;
 let dashboardSmsPreviewToken = 0;
 let dashboardSmsUnreadToken = 0;
 let activeIncomingCallContext = null;
-let mqttDownSettingsRedirectTimer = null;
-let mqttDownSettingsRedirectStartedAt = 0;
-let mqttDownSettingsRedirectCountdownTimer = null;
 const TOAST_DEDUPE_WINDOW_MS = 2500;
 const recentToastKeys = new Map();
+const headerNotificationFilter = {
+    read: 'unread',
+    category: 'all',
+    limit: 10,
+    offset: 0,
+    total: 0
+};
 const MODULE_CAPABILITY_KEYS = new Set([
     'audio', 'battery', 'calls', 'camera', 'display', 'gpio', 'gps',
     'intercom', 'internet', 'keyboard', 'modem', 'nfc', 'rfid', 'sd',
@@ -212,66 +215,6 @@ function isDashboardVisible() {
 function isDashboardHomePage() {
     const pathname = String(window.location?.pathname || '').trim().toLowerCase();
     return pathname === '/' || pathname === '/dashboard';
-}
-
-function isSystemSettingsPage() {
-    const pathname = String(window.location?.pathname || '').trim().toLowerCase();
-    return pathname === '/settings';
-}
-
-function shouldRedirectMQTTDownToSettings() {
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
-        return false;
-    }
-    if (isSystemSettingsPage()) {
-        return false;
-    }
-    if (window._serverConnected === false) {
-        return false;
-    }
-    return Boolean(document.getElementById('globalConnectionOverlay'));
-}
-
-function getMQTTSettingsRedirectUrl() {
-    return '/settings?mqttDown=1#mqtt-broker';
-}
-
-function getMQTTDownRedirectSecondsRemaining() {
-    if (!mqttDownSettingsRedirectStartedAt) {
-        return Math.ceil(MQTT_DOWN_SETTINGS_REDIRECT_DELAY_MS / 1000);
-    }
-    const elapsed = Date.now() - mqttDownSettingsRedirectStartedAt;
-    return Math.max(0, Math.ceil((MQTT_DOWN_SETTINGS_REDIRECT_DELAY_MS - elapsed) / 1000));
-}
-
-function cancelMQTTDownSettingsRedirect() {
-    if (mqttDownSettingsRedirectTimer) {
-        clearTimeout(mqttDownSettingsRedirectTimer);
-        mqttDownSettingsRedirectTimer = null;
-    }
-    if (mqttDownSettingsRedirectCountdownTimer) {
-        clearInterval(mqttDownSettingsRedirectCountdownTimer);
-        mqttDownSettingsRedirectCountdownTimer = null;
-    }
-    mqttDownSettingsRedirectStartedAt = 0;
-}
-
-function scheduleMQTTDownSettingsRedirect() {
-    if (mqttDownSettingsRedirectTimer || !shouldRedirectMQTTDownToSettings()) {
-        return;
-    }
-
-    mqttDownSettingsRedirectStartedAt = Date.now();
-    mqttDownSettingsRedirectTimer = setTimeout(() => {
-        mqttDownSettingsRedirectTimer = null;
-        if (mqttDownSettingsRedirectCountdownTimer) {
-            clearInterval(mqttDownSettingsRedirectCountdownTimer);
-            mqttDownSettingsRedirectCountdownTimer = null;
-        }
-        window.location.assign(getMQTTSettingsRedirectUrl());
-    }, MQTT_DOWN_SETTINGS_REDIRECT_DELAY_MS);
-
-    mqttDownSettingsRedirectCountdownTimer = setInterval(updateGlobalConnectionOverlay, 1000);
 }
 
 function isStatusPanelOpen() {
@@ -993,11 +936,6 @@ function updateGlobalConnectionOverlay() {
         show = true;
         nextTitle = 'Dashboard Socket Down';
         nextMessage = 'Trying to reconnect to the dashboard server/socket. Actions are paused until it is back.';
-    } else if (window._serverConnected !== false && window._mqttConnected === false) {
-        show = true;
-        const mqttState = normalizeMQTTStatus(window._mqttStatus || false);
-        nextTitle = 'MQTT';
-        nextMessage = mqttState.reconnecting || mqttState.connecting ? 'Connecting' : 'Offline';
     }
 
     title.textContent = nextTitle;
@@ -1433,6 +1371,8 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Check unread messages
     updateUnreadBadge();
+    refreshNotificationSummary();
+    refreshHeaderNotificationPreview();
     refreshDashboardSmsPreview();
     
     // Handle orientation change
@@ -1539,6 +1479,11 @@ function initializeSocket() {
     
     socket.on('connected', function(data) {
         console.log('Server confirmed connection:', data);
+    });
+
+    socket.on('notification:created', function(data) {
+        updateNotificationBadges(Number(getVisibleNotificationCount()) + 1);
+        refreshHeaderNotificationPreview();
     });
     
     socket.on('mqtt:status', function(data) {
@@ -1992,7 +1937,6 @@ function updateConnectionStatus(status) {
             if (loadingSkeleton) loadingSkeleton.style.display = 'none';
             if (metricsPanel) metricsPanel.style.display = 'none';
             window._serverConnected = false;
-            cancelMQTTDownSettingsRedirect();
             break;
 
         case 'reconnecting':
@@ -2021,7 +1965,6 @@ function updateMQTTStatus(status) {
     const mqttState = normalizeMQTTStatus(status);
 
     if (mqttState.connected) {
-        cancelMQTTDownSettingsRedirect();
         mqttConnecting.style.display = 'none';
         mqttConnected.style.display = 'inline-block';
         mqttDisconnected.style.display = 'none';
@@ -2032,7 +1975,6 @@ function updateMQTTStatus(status) {
         }
         if (loadingSkeleton) loadingSkeleton.style.display = 'none';
     } else if (mqttState.connecting || mqttState.reconnecting) {
-        cancelMQTTDownSettingsRedirect();
         mqttConnecting.style.display = 'inline-block';
         mqttConnected.style.display = 'none';
         mqttDisconnected.style.display = 'none';
@@ -2054,9 +1996,6 @@ function updateMQTTStatus(status) {
         }
         if (loadingSkeleton) loadingSkeleton.style.display = 'none';
         if (metricsPanel) metricsPanel.style.display = 'none';
-        // Keep device liveness separate from broker liveness. USB/direct paths
-        // can still keep the board reachable while MQTT is down.
-        scheduleMQTTDownSettingsRedirect();
     }
     window._mqttStatus = mqttState;
     window._mqttConnected = mqttState.connected;
@@ -3219,6 +3158,8 @@ window.addEventListener('device:changed', function () {
     updateHeaderDeviceSummary(latestDeviceStatus, latestQueueState);
     updateSidebarSimSelector(latestDeviceStatus);
     updateUnreadBadge();
+    refreshNotificationSummary();
+    refreshHeaderNotificationPreview();
     scheduleDashboardSmsRefresh(150);
     scheduleDeviceEnvelopeRefresh(100);
     syncDashboardStatusDemand({ allowReconnect: false });
@@ -3666,6 +3607,320 @@ function updateUnreadBadge(unreadCountOverride) {
         })
         .catch(error => console.error('Error updating unread badge:', error));
 }
+
+function getVisibleNotificationCount() {
+    const badge = document.getElementById('headerNotificationBadge');
+    return Number.parseInt(String(badge?.textContent || '0'), 10) || 0;
+}
+
+function updateNotificationBadges(count) {
+    const unreadCount = Math.max(0, Number(count) || 0);
+    const badge = document.getElementById('headerNotificationBadge');
+    if (!badge) return;
+    badge.textContent = String(unreadCount);
+    badge.classList.toggle('app-hidden', unreadCount === 0);
+}
+
+function notificationIcon(category, severity) {
+    const cat = String(category || '').toLowerCase();
+    const sev = String(severity || '').toLowerCase();
+    if (cat === 'sms') return 'bi-chat-dots';
+    if (cat === 'call') return 'bi-telephone';
+    if (cat === 'device') return 'bi-cpu';
+    if (cat === 'automation') return 'bi-diagram-3';
+    if (cat === 'queue') return 'bi-list-task';
+    if (sev === 'warning') return 'bi-exclamation-triangle';
+    if (sev === 'danger') return 'bi-exclamation-octagon';
+    return 'bi-bell';
+}
+
+function formatNotificationTime(value) {
+    const date = new Date(value || '');
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString([], {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function renderHeaderNotificationPreview(notifications = []) {
+    const target = document.getElementById('dashboardNotificationPreview');
+    if (!target) return;
+    const subtitle = document.getElementById('dashboardNotificationSubtitle');
+    if (subtitle) {
+        const category = headerNotificationFilter.category === 'all' ? 'all devices and categories' : headerNotificationFilter.category;
+        const readLabel = headerNotificationFilter.read === 'all' ? 'all' : headerNotificationFilter.read;
+        subtitle.textContent = `${notifications.length} showing - ${readLabel} - ${category}`;
+    }
+    if (!notifications.length) {
+        target.innerHTML = `
+            <div class="notification-empty-state">
+                <i class="bi bi-bell-slash"></i>
+                <div class="fw-semibold">No notifications match this view</div>
+                <div class="small text-muted">Change the filter or wait for the next device event.</div>
+            </div>
+        `;
+        return;
+    }
+    target.innerHTML = notifications.slice(0, headerNotificationFilter.limit).map(item => {
+        const unread = !Number(item.read);
+        const url = item.action_url || item.actionUrl || '/dashboard';
+        const device = item.device_id ? `<span class="notification-device-chip">${escapeHtml(item.device_id)}</span>` : '';
+        const category = item.category ? `<span class="notification-category-chip">${escapeHtml(item.category)}</span>` : '';
+        const severity = String(item.severity || item.type || 'info').toLowerCase();
+        return `
+            <div class="list-group-item notification-preview-item ${unread ? 'notification-unread' : ''}">
+                <div class="notification-preview-icon notification-preview-icon-${escapeHtml(severity)}">
+                    <i class="bi ${notificationIcon(item.category, item.severity)}"></i>
+                </div>
+                <div class="notification-preview-main">
+                    <div class="notification-preview-topline">
+                        <div class="notification-preview-title-wrap">
+                            <span class="notification-preview-title">${escapeHtml(item.title || 'Notification')}</span>
+                            ${unread ? '<span class="notification-unread-dot" title="Unread"></span>' : ''}
+                        </div>
+                        <time class="notification-preview-time">${escapeHtml(formatNotificationTime(item.created_at))}</time>
+                    </div>
+                    <div class="notification-preview-meta">${device}${category}</div>
+                    <div class="notification-preview-message">${escapeHtml(item.message || '')}</div>
+                </div>
+                <div class="notification-preview-actions">
+                    ${unread ? `
+                        <button type="button" class="btn btn-sm btn-outline-secondary" title="Mark read" onclick="event.stopPropagation(); window.markHeaderNotificationItemRead && window.markHeaderNotificationItemRead(${Number(item.id) || 0})">
+                            <i class="bi bi-check2"></i>
+                        </button>
+                    ` : ''}
+                    <a class="btn btn-sm btn-outline-primary" href="${escapeHtml(url)}" title="Open">
+                        <i class="bi bi-box-arrow-up-right"></i>
+                    </a>
+                    <button type="button" class="btn btn-sm btn-outline-danger" title="Remove" onclick="event.stopPropagation(); window.removeHeaderNotificationItem && window.removeHeaderNotificationItem(${Number(item.id) || 0})">
+                        <i class="bi bi-trash3"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function buildHeaderNotificationUrl() {
+    const params = new URLSearchParams();
+    params.set('limit', String(headerNotificationFilter.limit));
+    params.set('offset', String(headerNotificationFilter.offset || 0));
+    params.set('read', headerNotificationFilter.read || 'unread');
+    params.set('category', headerNotificationFilter.category || 'all');
+    params.set('_ts', String(Date.now()));
+    return '/api/notifications?' + params.toString();
+}
+
+function setHeaderNotificationFilter(key, value) {
+    if (key === 'read') {
+        headerNotificationFilter.read = value === 'all' ? 'all' : 'unread';
+    } else if (key === 'category') {
+        headerNotificationFilter.category = value || 'all';
+    }
+    headerNotificationFilter.offset = 0;
+    return refreshHeaderNotificationPreview();
+}
+
+function updateHeaderNotificationPagination(totalCount = headerNotificationFilter.total || 0) {
+    headerNotificationFilter.total = Math.max(0, Number(totalCount) || 0);
+    const pageLabel = document.getElementById('notificationModalPageLabel');
+    const prev = document.getElementById('notificationModalPrev');
+    const next = document.getElementById('notificationModalNext');
+    const limit = Math.max(1, Number(headerNotificationFilter.limit) || 10);
+    const offset = Math.max(0, Number(headerNotificationFilter.offset) || 0);
+    const page = Math.floor(offset / limit) + 1;
+    const pages = Math.max(1, Math.ceil(headerNotificationFilter.total / limit));
+    if (pageLabel) pageLabel.textContent = `${headerNotificationFilter.total} total - Page ${page} of ${pages}`;
+    if (prev) prev.disabled = offset <= 0;
+    if (next) next.disabled = offset + limit >= headerNotificationFilter.total;
+}
+
+function normalizeHeaderNotificationOffset(totalCount = headerNotificationFilter.total || 0) {
+    const total = Math.max(0, Number(totalCount) || 0);
+    const limit = Math.max(1, Number(headerNotificationFilter.limit) || 10);
+    const offset = Math.max(0, Number(headerNotificationFilter.offset) || 0);
+    if (total <= 0) {
+        headerNotificationFilter.offset = 0;
+        return false;
+    }
+    const maxOffset = Math.floor((total - 1) / limit) * limit;
+    if (offset > maxOffset) {
+        headerNotificationFilter.offset = maxOffset;
+        return true;
+    }
+    return false;
+}
+
+function changeHeaderNotificationPage(direction) {
+    const limit = Math.max(1, Number(headerNotificationFilter.limit) || 10);
+    const total = Math.max(0, Number(headerNotificationFilter.total) || 0);
+    const nextOffset = Math.max(0, Number(headerNotificationFilter.offset || 0) + (Number(direction) || 0) * limit);
+    if (nextOffset >= total && direction > 0) return Promise.resolve();
+    headerNotificationFilter.offset = nextOffset;
+    return refreshHeaderNotificationPreview();
+}
+
+function syncHeaderNotificationControls() {
+    const read = headerNotificationFilter.read || 'unread';
+    const unreadInput = document.getElementById('notificationModalUnread');
+    const allInput = document.getElementById('notificationModalAll');
+    const categorySelect = document.getElementById('notificationModalCategory');
+    if (unreadInput) unreadInput.checked = read !== 'all';
+    if (allInput) allInput.checked = read === 'all';
+    if (categorySelect) categorySelect.value = headerNotificationFilter.category || 'all';
+}
+
+function markHeaderNotificationItemRead(id) {
+    if (!id) return Promise.resolve();
+    return fetch('/api/notifications/read', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [id] })
+    })
+        .then(response => response.ok ? response.json() : null)
+        .then(data => {
+            if (!data || !data.success) return;
+            refreshNotificationSummary();
+            refreshHeaderNotificationPreview({ normalizePage: true });
+        })
+        .catch(() => showToast('Failed to mark notification read', 'danger'));
+}
+
+function removeHeaderNotificationItem(id) {
+    if (!id) return Promise.resolve();
+    return fetch('/api/notifications/delete', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [id] })
+    })
+        .then(response => response.ok ? response.json() : null)
+        .then(data => {
+            if (!data || !data.success) return;
+            refreshNotificationSummary();
+            refreshHeaderNotificationPreview({ normalizePage: true });
+        })
+        .catch(() => showToast('Failed to remove notification', 'danger'));
+}
+
+async function confirmClearNotifications() {
+    if (typeof window.appConfirm === 'function') {
+        return window.appConfirm({
+            title: 'Clear Notifications',
+            message: 'Clear all notifications from the inbox?',
+            confirmText: 'Clear all',
+            confirmClass: 'btn btn-danger'
+        });
+    }
+    return window.confirm ? window.confirm('Clear all notifications?') : true;
+}
+
+async function clearHeaderNotifications() {
+    const confirmed = await confirmClearNotifications();
+    if (!confirmed) return Promise.resolve();
+    return fetch('/api/notifications/delete-all?read=all&category=all', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+    })
+        .then(response => response.ok ? response.json() : null)
+        .then(data => {
+            if (!data || !data.success) return;
+            headerNotificationFilter.offset = 0;
+            updateNotificationBadges(0);
+            refreshHeaderNotificationPreview({ normalizePage: true });
+        })
+        .catch(() => showToast('Failed to clear notifications', 'danger'));
+}
+
+function updateHeaderNotificationFilterFromModal() {
+    const checkedRead = document.querySelector('input[name="notificationModalReadFilter"]:checked');
+    const category = document.getElementById('notificationModalCategory');
+    if (checkedRead) headerNotificationFilter.read = checkedRead.value === 'all' ? 'all' : 'unread';
+    if (category) headerNotificationFilter.category = category.value || 'all';
+}
+
+function bindNotificationModalRefresh() {
+    const modal = document.getElementById('dashboardNotificationsModal');
+    if (!modal || modal.dataset.notificationBound === '1') return;
+    modal.dataset.notificationBound = '1';
+    modal.addEventListener('show.bs.modal', function () {
+        updateHeaderNotificationFilterFromModal();
+        syncHeaderNotificationControls();
+        refreshHeaderNotificationPreview();
+    });
+}
+
+document.addEventListener('DOMContentLoaded', bindNotificationModalRefresh);
+
+function refreshNotificationSummary() {
+    return fetch('/api/notifications/summary?_ts=' + Date.now(), {
+        cache: 'no-store',
+        credentials: 'same-origin'
+    })
+        .then(response => response.ok ? response.json() : null)
+        .then(data => {
+            if (data && data.success) updateNotificationBadges(Number(data.unreadCount) || 0);
+        })
+        .catch(() => {});
+}
+
+function refreshHeaderNotificationPreview(options = {}) {
+    const target = document.getElementById('dashboardNotificationPreview');
+    if (!target) return Promise.resolve();
+    syncHeaderNotificationControls();
+    return fetch(buildHeaderNotificationUrl(), {
+        cache: 'no-store',
+        credentials: 'same-origin'
+    })
+        .then(response => response.ok ? response.json() : null)
+        .then(data => {
+            if (!data || !data.success) return;
+            if (normalizeHeaderNotificationOffset(Number(data.totalCount) || 0)) {
+                return refreshHeaderNotificationPreview();
+            }
+            updateNotificationBadges(Number(data.unreadCount) || 0);
+            updateHeaderNotificationPagination(Number(data.totalCount) || 0);
+            renderHeaderNotificationPreview(data.notifications || []);
+        })
+        .catch(() => {
+            target.innerHTML = '<div class="list-group-item text-muted small">Unable to load notifications.</div>';
+        });
+}
+
+function markHeaderNotificationsRead() {
+    updateHeaderNotificationFilterFromModal();
+    const url = '/api/notifications/read-all?' + buildHeaderNotificationUrl().split('?')[1];
+    return fetch(url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+    })
+        .then(response => response.ok ? response.json() : null)
+        .then(data => {
+            if (!data || !data.success) return;
+            headerNotificationFilter.offset = 0;
+            updateNotificationBadges(0);
+            refreshHeaderNotificationPreview({ normalizePage: true });
+        })
+        .catch(() => showToast('Failed to mark notifications read', 'danger'));
+}
+
+window.refreshNotificationSummary = refreshNotificationSummary;
+window.refreshHeaderNotificationPreview = refreshHeaderNotificationPreview;
+window.markHeaderNotificationsRead = markHeaderNotificationsRead;
+window.setHeaderNotificationFilter = setHeaderNotificationFilter;
+window.markHeaderNotificationItemRead = markHeaderNotificationItemRead;
+window.removeHeaderNotificationItem = removeHeaderNotificationItem;
+window.clearHeaderNotifications = clearHeaderNotifications;
+window.changeHeaderNotificationPage = changeHeaderNotificationPage;
+window.notificationIcon = notificationIcon;
 
 function normalizeToastDedupeText(value) {
     return String(value ?? '')

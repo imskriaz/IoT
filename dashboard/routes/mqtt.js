@@ -9,6 +9,16 @@ const { formatPhoneNumber, isShortCode } = require('../utils/phoneNumber');
 const { resolveRequestSimScope } = require('../utils/simScope');
 const { validateSmsMessageSize } = require('../utils/smsLimits');
 
+function buildIsolatedMqttTestClientId(clientId) {
+    const base = String(clientId || process.env.MQTT_CLIENT_ID || 'dashboard').trim()
+        .replace(/[^a-zA-Z0-9_-]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 32) || 'dashboard';
+    const suffix = `test-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    return `${base}-${suffix}`.slice(0, 64);
+}
+
 function normalizeSmsRecipients(value) {
     const entries = (Array.isArray(value) ? value : [value])
         .flatMap((item) => String(item || '').split(/[\n,;]+/))
@@ -351,7 +361,7 @@ router.post('/test', adminMiddleware, [
             protocol: 'mqtt',
             connectTimeout: 10000,
             reconnectPeriod: -1, // Don't auto reconnect
-            clientId: clientId || process.env.MQTT_CLIENT_ID || `test_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`,
+            clientId: buildIsolatedMqttTestClientId(clientId),
             clean: true,
             rejectUnauthorized: false
         };
