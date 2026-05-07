@@ -1257,10 +1257,7 @@ router.get('/devices/capabilities', async (req, res) => {
 });
 
 router.get('/logs', (req, res) => {
-    res.render('pages/logs', {
-        title: 'System Logs',
-        user: getViewUser(req)
-    });
+    res.redirect(301, '/console?tab=logs');
 });
 
 router.get('/ota', async (req, res) => {

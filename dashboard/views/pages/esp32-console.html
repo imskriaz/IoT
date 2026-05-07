@@ -4,13 +4,13 @@
             <h2 class="mb-0 fs-5">
                 <i class="bi bi-terminal me-2 text-primary"></i>Console
             </h2>
-            <small class="text-muted">Unified MQTT, Serial, tests, commands, and events</small>
+            <small class="text-muted">Logs plus manual MQTT and Serial command lanes</small>
         </div>
         <div class="d-flex flex-wrap gap-2 align-items-center">
             <span class="badge text-bg-light border" id="esp32ConsoleDeviceBadge">Device: <%= deviceId || '--' %></span>
             <span class="badge <%= initialMqttConnected ? 'text-bg-success' : 'text-bg-secondary' %>" id="esp32ConsoleMqttBadge">MQTT: <%= initialMqttConnected ? 'connected' : 'checking' %></span>
             <span class="badge text-bg-secondary" id="esp32ConsoleSerialBadge">Serial: idle</span>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="esp32ConsoleClearBtn" title="Clear events">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="esp32ConsoleClearBtn" title="Clear current view">
                 <i class="bi bi-eraser"></i>
             </button>
             <button type="button" class="btn btn-sm btn-outline-primary" id="esp32ConsoleExportBtn" title="Export events">
@@ -19,8 +19,79 @@
         </div>
     </div>
 
+    <ul class="nav nav-tabs console-tabs mb-2" role="tablist" aria-label="Console tabs">
+        <li class="nav-item" role="presentation">
+            <button type="button" class="nav-link active" data-console-tab="system" role="tab" aria-selected="true">
+                <i class="bi bi-journal-text me-1"></i>Logs
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button type="button" class="nav-link" data-console-tab="serial" role="tab" aria-selected="false">
+                <i class="bi bi-usb-symbol me-1"></i>Serial
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button type="button" class="nav-link" data-console-tab="mqtt" role="tab" aria-selected="false">
+                <i class="bi bi-broadcast-pin me-1"></i>MQTT
+            </button>
+        </li>
+    </ul>
+    <div class="tab-context small text-muted mb-2" id="esp32ConsoleTabHint"></div>
+
     <div class="row g-2">
         <div class="col-12">
+            <section class="system-log-panel mb-2" id="esp32SystemLogPanel">
+                <div class="d-flex flex-column flex-lg-row justify-content-between gap-2 align-items-lg-end">
+                    <ul class="nav nav-pills console-subtabs" role="tablist" aria-label="System log sources">
+                        <li class="nav-item" role="presentation">
+                            <button type="button" class="nav-link active" data-system-log-source="app" role="tab" aria-selected="true">
+                                <i class="bi bi-server me-1"></i>App <span class="badge text-bg-secondary ms-1" id="esp32SystemAppCount">0</span>
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button type="button" class="nav-link" data-system-log-source="mqtt" role="tab" aria-selected="false">
+                                <i class="bi bi-broadcast me-1"></i>MQTT <span class="badge text-bg-secondary ms-1" id="esp32SystemMqttCount">0</span>
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button type="button" class="nav-link" data-system-log-source="error" role="tab" aria-selected="false">
+                                <i class="bi bi-exclamation-triangle me-1"></i>Errors <span class="badge text-bg-danger ms-1" id="esp32SystemErrorCount">0</span>
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button type="button" class="nav-link" data-system-log-source="manual" role="tab" aria-selected="false">
+                                <i class="bi bi-terminal me-1"></i>Manual <span class="badge text-bg-secondary ms-1" id="esp32SystemManualCount">0</span>
+                            </button>
+                        </li>
+                    </ul>
+                    <div class="row g-2 align-items-end system-log-filters">
+                        <div class="col-6 col-sm-auto">
+                            <label class="form-label small mb-1" for="esp32SystemLogLevel">Level</label>
+                            <select class="form-select form-select-sm" id="esp32SystemLogLevel">
+                                <option value="">All</option>
+                                <option value="error">Error</option>
+                                <option value="warn">Warn</option>
+                                <option value="info">Info</option>
+                                <option value="debug">Debug</option>
+                            </select>
+                        </div>
+                        <div class="col-6 col-sm-auto">
+                            <label class="form-label small mb-1" for="esp32SystemLogLimit">Limit</label>
+                            <select class="form-select form-select-sm" id="esp32SystemLogLimit">
+                                <option value="50">50</option>
+                                <option value="100" selected>100</option>
+                                <option value="200">200</option>
+                                <option value="500">500</option>
+                            </select>
+                        </div>
+                        <div class="col-12 col-sm-auto">
+                            <label class="form-label small mb-1" for="esp32SystemLogSearch">Search</label>
+                            <input type="search" class="form-control form-control-sm" id="esp32SystemLogSearch" placeholder="Filter logs">
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <section class="console-panel mb-2">
                 <div class="console-toolbar">
                     <div class="d-flex align-items-center gap-2">
@@ -33,32 +104,14 @@
                 </div>
                 <div class="console-events" id="esp32ConsoleOutput" aria-live="polite">
                     <button type="button" class="console-event text-success" data-entry-index="0">
-                        <span class="event-time">system</span>
+                        <span class="event-time">ready</span>
                         <span class="event-source">ready</span>
-                        <span class="event-message">Pick MQTT, Serial, or System, then send a command or chain.</span>
+                        <span class="event-message">Console ready.</span>
                     </button>
                 </div>
             </section>
 
-            <section class="command-panel">
-                <ul class="nav nav-tabs console-tabs mb-2" role="tablist" aria-label="Console transport tabs">
-                    <li class="nav-item" role="presentation">
-                        <button type="button" class="nav-link active" data-console-tab="mqtt" role="tab" aria-selected="true">
-                            <i class="bi bi-broadcast-pin me-1"></i>MQTT
-                        </button>
-                    </li>
-                    <li class="nav-item" role="presentation">
-                        <button type="button" class="nav-link" data-console-tab="serial" role="tab" aria-selected="false">
-                            <i class="bi bi-usb-symbol me-1"></i>Serial
-                        </button>
-                    </li>
-                    <li class="nav-item" role="presentation">
-                        <button type="button" class="nav-link" data-console-tab="system" role="tab" aria-selected="false">
-                            <i class="bi bi-cpu me-1"></i>System
-                        </button>
-                    </li>
-                </ul>
-                <div class="tab-context small text-muted mb-2" id="esp32ConsoleTabHint"></div>
+            <section class="command-panel" id="esp32CommandPanel">
                 <div class="row g-2 align-items-end">
                     <div class="col-6 col-lg-3">
                         <label class="form-label small mb-1" for="esp32CommandModeSelect">Mode</label>
@@ -154,7 +207,8 @@ AT+CSQ</textarea>
 
 <style>
 .esp32-console-page .console-panel,
-.esp32-console-page .command-panel {
+.esp32-console-page .command-panel,
+.esp32-console-page .system-log-panel {
     border: 1px solid rgba(0, 0, 0, 0.08);
     border-radius: 8px;
     background: var(--bs-body-bg);
@@ -190,6 +244,18 @@ AT+CSQ</textarea>
     font-size: 0.78rem;
     line-height: 1.3;
     padding: 0.35rem;
+}
+
+.esp32-console-page.is-logs-tab .console-events {
+    min-height: 520px;
+    max-height: 78vh;
+}
+
+.esp32-console-page.is-mqtt-tab .serial-control,
+.esp32-console-page.is-serial-tab .mqtt-control,
+.esp32-console-page.is-logs-tab .serial-control,
+.esp32-console-page.is-logs-tab .mqtt-control {
+    display: none !important;
 }
 
 .esp32-console-page .console-event {
@@ -230,9 +296,22 @@ AT+CSQ</textarea>
     padding: 0.65rem;
 }
 
+.esp32-console-page .system-log-panel {
+    padding: 0.55rem 0.65rem;
+}
+
 .esp32-console-page .console-tabs .nav-link {
     padding: 0.36rem 0.7rem;
     font-size: 0.86rem;
+}
+
+.esp32-console-page .console-subtabs .nav-link {
+    padding: 0.3rem 0.58rem;
+    font-size: 0.8rem;
+}
+
+.esp32-console-page .system-log-filters {
+    width: auto;
 }
 
 .esp32-console-page .tab-context {
@@ -288,7 +367,8 @@ AT+CSQ</textarea>
 }
 
 [data-bs-theme="dark"] .esp32-console-page .console-panel,
-[data-bs-theme="dark"] .esp32-console-page .command-panel {
+[data-bs-theme="dark"] .esp32-console-page .command-panel,
+[data-bs-theme="dark"] .esp32-console-page .system-log-panel {
     border-color: rgba(255, 255, 255, 0.12);
 }
 
@@ -301,6 +381,11 @@ AT+CSQ</textarea>
     .esp32-console-page .console-events {
         min-height: 220px;
         max-height: 38vh;
+    }
+
+    .esp32-console-page.is-logs-tab .console-events {
+        min-height: 440px;
+        max-height: 68vh;
     }
 
     .esp32-console-page .console-event {

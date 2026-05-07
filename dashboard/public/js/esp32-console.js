@@ -13,8 +13,20 @@
         currentDeviceId: getCurrentDeviceId(),
         currentRunId: null,
         statusPollTimer: null,
+        systemLogTimer: null,
         entries: [],
-        activeTab: 'mqtt',
+        systemLogs: [],
+        activeTab: 'system',
+        systemLogSource: 'app',
+        systemLogSearch: '',
+        clearedViews: {
+            serial: 0,
+            mqtt: 0,
+            'log:app': 0,
+            'log:mqtt': 0,
+            'log:error': 0,
+            'log:manual': 0
+        },
         transport: 'mqtt',
         mode: 'single',
         hidden: { unsupported: 0, device: 0 },
@@ -52,7 +64,19 @@
         detailModal: document.getElementById('esp32EventDetailModal'),
         detailTitle: document.getElementById('esp32EventDetailTitle'),
         detailSummary: document.getElementById('esp32EventDetailSummary'),
-        detailJson: document.getElementById('esp32EventDetailJson')
+        detailJson: document.getElementById('esp32EventDetailJson'),
+        page: document.querySelector('.esp32-console-page'),
+        commandPanel: document.getElementById('esp32CommandPanel'),
+        systemLogPanel: document.getElementById('esp32SystemLogPanel'),
+        systemLogLevel: document.getElementById('esp32SystemLogLevel'),
+        systemLogLimit: document.getElementById('esp32SystemLogLimit'),
+        systemLogSearch: document.getElementById('esp32SystemLogSearch'),
+        systemCounts: {
+            app: document.getElementById('esp32SystemAppCount'),
+            mqtt: document.getElementById('esp32SystemMqttCount'),
+            error: document.getElementById('esp32SystemErrorCount'),
+            manual: document.getElementById('esp32SystemManualCount')
+        }
     };
 
     if (document.readyState === 'loading') {
@@ -67,18 +91,17 @@
         updateDeviceBadge();
         renderMqttStatus(window.INITIAL_MQTT_STATUS || window._mqttStatus || { connected: false, state: 'connecting', connecting: true });
         renderSerialStatus();
-        setConsoleTab('mqtt');
+        setConsoleTab(initialTab());
         setMode('single');
         await Promise.allSettled([
             loadCatalog(),
             loadTests(),
             loadPersistedEvents(),
+            loadSystemLogs(),
             refreshMqttStatus()
         ]);
         rebuildOptions();
-        appendLine('system', 'Console ready. Events, tests, MQTT commands, and serial lines are merged here.', 'success', {
-            clickRowsForDetails: true
-        });
+        renderEvents();
     }
 
     function attachEvents() {
@@ -88,6 +111,15 @@
         elements.format?.addEventListener('click', formatPayload);
         document.querySelectorAll('[data-console-tab]').forEach((button) => {
             button.addEventListener('click', () => setConsoleTab(button.dataset.consoleTab || 'mqtt'));
+        });
+        document.querySelectorAll('[data-system-log-source]').forEach((button) => {
+            button.addEventListener('click', () => setSystemLogSource(button.dataset.systemLogSource || 'app'));
+        });
+        elements.systemLogLevel?.addEventListener('change', () => loadSystemLogs());
+        elements.systemLogLimit?.addEventListener('change', () => loadSystemLogs());
+        elements.systemLogSearch?.addEventListener('input', () => {
+            state.systemLogSearch = String(elements.systemLogSearch.value || '').toLowerCase();
+            renderEvents();
         });
         elements.mode?.addEventListener('change', () => setMode(elements.mode.value));
         elements.preset?.addEventListener('change', () => applySelectedOption(true));
@@ -107,10 +139,11 @@
             updateDeviceBadge();
             await Promise.allSettled([loadTests(), loadPersistedEvents()]);
             rebuildOptions();
-            appendLine('system', `Active device switched to ${state.currentDeviceId || 'none'}.`, 'info');
+            appendLine('system', `Active device switched to ${state.currentDeviceId || 'none'}.`, 'info', null, { scope: 'system', tab: 'system' });
         });
         window.addEventListener('beforeunload', () => {
             stopStatusPoll();
+            stopSystemLogRefresh();
             closeSerialConnection().catch(() => {});
         });
     }
@@ -181,7 +214,7 @@
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.success) return;
-        state.entries = (data.data || []).slice(-MAX_EVENTS);
+        state.entries = (data.data || []).map(normalizeConsoleEvent).slice(-MAX_EVENTS);
         renderEvents();
     }
 
@@ -194,9 +227,51 @@
         }
     }
 
+    async function loadSystemLogs(source = state.systemLogSource) {
+        if (state.activeTab !== 'system' && source === state.systemLogSource) return;
+        if (source === 'manual') {
+            state.systemLogs = [];
+            updateSystemCount('manual', visibleManualLogRows().length);
+            renderEvents();
+            return;
+        }
+        const params = new URLSearchParams({
+            source,
+            limit: String(elements.systemLogLimit?.value || 100)
+        });
+        const level = String(elements.systemLogLevel?.value || '').trim();
+        if (level) params.set('level', level);
+        try {
+            const response = await fetch('/api/logs?' + params.toString(), {
+                credentials: 'same-origin',
+                cache: 'no-store'
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) throw new Error(data.message || 'Failed to load logs');
+            state.systemLogs = (data.entries || []).map((entry) => normalizeSystemLogEntry(entry, source));
+            updateSystemCount(source, visibleSystemLogRows(source).length);
+            renderEvents();
+        } catch (error) {
+            state.systemLogs = [normalizeSystemLogEntry({
+                timestamp: new Date().toISOString(),
+                level: 'error',
+                message: error.message || 'Failed to load logs'
+            }, source)];
+            updateSystemCount(source, 0);
+            renderEvents();
+        }
+    }
+
     function rebuildOptions() {
         const options = [];
         state.hidden = { unsupported: 0, device: 0 };
+        if (state.activeTab === 'system') {
+            state.options = [];
+            renderOptionPicker();
+            renderOptionDetails();
+            updateControlVisibility();
+            return;
+        }
 
         state.presets.forEach((preset, index) => {
             if (!deviceAllowed(preset)) {
@@ -205,13 +280,12 @@
             }
             const category = preset.category === 'manual' ? 'manual' : 'system';
             if (state.activeTab === 'serial' && category !== 'manual') return;
-            if (state.activeTab === 'mqtt' && (category !== 'system' || preset.group === 'System')) return;
-            if (state.activeTab === 'system' && (category !== 'system' || preset.group !== 'System')) return;
+            if (state.activeTab === 'mqtt' && category !== 'manual' && category !== 'system') return;
             options.push({
                 key: `command:${index}`,
                 type: 'command',
                 category,
-                group: `${category === 'manual' ? 'Manual' : 'System'} / ${preset.group || 'Commands'}`,
+                group: `${commandGroupPrefix(category)} / ${preset.group || 'Commands'}`,
                 label: preset.label || preset.command,
                 command: preset.command,
                 payload: preset.payload || {},
@@ -226,22 +300,7 @@
         Object.values(state.tests || {}).forEach((test) => {
             if (!test.supported) {
                 state.hidden.unsupported += 1;
-                return;
             }
-            if (state.activeTab !== 'system') return;
-            options.push({
-                key: `test:${test.id}`,
-                type: 'test',
-                category: 'system',
-                group: `System / Tests / ${test.category || 'general'}`,
-                label: test.name || test.id,
-                command: `test:${test.id}`,
-                payload: parameterDefaults(test),
-                timeoutMs: test.timeout || 30000,
-                waitForResponse: true,
-                note: test.description || test.supportMessage || '',
-                source: test
-            });
         });
 
         state.vendorCommands.forEach((vendorCommand, commandIndex) => {
@@ -347,7 +406,7 @@
             : '';
         const manualLine = option.category === 'manual'
             ? '<dt>Category</dt><dd>Vendor AT command. Serial sends direct; MQTT sends through modem-at passthrough.</dd>'
-            : '<dt>Category</dt><dd>System owned runtime action.</dd>';
+            : '<dt>Category</dt><dd>Dashboard-owned runtime action sent over MQTT.</dd>';
 
         elements.optionDetails.innerHTML = `
             <dl class="mb-0">
@@ -362,8 +421,19 @@
         `;
     }
 
+    function setSystemLogSource(source) {
+        const normalized = ['app', 'mqtt', 'error', 'manual'].includes(source) ? source : 'app';
+        state.systemLogSource = normalized;
+        document.querySelectorAll('[data-system-log-source]').forEach((button) => {
+            const isActive = button.dataset.systemLogSource === normalized;
+            button.classList.toggle('active', isActive);
+            button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+        loadSystemLogs(normalized);
+    }
+
     function setConsoleTab(tab) {
-        const normalizedTab = ['mqtt', 'serial', 'system'].includes(tab) ? tab : 'mqtt';
+        const normalizedTab = ['system', 'serial', 'mqtt'].includes(tab) ? tab : 'system';
         state.activeTab = normalizedTab;
         state.transport = normalizedTab === 'serial' ? 'serial' : 'mqtt';
         if (normalizedTab === 'system') {
@@ -380,19 +450,35 @@
         document.querySelectorAll('.serial-control').forEach((node) => {
             node.style.display = state.transport === 'serial' ? '' : 'none';
         });
-        if (elements.sessionLabel) elements.sessionLabel.textContent = normalizedTab;
+        if (elements.commandPanel) {
+            elements.commandPanel.style.display = normalizedTab === 'system' ? 'none' : '';
+        }
+        if (elements.systemLogPanel) {
+            elements.systemLogPanel.style.display = normalizedTab === 'system' ? '' : 'none';
+        }
+        elements.page?.classList.toggle('is-logs-tab', normalizedTab === 'system');
+        elements.page?.classList.toggle('is-serial-tab', normalizedTab === 'serial');
+        elements.page?.classList.toggle('is-mqtt-tab', normalizedTab === 'mqtt');
+        if (elements.sessionLabel) elements.sessionLabel.textContent = normalizedTab === 'system' ? 'logs' : normalizedTab;
         renderTabHint();
         renderSerialStatus();
         rebuildOptions();
         updateControlVisibility();
+        if (normalizedTab === 'system') {
+            loadSystemLogs();
+            startSystemLogRefresh();
+        } else {
+            stopSystemLogRefresh();
+            renderEvents();
+        }
     }
 
     function renderTabHint() {
         if (!elements.tabHint) return;
         const hints = {
-            mqtt: 'MQTT publishes runtime commands to the active device.',
+            system: 'App, MQTT, error, and manual command logs. Rows are clickable for details.',
             serial: 'Serial sends selected manual terminal lines through browser Web Serial.',
-            system: 'System runs dashboard-owned tests and system recovery actions.'
+            mqtt: 'MQTT sends selected manual vendor lines through the modem-at passthrough.'
         };
         elements.tabHint.textContent = hints[state.activeTab] || '';
     }
@@ -532,8 +618,9 @@
                 });
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok || !data.success) throw new Error(data.message || `Command failed with HTTP ${response.status}`);
-                appendLine('response', `${command} completed in ${data.durationMs}ms`, 'success', data);
-                if (elements.lastRun) elements.lastRun.textContent = `${command} / ${data.durationMs}ms`;
+                const resultText = summarizeCommandResult(command, data);
+                appendLine('response', resultText, commandResultLevel(data), data);
+                if (elements.lastRun) elements.lastRun.textContent = `${command} / ${resultText}`;
             } catch (error) {
                 appendLine('error', `${command}: ${error.message}`, 'danger', { command, message: error.message });
                 if (window.showToast) window.showToast(error.message || 'Command failed', 'danger');
@@ -569,6 +656,18 @@
     function stopStatusPoll() {
         if (state.statusPollTimer) window.clearInterval(state.statusPollTimer);
         state.statusPollTimer = null;
+    }
+
+    function startSystemLogRefresh() {
+        stopSystemLogRefresh();
+        state.systemLogTimer = window.setInterval(() => {
+            if (state.activeTab === 'system') loadSystemLogs();
+        }, 10000);
+    }
+
+    function stopSystemLogRefresh() {
+        if (state.systemLogTimer) window.clearInterval(state.systemLogTimer);
+        state.systemLogTimer = null;
     }
 
     async function fetchCurrentTestStatus() {
@@ -720,10 +819,14 @@
 
     function appendLine(source, message, level, data, options = {}) {
         if (!elements.output) return;
+        const manualSources = new Set(['send', 'response', 'console', 'serial', 'serial-tx', 'serial-rx', 'picker', 'error']);
+        const scope = options.scope || (state.activeTab !== 'system' && manualSources.has(source) ? 'manual' : 'system');
         const entry = {
             timestamp: new Date().toISOString(),
             deviceId: state.currentDeviceId || getCurrentDeviceId(),
             deviceType: activeDeviceType(),
+            consoleTab: options.tab || state.activeTab,
+            scope,
             source,
             message,
             level: level || 'info',
@@ -749,17 +852,75 @@
 
     function renderEvents() {
         if (!elements.output) return;
-        elements.output.innerHTML = state.entries.map((entry, index) => `
-            <button type="button" class="console-event ${levelClass(entry.level)}" data-entry-index="${index}">
+        const rows = state.activeTab === 'system'
+            ? filteredLogRows()
+            : state.entries
+                .map((entry, index) => ({ ...entry, __entryIndex: index }))
+                .filter((entry) => entry.scope === 'manual' && entry.consoleTab === state.activeTab)
+                .filter((entry) => !isClearedFromView(entry, state.activeTab));
+
+        if (!rows.length) {
+            elements.output.innerHTML = `
+                <button type="button" class="console-event text-muted" disabled>
+                    <span class="event-time">--</span>
+                    <span class="event-source">${escapeHtml(displayTabName(state.activeTab))}</span>
+                    <span class="event-message">${escapeHtml(emptyConsoleMessage())}</span>
+                </button>
+            `;
+            return;
+        }
+
+        elements.output.innerHTML = rows.map((entry) => `
+            <button type="button" class="console-event ${levelClass(entry.level)}" data-entry-index="${entry.__entryIndex ?? ''}" data-system-index="${entry.__systemIndex ?? ''}">
                 <span class="event-time">${escapeHtml(formatEventTime(entry.timestamp))}</span>
                 <span class="event-source">${escapeHtml(entry.source)}</span>
                 <span class="event-message">${escapeHtml(entry.message)}</span>
             </button>
         `).join('');
         elements.output.querySelectorAll('[data-entry-index]').forEach((button) => {
-            button.addEventListener('click', () => showEventDetails(Number(button.dataset.entryIndex)));
+            button.addEventListener('click', () => {
+                if (button.dataset.entryIndex !== '') {
+                    showEventDetails(Number(button.dataset.entryIndex));
+                    return;
+                }
+                if (button.dataset.systemIndex !== '') {
+                    showSystemLogDetails(Number(button.dataset.systemIndex));
+                    return;
+                }
+            });
         });
         elements.output.scrollTop = elements.output.scrollHeight;
+    }
+
+    function filteredLogRows() {
+        const search = state.systemLogSearch;
+        const systemRows = state.systemLogSource === 'manual' ? [] : visibleSystemLogRows(state.systemLogSource);
+        const manualRows = state.systemLogSource === 'manual' ? visibleManualLogRows() : [];
+        return [...systemRows, ...manualRows]
+            .filter((entry) => !search || JSON.stringify(entry).toLowerCase().includes(search))
+            .sort((left, right) => toTimestampMs(left.timestamp) - toTimestampMs(right.timestamp));
+    }
+
+    function visibleSystemLogRows(source) {
+        return state.systemLogs
+            .map((entry, index) => ({ ...entry, __systemIndex: index }))
+            .filter((entry) => !isClearedFromView(entry, `log:${source}`));
+    }
+
+    function visibleManualLogRows() {
+        return state.entries
+            .map((entry, index) => ({ ...entry, __entryIndex: index }))
+            .filter((entry) => entry.scope === 'manual')
+            .filter((entry) => !isClearedFromView(entry, 'log:manual'))
+            .map((entry) => ({
+                ...entry,
+                source: `manual:${entry.consoleTab || 'command'}:${entry.source || 'console'}`
+            }));
+    }
+
+    function emptyConsoleMessage() {
+        if (state.activeTab === 'system') return 'No log entries for this source/filter.';
+        return 'Pick a manual command option and send it to see rows here.';
     }
 
     function showEventDetails(index) {
@@ -775,30 +936,67 @@
                 <dt class="col-sm-3">Message</dt><dd class="col-sm-9">${escapeHtml(entry.message)}</dd>
             `;
         }
-        if (elements.detailJson) elements.detailJson.textContent = JSON.stringify(entry.data ?? entry, null, 2);
+        renderDetailJson(entry, entry.data ?? entry);
         if (window.bootstrap?.Modal && elements.detailModal) window.bootstrap.Modal.getOrCreateInstance(elements.detailModal).show();
     }
 
+    function showSystemLogDetails(index) {
+        const entry = state.systemLogs[index];
+        if (!entry) return;
+        if (elements.detailTitle) elements.detailTitle.textContent = `${entry.source} / ${entry.message}`;
+        if (elements.detailSummary) {
+            elements.detailSummary.innerHTML = `
+                <dt class="col-sm-3">Time</dt><dd class="col-sm-9">${escapeHtml(entry.timestamp || '--')}</dd>
+                <dt class="col-sm-3">Source</dt><dd class="col-sm-9">${escapeHtml(entry.source || '--')}</dd>
+                <dt class="col-sm-3">Level</dt><dd class="col-sm-9">${escapeHtml(entry.level || 'info')}</dd>
+                <dt class="col-sm-3">Message</dt><dd class="col-sm-9">${escapeHtml(entry.message || '')}</dd>
+            `;
+        }
+        renderDetailJson(entry, entry.data ?? entry);
+        if (window.bootstrap?.Modal && elements.detailModal) window.bootstrap.Modal.getOrCreateInstance(elements.detailModal).show();
+    }
+
+    function renderDetailJson(entry, value) {
+        if (!elements.detailJson) return;
+        elements.detailJson.textContent = JSON.stringify(buildReadableDetail(entry, value), null, 2);
+    }
+
+    function buildReadableDetail(entry, value) {
+        const parsed = parseNestedJson(value);
+        const chain = extractCommandChain(entry, parsed);
+        const summary = {
+            timestamp: entry?.timestamp || '',
+            source: entry?.source || '',
+            level: entry?.level || 'info',
+            tab: displayTabName(entry?.consoleTab || state.activeTab),
+            scope: entry?.scope || ''
+        };
+        return chain.length
+            ? { summary, chain, parsed }
+            : { summary, parsed };
+    }
+
     async function clearConsole() {
-        state.entries = [];
+        const viewKey = state.activeTab === 'system' ? `log:${state.systemLogSource}` : state.activeTab;
+        state.clearedViews[viewKey] = Date.now();
+        if (state.activeTab === 'system') {
+            updateSystemCount(state.systemLogSource, 0);
+        }
         renderEvents();
-        try {
-            await fetch('/api/esp32-console/events', {
-                method: 'DELETE',
-                headers: { 'X-CSRF-Token': csrfToken() },
-                credentials: 'same-origin'
-            });
-        } catch (_) {}
-        appendLine('system', 'Events cleared.', 'info');
     }
 
     function exportConsole() {
-        const text = state.entries.map((entry) => JSON.stringify(entry)).join('\n');
+        const sourceRows = state.activeTab === 'system'
+            ? filteredLogRows()
+            : state.entries
+                .filter((entry) => entry.scope === 'manual' && entry.consoleTab === state.activeTab)
+                .filter((entry) => !isClearedFromView(entry, state.activeTab));
+        const text = sourceRows.map((entry) => JSON.stringify(entry)).join('\n');
         const blob = new Blob([text || ''], { type: 'application/x-ndjson;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `console-events-${Date.now()}.ndjson`;
+        link.download = `console-${state.activeTab}-${Date.now()}.ndjson`;
         document.body.appendChild(link);
         link.click();
         link.remove();
@@ -823,8 +1021,119 @@
     function commandLabel(option) {
         const prefix = option.type === 'test'
             ? 'Test'
-            : (option.type === 'vendor' ? (state.activeTab === 'mqtt' ? 'MQTT AT' : 'Serial AT') : (state.activeTab === 'mqtt' ? 'MQTT' : 'System'));
+            : (option.type === 'vendor'
+                ? (state.activeTab === 'mqtt' ? 'MQTT AT' : 'Serial AT')
+                : (option.category === 'system' ? 'MQTT Runtime' : (state.activeTab === 'mqtt' ? 'MQTT Manual' : 'Serial Manual')));
         return `${prefix} - ${option.label || option.command || 'Command'}`;
+    }
+
+    function commandGroupPrefix(category) {
+        if (category === 'system') return 'MQTT Runtime';
+        return state.activeTab === 'mqtt' ? 'MQTT Manual' : 'Serial Manual';
+    }
+
+    function normalizeSystemLogEntry(entry, source) {
+        const log = entry && typeof entry === 'object' ? entry : {};
+        const message = String(log.message || log.msg || log.event || JSON.stringify(log));
+        return {
+            timestamp: log.timestamp || log.time || new Date().toISOString(),
+            source: `system:${source}`,
+            level: String(log.level || (source === 'error' ? 'error' : 'info')).toLowerCase(),
+            message,
+            data: log
+        };
+    }
+
+    function normalizeConsoleEvent(entry) {
+        const event = entry && typeof entry === 'object' ? entry : {};
+        const source = String(event.source || 'console');
+        const manualSources = new Set(['send', 'response', 'serial', 'serial-tx', 'serial-rx', 'picker', 'error']);
+        return {
+            ...event,
+            consoleTab: event.consoleTab || (source.startsWith('serial') ? 'serial' : (manualSources.has(source) ? 'mqtt' : 'system')),
+            scope: event.scope || (manualSources.has(source) ? 'manual' : 'system')
+        };
+    }
+
+    function parseNestedJson(value, depth = 0) {
+        if (depth > 6) return value;
+        if (typeof value === 'string') {
+            const parsed = parseJsonString(value);
+            return parsed === value ? value : parseNestedJson(parsed, depth + 1);
+        }
+        if (Array.isArray(value)) {
+            return value.map((item) => parseNestedJson(item, depth + 1));
+        }
+        if (value && typeof value === 'object') {
+            return Object.fromEntries(
+                Object.entries(value).map(([key, item]) => [key, parseNestedJson(item, depth + 1)])
+            );
+        }
+        return value;
+    }
+
+    function parseJsonString(value) {
+        const text = String(value || '').trim();
+        if (!text || !/^[{[]/.test(text)) return value;
+        try {
+            return JSON.parse(text);
+        } catch (_) {
+            return value;
+        }
+    }
+
+    function extractCommandChain(entry, parsed) {
+        const source = entry?.data && typeof entry.data === 'object' ? entry.data : {};
+        const root = parsed && typeof parsed === 'object' ? parsed : {};
+        const transport = entry?.consoleTab || state.activeTab || '';
+        const payload = root.payload || source.payload || {};
+        const explicitCommands = Array.isArray(root.commands) ? root.commands : (Array.isArray(source.commands) ? source.commands : []);
+        const chainText = root.command_chain || root.commandChain || source.command_chain || source.commandChain || '';
+        const commandText = root.command || source.command || '';
+        const commands = explicitCommands.length
+            ? explicitCommands
+            : String(chainText || commandText || '')
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter(Boolean);
+
+        if (!commands.length) return [];
+        return commands.map((command, index) => ({
+            step: index + 1,
+            transport: displayTabName(transport),
+            command: typeof command === 'string' ? command : command?.command || command?.line || command,
+            payload: parseNestedJson(command?.payload || payload || {}),
+            raw: Boolean(root.raw || source.raw || looksLikeRawModemLine(command?.command || command?.line || command))
+        }));
+    }
+
+    function updateSystemCount(source, count) {
+        const badge = elements.systemCounts?.[source];
+        if (badge) badge.textContent = String(count || 0);
+    }
+
+    function initialTab() {
+        try {
+            const tab = new URL(window.location.href).searchParams.get('tab');
+            if (['system', 'serial', 'mqtt'].includes(tab)) return tab;
+            if (tab === 'logs') return 'system';
+        } catch (_) {}
+        return 'system';
+    }
+
+    function displayTabName(tab) {
+        return tab === 'system' ? 'logs' : String(tab || '');
+    }
+
+    function isClearedFromView(entry, tab) {
+        const clearedAt = Number(state.clearedViews?.[tab] || 0);
+        if (!clearedAt) return false;
+        return toTimestampMs(entry?.timestamp) <= clearedAt;
+    }
+
+    function toTimestampMs(value) {
+        const parsed = Date.parse(value || '');
+        return Number.isFinite(parsed) ? parsed : 0;
     }
 
     function sameDevice(deviceId) {
@@ -848,8 +1157,41 @@
 
     function summarizeAsyncResponse(payload) {
         const command = payload?.command || payload?.data?.command || 'command';
-        const result = payload?.result || payload?.status || payload?.data?.result || 'response';
-        return `${command}: ${result}`;
+        return summarizeCommandResult(command, payload);
+    }
+
+    function summarizeCommandResult(command, payload) {
+        const data = parseNestedJson(payload || {});
+        const result = data.result || data.data?.result || data.response || data.data?.response || {};
+        const resultObject = result && typeof result === 'object' ? result : {};
+        const status = data.status || data.data?.status || resultObject.status || resultObject.result || (data.success ? 'ok' : '');
+        const message = data.message || data.data?.message || resultObject.message || resultObject.error || '';
+        const rawLine = data.rawLine || data.raw_line || data.data?.rawLine || data.data?.raw_line || '';
+        const modemText = resultObject.line || resultObject.response || resultObject.raw || resultObject.text || '';
+        const duration = data.durationMs != null ? `${data.durationMs}ms` : '';
+        const parts = [
+            command || data.command || 'command',
+            status ? String(status) : '',
+            message ? String(message) : '',
+            rawLine ? String(rawLine) : '',
+            modemText ? String(modemText) : '',
+            duration
+        ].filter(Boolean);
+        return parts.join(' / ') || `${command || 'command'} / result received`;
+    }
+
+    function commandResultLevel(payload) {
+        const data = parseNestedJson(payload || {});
+        const statusText = JSON.stringify([
+            data.status,
+            data.message,
+            data.result,
+            data.data?.status,
+            data.data?.result
+        ]).toLowerCase();
+        if (data.success === false || /fail|error|timeout|denied|invalid/.test(statusText)) return 'danger';
+        if (/warn|skip|partial/.test(statusText)) return 'warning';
+        return 'success';
     }
 
     function levelClass(level) {

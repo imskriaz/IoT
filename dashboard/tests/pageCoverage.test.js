@@ -71,7 +71,6 @@ describe('dashboard screen coverage', () => {
         ['/devices/settings', 'pages/device-settings', 'Device Settings'],
         ['/devices', 'pages/devices', 'Device Manager'],
         ['/devices/about', 'pages/device-about', 'Device About'],
-        ['/logs', 'pages/logs', 'System Logs'],
         ['/ota', 'pages/ota', 'OTA Firmware Manager'],
         ['/display', 'pages/display', 'Display'],
         ['/nfc', 'pages/nfc', 'NFC'],
@@ -109,13 +108,30 @@ describe('dashboard screen coverage', () => {
         expect(res.headers.location).toBe('/console');
     });
 
+    test('legacy logs page redirects to the Console logs tab', async () => {
+        const router = require('../routes/index');
+        const app = buildRenderedApp(router, '/', adminUser, makeDbMock());
+
+        const res = await request(app).get('/logs');
+
+        expect(res.status).toBe(301);
+        expect(res.headers.location).toBe('/console?tab=logs');
+    });
+
     test('Console command surface uses tabs with one dropdown and inline description', () => {
         const html = fs.readFileSync(path.join(__dirname, '..', 'views', 'pages', 'esp32-console.html'), 'utf8');
         const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'esp32-console.js'), 'utf8');
 
+        expect(html.indexOf('data-console-tab="system"')).toBeLessThan(html.indexOf('data-console-tab="serial"'));
+        expect(html.indexOf('data-console-tab="serial"')).toBeLessThan(html.indexOf('data-console-tab="mqtt"'));
         expect(html).toContain('data-console-tab="mqtt"');
         expect(html).toContain('data-console-tab="serial"');
         expect(html).toContain('data-console-tab="system"');
+        expect(html).toContain('data-system-log-source="app"');
+        expect(html).toContain('data-system-log-source="mqtt"');
+        expect(html).toContain('data-system-log-source="error"');
+        expect(html).toContain('data-system-log-source="manual"');
+        expect(html).toContain('</i>Logs');
         expect(html).not.toContain('id="esp32TransportSelect"');
         expect(html).toContain('for="esp32CommandPresetSelect">Command</label>');
         expect(html).toContain('class="command-description small" id="esp32OptionDetails"');
@@ -124,8 +140,27 @@ describe('dashboard screen coverage', () => {
         expect(html).not.toContain('Quick Notes');
         expect(html).not.toContain('id="esp32DocumentList"');
         expect(js).toContain('function commandLabel(option)');
+        expect(js).toContain('function commandGroupPrefix(category)');
+        expect(js).toContain('MQTT Runtime');
+        expect(js).toContain('Dashboard-owned runtime action sent over MQTT');
         expect(js).toContain('function setConsoleTab(tab)');
-        expect(js).toContain('state.activeTab !== \'system\'');
+        expect(js).toContain('function setSystemLogSource(source)');
+        expect(js).toContain('state.activeTab === \'system\'');
+        expect(js).toContain('scope === \'manual\'');
+        expect(js).toContain('visibleManualLogRows');
+        expect(js).toContain('function buildReadableDetail(entry, value)');
+        expect(js).toContain('function parseNestedJson(value, depth = 0)');
+        expect(js).toContain('function extractCommandChain(entry, parsed)');
+        expect(js).toContain('function summarizeCommandResult(command, payload)');
+        expect(js).toContain('function commandResultLevel(payload)');
+        expect(js).toContain("'console', 'serial'");
+        expect(html).toContain('.esp32-console-page.is-logs-tab .console-events');
+        expect(js).toContain("classList.toggle('is-logs-tab'");
+        expect(html).toContain('.esp32-console-page.is-mqtt-tab .serial-control');
+        expect(html).toContain('.esp32-console-page.is-serial-tab .mqtt-control');
+        expect(js).toContain("classList.toggle('is-mqtt-tab'");
+        expect(js).toContain("classList.toggle('is-serial-tab'");
+        expect(js).not.toContain('method: \'DELETE\'');
         expect(js).not.toContain('Custom typed command');
     });
 

@@ -179,4 +179,51 @@ describe('auth middleware', () => {
             [expect.any(String)]
         );
     });
+
+    test('accepts valid X-API-Key requests and applies read scope', async () => {
+        const req = {
+            originalUrl: '/api/sms',
+            path: '/sms',
+            url: '/sms',
+            baseUrl: '/api',
+            method: 'GET',
+            headers: {
+                'x-api-key': 'edk_validtoken'
+            },
+            session: {},
+            app: {
+                locals: {
+                    db: {
+                        get: jest.fn().mockResolvedValue({
+                            id: 12,
+                            name: 'Swagger test key',
+                            scopes: 'read',
+                            username: 'operator',
+                            role: 'operator',
+                            uid: 5
+                        }),
+                        run: jest.fn().mockResolvedValue(undefined)
+                    }
+                }
+            }
+        };
+        const res = createResponse();
+        const next = jest.fn();
+
+        await authMiddleware(req, res, next);
+
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(req.user).toEqual(expect.objectContaining({
+            id: 5,
+            username: 'operator',
+            role: 'operator'
+        }));
+        expect(req.session.user).toEqual(req.user);
+        expect(req.apiKey).toEqual(expect.objectContaining({
+            id: 12,
+            name: 'Swagger test key',
+            scopes: 'read'
+        }));
+        expect(res.statusCode).toBe(200);
+    });
 });

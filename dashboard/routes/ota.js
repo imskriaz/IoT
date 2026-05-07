@@ -232,7 +232,7 @@ async function runPreflight(_db, _deviceId) {
  *       retired persisted device-test history tables before flashing.
  *     tags: [OTA]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     requestBody:
  *       required: true
  *       content:

@@ -52,7 +52,6 @@ function hashKey(key) {
  *     summary: List your API keys
  *     tags: [API Keys]
  *     security:
- *       - sessionCookie: []
  *       - apiKey: []
  *     responses:
  *       200:
@@ -92,7 +91,7 @@ router.get('/', async (req, res) => {
  *     description: The plaintext key is returned **only once** — store it securely.
  *     tags: [API Keys]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     requestBody:
  *       required: true
  *       content:
@@ -165,7 +164,7 @@ router.post('/', [
  *     summary: Revoke an API key
  *     tags: [API Keys]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     parameters:
  *       - in: path
  *         name: id

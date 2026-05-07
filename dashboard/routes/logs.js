@@ -115,10 +115,7 @@ router.delete('/', adminMiddleware, async (req, res) => {
 
 // ==================== PAGE: GET /logs ====================
 router.get('/page', (req, res) => {
-    res.render('pages/logs', {
-        title: 'System Logs',
-        user: req.session.user
-    });
+    res.redirect(301, '/console?tab=logs');
 });
 
 module.exports = router;

@@ -12,10 +12,11 @@ const options = {
         servers: [{ url: '/api', description: 'API base path' }],
         components: {
             securitySchemes: {
-                sessionCookie: {
+                apiKey: {
                     type: 'apiKey',
-                    in: 'cookie',
-                    name: 'connect.sid'
+                    in: 'header',
+                    name: 'X-API-Key',
+                    description: 'Paste a dashboard API key that starts with edk_.'
                 }
             },
             schemas: {
@@ -166,7 +167,7 @@ const options = {
                 }
             }
         },
-        security: [{ sessionCookie: [] }]
+        security: [{ apiKey: [] }]
     },
     apis: ['./routes/*.js']
 };

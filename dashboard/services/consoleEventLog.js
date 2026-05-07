@@ -17,6 +17,8 @@ function sanitizeEvent(value) {
         timestamp: String(event.timestamp || new Date().toISOString()).slice(0, 64),
         deviceId: String(event.deviceId || '').slice(0, 64),
         deviceType: String(event.deviceType || '').slice(0, 32),
+        consoleTab: String(event.consoleTab || '').slice(0, 24),
+        scope: String(event.scope || '').slice(0, 24),
         source: String(event.source || 'console').slice(0, 80),
         level: String(event.level || 'info').slice(0, 24),
         message: String(event.message || '').slice(0, 500),

@@ -20,7 +20,7 @@ const { hasRole } = require('../middleware/auth');
  *     description: Admins see all groups; others see only groups they own.
  *     tags: [Device Groups]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     responses:
  *       200:
  *         description: Array of groups with member count
@@ -37,7 +37,7 @@ const { hasRole } = require('../middleware/auth');
  *     summary: Create a device group
  *     tags: [Device Groups]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     requestBody:
  *       required: true
  *       content:

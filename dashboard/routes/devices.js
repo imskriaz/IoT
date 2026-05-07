@@ -966,7 +966,7 @@ async function getRuntimeConfigWithFallback(req) {
  *     description: Admins see all devices; operators/viewers see only their assigned devices. Live telemetry (signal, battery) is merged from the in-memory modem service.
  *     tags: [Devices]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     responses:
  *       200:
  *         description: Device list
@@ -1767,7 +1767,7 @@ router.get('/:id/sims', requireDeviceAccess('id'), async (req, res) => {
  *     summary: Update device name / location
  *     tags: [Devices]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -1788,7 +1788,7 @@ router.get('/:id/sims', requireDeviceAccess('id'), async (req, res) => {
  *     summary: Delete a device (admin only)
  *     tags: [Devices]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -2436,7 +2436,7 @@ router.delete('/:id/users/:userId', async (req, res) => {
  *     summary: Get device local IP address
  *     tags: [Devices]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -2449,7 +2449,7 @@ router.delete('/:id/users/:userId', async (req, res) => {
  *     summary: Set device local IP address
  *     tags: [Devices]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -2511,7 +2511,7 @@ router.put('/:id/local-ip', [
  *       (e.g. when in WiFi-AP setup mode or when on the same LAN).
  *     tags: [Devices]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -2580,7 +2580,7 @@ router.get('/:id/direct', async (req, res) => {
  *     description: Returns mqtt_user; mqtt_pass is masked as "••••••••" when set.
  *     tags: [Devices]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -2593,7 +2593,7 @@ router.get('/:id/direct', async (req, res) => {
  *     summary: Set per-device MQTT credentials (admin only)
  *     tags: [Devices]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     parameters:
  *       - in: path
  *         name: id

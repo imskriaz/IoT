@@ -1729,7 +1729,7 @@ router.delete('/rules/:id', async (req, res) => {
  *     description: Returns pre-built automation rule templates that can be imported into the flow editor.
  *     tags: [Automation]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     responses:
  *       200:
  *         description: Array of templates
@@ -1809,7 +1809,7 @@ router.get('/templates', (req, res) => {
  *     description: Returns the last 100 times this automation rule was triggered.
  *     tags: [Automation]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     parameters:
  *       - in: path
  *         name: id

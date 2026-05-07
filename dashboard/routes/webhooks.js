@@ -30,7 +30,7 @@ const webhookValidation = [
  *     summary: List your webhooks
  *     tags: [Webhooks]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     responses:
  *       200:
  *         description: Array of webhooks
@@ -47,7 +47,7 @@ const webhookValidation = [
  *     summary: Create a webhook
  *     tags: [Webhooks]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     requestBody:
  *       required: true
  *       content:
@@ -120,7 +120,7 @@ router.post('/', webhookValidation, async (req, res) => {
  *     summary: Update a webhook
  *     tags: [Webhooks]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -146,7 +146,7 @@ router.post('/', webhookValidation, async (req, res) => {
  *     summary: Delete a webhook
  *     tags: [Webhooks]
  *     security:
- *       - sessionCookie: []
+ *       - apiKey: []
  *     parameters:
  *       - in: path
  *         name: id
