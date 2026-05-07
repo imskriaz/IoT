@@ -1,17 +1,34 @@
 const express = require('express');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const logger = require('../utils/logger');
 const { DEFAULT_DEVICE_ID } = require('../config/device');
 const { resolveDeviceId } = require('../utils/deviceResolver');
+const {
+    MAX_EVENT_LOG_LINES,
+    appendConsoleEvent,
+    clearConsoleEvents,
+    readConsoleEvents,
+    sanitizeEvent
+} = require('../services/consoleEventLog');
+const vendorCommandCatalog = require('../config/vendor-console-commands.json');
 
 const router = express.Router();
 
 const MAX_TIMEOUT_MS = 120000;
 const DEFAULT_TIMEOUT_MS = 30000;
+const MAX_RAW_MODEM_LINE_LEN = 96;
+const FIRMWARE_DOCS_DIR = path.join(__dirname, '..', '..', 'firmware', 'espidf', 'esp32-s3-a7670e', 'docs');
+const VENDOR_COMMANDS = Array.isArray(vendorCommandCatalog?.commands)
+    ? vendorCommandCatalog.commands.filter((command) => command && command.line && Array.isArray(command.transports))
+    : [];
 
 const COMMAND_PRESETS = [
     {
         group: 'Status',
+        category: 'system',
+        deviceTypes: ['esp32', 'android'],
         command: 'get-status',
         label: 'Get Status',
         payload: {},
@@ -21,6 +38,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'Status',
+        category: 'system',
+        deviceTypes: ['esp32'],
         command: 'status-watch',
         label: 'Status Watch',
         payload: { active: true },
@@ -30,6 +49,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'Network',
+        category: 'system',
+        deviceTypes: ['esp32'],
         command: 'wifi-scan',
         label: 'Wi-Fi Scan',
         payload: {},
@@ -39,6 +60,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'Network',
+        category: 'system',
+        deviceTypes: ['esp32'],
         command: 'wifi-reconnect',
         label: 'Wi-Fi Reconnect',
         payload: {},
@@ -48,6 +71,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'Network',
+        category: 'system',
+        deviceTypes: ['esp32'],
         command: 'wifi-disconnect',
         label: 'Wi-Fi Disconnect',
         payload: {},
@@ -57,6 +82,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'Network',
+        category: 'system',
+        deviceTypes: ['esp32'],
         command: 'mobile-toggle',
         label: 'Mobile Data On',
         payload: { enabled: true },
@@ -66,6 +93,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'Network',
+        category: 'system',
+        deviceTypes: ['esp32'],
         command: 'mobile-toggle',
         label: 'Mobile Data Off',
         payload: { enabled: false },
@@ -75,6 +104,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'Telephony',
+        category: 'system',
+        deviceTypes: ['esp32', 'android'],
         command: 'send-ussd',
         label: 'USSD',
         payload: { code: '*123#' },
@@ -84,6 +115,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'Telephony',
+        category: 'system',
+        deviceTypes: ['esp32', 'android'],
         command: 'cancel-ussd',
         label: 'Cancel USSD',
         payload: {},
@@ -93,6 +126,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'Telephony',
+        category: 'system',
+        deviceTypes: ['esp32', 'android'],
         command: 'make-call',
         label: 'Dial Number',
         payload: { number: '' },
@@ -102,6 +137,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'Telephony',
+        category: 'system',
+        deviceTypes: ['esp32', 'android'],
         command: 'end-call',
         label: 'Hang Up',
         payload: {},
@@ -111,6 +148,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'Storage',
+        category: 'system',
+        deviceTypes: ['esp32', 'android'],
         command: 'storage-info',
         label: 'Storage Info',
         payload: {},
@@ -120,6 +159,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'GPIO',
+        category: 'system',
+        deviceTypes: ['esp32'],
         command: 'gpio-status',
         label: 'GPIO Status',
         payload: {},
@@ -129,6 +170,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'GPIO',
+        category: 'system',
+        deviceTypes: ['esp32'],
         command: 'gpio-write',
         label: 'GPIO Write',
         payload: { pin: 2, value: 1 },
@@ -138,6 +181,8 @@ const COMMAND_PRESETS = [
     },
     {
         group: 'System',
+        category: 'system',
+        deviceTypes: ['esp32'],
         command: 'restart-modem',
         label: 'Restart Modem',
         payload: {},
@@ -146,43 +191,60 @@ const COMMAND_PRESETS = [
         note: 'Disruptive. Use only when the modem lane needs recovery.'
     },
     {
-        group: 'Experimental',
+        group: 'Manual',
+        category: 'manual',
+        deviceTypes: ['esp32'],
         command: 'modem-at',
         label: 'Raw AT Probe',
         payload: { line: 'AT+CSQ' },
         waitForResponse: true,
         timeoutMs: 10000,
-        note: 'Requires explicit firmware support. Current main firmware may reject this.'
+        note: 'Manual modem probe. Validate the same line in terminal/serial before turning it into firmware behavior.'
     }
 ];
 
-const VENDOR_NOTES = [
-    {
-        title: 'AT probe baseline',
-        commands: ['AT', 'AT+CPIN?', 'AT+CSQ', 'AT+CREG?', 'AT+CGREG?', 'AT+COPS?'],
-        note: 'Use these from terminal/serial first when adding new modem-backed firmware behavior.'
-    },
-    {
-        title: 'USSD',
-        commands: ['AT+CUSD=?', 'AT+CUSD?', 'AT+CUSD=1,"<code>",15', 'AT+CUSD=2'],
-        note: 'USSD continuation uses the same AT+CUSD write command; cancel uses AT+CUSD=2.'
-    },
-    {
-        title: 'Battery and SIM',
-        commands: ['AT+CBC?', 'AT+CNUM', 'AT+CGSN'],
-        note: 'Useful for compact device identity and power status checks.'
-    },
-    {
-        title: 'Packet data',
-        commands: ['AT+CGDCONT?', 'AT+CGACT?', 'AT+NETOPEN?', 'AT+IPADDR'],
-        note: 'Use to validate modem data before changing Wi-Fi/modem fallback firmware.'
-    },
-    {
-        title: 'Modem MQTT',
-        commands: ['AT+CMQTTSTART', 'AT+CMQTTACCQ', 'AT+CMQTTCONNECT', 'AT+CMQTTSUB', 'AT+CMQTTPUB'],
-        note: 'These are modem-side MQTT commands. Dashboard runtime actions still go through device/{id}/command/{command}.'
-    }
-];
+const KNOWN_CONSOLE_COMMANDS = new Set(COMMAND_PRESETS.map((preset) => preset.command));
+
+function pushDoc(docs, title, absolutePath, group = 'Documents') {
+    if (!absolutePath || !fs.existsSync(absolutePath)) return;
+    docs.push({
+        title,
+        group,
+        path: path.relative(path.join(__dirname, '..', '..'), absolutePath).replace(/\\/g, '/'),
+        kind: path.extname(absolutePath).replace('.', '').toLowerCase() || 'file',
+        bytes: fs.statSync(absolutePath).size
+    });
+}
+
+function buildDocumentCatalog() {
+    const docs = [];
+    pushDoc(docs, 'Runtime Rulebook', path.join(FIRMWARE_DOCS_DIR, 'RULEBOOK.md'), 'Runtime');
+    pushDoc(docs, 'Runtime Implementation Plan', path.join(FIRMWARE_DOCS_DIR, 'RUNTIME_IMPLEMENTATION_PLAN.md'), 'Runtime');
+    pushDoc(docs, 'ESP32 Docs Index', path.join(FIRMWARE_DOCS_DIR, 'README.md'), 'Runtime');
+
+    const vendorRoot = path.join(FIRMWARE_DOCS_DIR, 'vendor', 'esp32-s3-a7670e');
+    const walk = (dir) => {
+        if (!fs.existsSync(dir)) return;
+        fs.readdirSync(dir, { withFileTypes: true })
+            .sort((left, right) => left.name.localeCompare(right.name))
+            .forEach((entry) => {
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    walk(fullPath);
+                    return;
+                }
+                if (!/\.(md|pdf)$/i.test(entry.name)) return;
+                const relative = path.relative(vendorRoot, fullPath).replace(/\\/g, '/');
+                const group = relative.startsWith('hardware/')
+                    ? 'Hardware'
+                    : (relative.startsWith('demo/') ? 'Demo' : 'Vendor');
+                const title = entry.name.replace(/\.(md|pdf)$/i, '').replace(/_/g, ' ');
+                pushDoc(docs, title, fullPath, group);
+            });
+    };
+    walk(vendorRoot);
+    return docs;
+}
 
 function normalizeBoolean(value, fallback = false) {
     if (typeof value === 'boolean') return value;
@@ -209,6 +271,38 @@ function normalizeCommand(value) {
     return command;
 }
 
+function normalizeRawModemLine(value) {
+    const line = String(value || '').trim();
+    if (!line) {
+        return '';
+    }
+    if (line.length > MAX_RAW_MODEM_LINE_LEN) {
+        throw new Error(`Raw modem line must be ${MAX_RAW_MODEM_LINE_LEN} characters or less`);
+    }
+    if (/[\r\n\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(line)) {
+        throw new Error('Raw modem line must be a single printable line');
+    }
+    return line;
+}
+
+function looksLikeRawModemLine(value) {
+    const line = String(value || '').trim();
+    if (!line) {
+        return false;
+    }
+    const normalizedCommand = normalizeCommand(line);
+    if (normalizedCommand && KNOWN_CONSOLE_COMMANDS.has(normalizedCommand)) {
+        return false;
+    }
+    if (normalizedCommand === 'modem-at') {
+        return false;
+    }
+    if (/^a(?:t)?(?:$|[+?=,])/i.test(line)) {
+        return true;
+    }
+    return !normalizedCommand && /[+?=,"\s]/.test(line);
+}
+
 function normalizePayload(value) {
     if (value === undefined || value === null || value === '') {
         return {};
@@ -231,7 +325,12 @@ router.get('/commands', (req, res) => {
         success: true,
         data: {
             presets: COMMAND_PRESETS,
-            vendorNotes: VENDOR_NOTES,
+            vendorCommands: VENDOR_COMMANDS,
+            vendorCatalog: {
+                version: vendorCommandCatalog.version || 1,
+                generatedFrom: vendorCommandCatalog.generatedFrom || []
+            },
+            documents: buildDocumentCatalog(),
             defaults: {
                 waitForResponse: true,
                 timeoutMs: DEFAULT_TIMEOUT_MS,
@@ -241,17 +340,105 @@ router.get('/commands', (req, res) => {
     });
 });
 
+router.get('/events', (req, res) => {
+    const limit = Math.max(1, Math.min(MAX_EVENT_LOG_LINES, Number(req.query?.limit) || 100));
+    const deviceId = String(resolveDeviceId(req, '') || '').trim();
+    res.json({
+        success: true,
+        data: readConsoleEvents(limit, deviceId)
+    });
+});
+
+router.get('/documents', (req, res) => {
+    try {
+        const repoRoot = path.join(__dirname, '..', '..');
+        const requested = String(req.query?.path || '').trim();
+        const absolutePath = path.resolve(repoRoot, requested);
+        const docsRoot = path.resolve(FIRMWARE_DOCS_DIR);
+
+        if (!requested || !absolutePath.startsWith(docsRoot + path.sep) || !fs.existsSync(absolutePath)) {
+            return res.status(404).json({
+                success: false,
+                message: 'Document not found'
+            });
+        }
+
+        return res.sendFile(absolutePath);
+    } catch (error) {
+        logger.warn('Console document read failed:', error.message);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to read document'
+        });
+    }
+});
+
+router.post('/events', (req, res) => {
+    try {
+        const event = sanitizeEvent({
+            ...(req.body || {}),
+            deviceId: String(req.body?.deviceId || resolveDeviceId(req, DEFAULT_DEVICE_ID) || '').trim()
+        });
+        appendConsoleEvent(event);
+        res.json({
+            success: true,
+            data: event
+        });
+    } catch (error) {
+        logger.warn('Console event log append failed:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to append console event'
+        });
+    }
+});
+
+router.delete('/events', (req, res) => {
+    try {
+        clearConsoleEvents();
+        res.json({ success: true });
+    } catch (error) {
+        logger.warn('Console event log clear failed:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to clear console event log'
+        });
+    }
+});
+
 router.post('/command', async (req, res) => {
     const startedAt = Date.now();
 
     try {
         const deviceId = String(resolveDeviceId(req, DEFAULT_DEVICE_ID) || '').trim();
-        const command = normalizeCommand(req.body?.command);
-        const payload = normalizePayload(req.body?.payload);
+        const commandInput = String(req.body?.command || '').trim();
+        let command = normalizeCommand(commandInput);
+        let payload = normalizePayload(req.body?.payload);
+        let rawLine = '';
         const waitForResponse = normalizeBoolean(req.body?.waitForResponse, true);
         const timeoutMs = normalizeTimeout(req.body?.timeoutMs);
         const messageId = String(req.body?.messageId || '').trim()
             || `console_${crypto.randomBytes(6).toString('hex')}`;
+        const explicitRaw = normalizeBoolean(req.body?.raw, false);
+
+        if (explicitRaw || looksLikeRawModemLine(commandInput)) {
+            rawLine = normalizeRawModemLine(commandInput);
+            command = 'modem-at';
+            payload = {
+                ...payload,
+                line: rawLine,
+                raw_line: rawLine
+            };
+        } else if (command === 'modem-at') {
+            rawLine = normalizeRawModemLine(payload.line || payload.raw_line || payload.rawLine);
+            if (rawLine) {
+                payload = {
+                    ...payload,
+                    line: rawLine,
+                    raw_line: rawLine
+                };
+            }
+        }
 
         if (!deviceId) {
             return res.status(400).json({ success: false, message: 'No active device selected' });
@@ -260,7 +447,14 @@ router.post('/command', async (req, res) => {
         if (!command) {
             return res.status(400).json({
                 success: false,
-                message: 'Command must use only letters, numbers, hyphen, and underscore'
+                message: 'Command must use only letters, numbers, hyphen, and underscore, or enter a single raw modem line'
+            });
+        }
+
+        if (command === 'modem-at' && !rawLine) {
+            return res.status(400).json({
+                success: false,
+                message: 'Raw modem command requires a line, for example AT or AT+CSQ'
             });
         }
 
@@ -287,6 +481,7 @@ router.post('/command', async (req, res) => {
             success: true,
             deviceId,
             command,
+            rawLine: rawLine || undefined,
             payload,
             waitForResponse,
             timeoutMs,

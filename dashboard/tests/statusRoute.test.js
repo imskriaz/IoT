@@ -369,6 +369,67 @@ describe('status route live refresh', () => {
         }));
     });
 
+    test('uses fresh durable status cache after dashboard restart before the next heartbeat', async () => {
+        const mqttService = new EventEmitter();
+        mqttService.connected = true;
+        mqttService.isDeviceOnline = jest.fn().mockReturnValue(false);
+        mqttService.isDeviceBusy = jest.fn().mockReturnValue(false);
+        mqttService.getDeviceQueueState = jest.fn().mockResolvedValue({
+            summary: {
+                pending: 0,
+                active: 0,
+                failed: 0,
+                ambiguous: 0,
+                totalOpen: 0
+            },
+            recent: []
+        });
+
+        global.mqttService = mqttService;
+        global.modemService = modemService;
+
+        const router = require('../routes/status');
+        const db = {
+            get: jest.fn().mockImplementation(async (sql) => {
+                if (String(sql).includes('device_status_cache')) {
+                    return {
+                        updated_at: new Date().toISOString(),
+                        payload_json: JSON.stringify({
+                            type: 'device_status',
+                            active_path: 'wifi',
+                            wifi_connected: true,
+                            wifi_ssid: 'RestartNet',
+                            wifi_ip_address: '192.168.4.44',
+                            mqtt_connected: true,
+                            mqtt_subscribed: true
+                        })
+                    };
+                }
+                return null;
+            }),
+            all: jest.fn().mockResolvedValue([])
+        };
+        const app = buildApp(router, { db });
+
+        const res = await request(app).get('/api/status?deviceId=device-cache');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.data).toEqual(expect.objectContaining({
+            online: true,
+            activePath: 'wifi'
+        }));
+        expect(res.body.data.wifi).toEqual(expect.objectContaining({
+            connected: true,
+            ssid: 'RestartNet',
+            ipAddress: '192.168.4.44'
+        }));
+        expect(res.body.caps).toEqual(expect.objectContaining({
+            wifi: true,
+            internet: true
+        }));
+    });
+
     test('returns correct module health from cached flat firmware status payloads', async () => {
         const mqttService = new EventEmitter();
         mqttService.connected = true;
@@ -874,7 +935,7 @@ describe('status route live refresh', () => {
             'device-wifi-action',
             'wifi-connect',
             { ssid: 'RiazM', password: '12345678', security: '' },
-            true,
+            false,
             10000,
             expect.objectContaining({
                 source: 'dashboard-status-panel',

@@ -4,6 +4,10 @@
     </script>
     <% const sidebarEnabled = (typeof showSidebar === 'undefined') ? true : showSidebar !== false; %>
     <% const statusChromeEnabled = (typeof showStatusChrome === 'undefined') ? true : showStatusChrome !== false; %>
+    <% const initialStatus = (typeof initialDeviceStatus !== 'undefined' && initialDeviceStatus) ? initialDeviceStatus : null; %>
+    <% const initialDeviceOnline = !!(initialStatus && initialStatus.online); %>
+    <% const initialBrokerOnline = (typeof initialMqttConnected !== 'undefined') ? !!initialMqttConnected : false; %>
+    <% const initialStatusLabel = initialDeviceOnline && initialBrokerOnline ? 'All Operational' : (!initialBrokerOnline ? 'MQTT Offline' : (initialStatus ? 'Device Offline' : 'No Device Selected')); %>
     <div class="container-fluid px-3 px-md-4">
         <% if (sidebarEnabled) { %>
             <button class="btn btn-link text-white p-1 d-md-none" type="button" onclick="toggleSidebar()" aria-label="Open sidebar menu">
@@ -25,8 +29,8 @@
                         id="statusPill"
                         onclick="toggleStatusPanel()"
                         title="System status">
-                    <span id="statusDot" class="status-dot"></span>
-                    <span id="statusLabel">All Operational</span>
+                    <span id="statusDot" class="status-dot" style="background:<%= initialStatus ? (initialDeviceOnline && initialBrokerOnline ? '#22c55e' : '#ef4444') : '#6c757d' %>;"></span>
+                    <span id="statusLabel"><%= initialStatusLabel %></span>
                 </button>
 
                 <!-- Status Dropdown Panel -->
@@ -43,15 +47,15 @@
                             <div class="status-panel-section">
                                 <div class="status-row">
                                     <span class="status-label">Server</span>
-                                    <span id="panelServerStatus" class="status-value">Connecting&hellip;</span>
+                                    <span id="panelServerStatus" class="status-value" style="color:#22c55e;">Connected</span>
                                 </div>
                                 <div class="status-row">
                                     <span class="status-label">MQTT Broker</span>
-                                    <span id="panelMqttStatus" class="status-value">Connecting&hellip;</span>
+                                    <span id="panelMqttStatus" class="status-value" style="color:<%= initialBrokerOnline ? '#22c55e' : '#ef4444' %>;"><%= initialBrokerOnline ? 'Connected' : 'Disconnected' %></span>
                                 </div>
                                 <div class="status-row status-linkable" data-status-href="/devices/about" tabindex="0" role="link" title="Open Device About">
                                     <span class="status-label">Device</span>
-                                    <span id="panelDeviceStatus" class="status-value">Offline</span>
+                                    <span id="panelDeviceStatus" class="status-value" style="color:<%= initialStatus ? (initialDeviceOnline ? '#22c55e' : '#ef4444') : '#6c757d' %>;"><%= initialStatus ? (initialDeviceOnline ? 'Online' : 'Offline') : 'No device' %></span>
                                 </div>
                             </div>
 

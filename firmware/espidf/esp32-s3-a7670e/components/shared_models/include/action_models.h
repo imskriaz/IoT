@@ -43,6 +43,7 @@ typedef enum {
     UNIFIED_ACTION_CMD_STATUS_WATCH,
     UNIFIED_ACTION_CMD_GET_SMS_HISTORY,
     UNIFIED_ACTION_CMD_OTA_UPDATE,
+    UNIFIED_ACTION_CMD_MODEM_AT,
 } unified_action_command_t;
 
 typedef enum {

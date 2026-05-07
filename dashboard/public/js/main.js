@@ -26,6 +26,52 @@ let mqttDownSettingsRedirectStartedAt = 0;
 let mqttDownSettingsRedirectCountdownTimer = null;
 const TOAST_DEDUPE_WINDOW_MS = 2500;
 const recentToastKeys = new Map();
+const MODULE_CAPABILITY_KEYS = new Set([
+    'audio', 'battery', 'calls', 'camera', 'display', 'gpio', 'gps',
+    'intercom', 'internet', 'keyboard', 'modem', 'nfc', 'rfid', 'sd',
+    'sms', 'storage', 'touch', 'ussd', 'wifi'
+]);
+const RUNTIME_CAPABILITY_KEYS = new Set([
+    'active_path', 'activePath', 'applied_version', 'appliedVersion', 'call',
+    'charging', 'dashboard_ack_age_ms', 'dashboardAckAgeMs', 'desired_version',
+    'desiredVersion', 'imei', 'in_sync', 'inSync', 'ip', 'message', 'messageId',
+    'message_id', 'moduleHealth', 'mqtt', 'network', 'online', 'operator',
+    'queueState', 'reboot_reason', 'rebootReason', 'sim', 'simNumber',
+    'sim_number', 'sync', 'systemRuntime', 'temperature', 'timestamp',
+    'transport', 'type', 'uptime', 'uptimeMs', 'uptime_ms', 'voltageMv',
+    'voltage_mV'
+]);
+const RUNTIME_CAPABILITY_PREFIXES = [
+    'dashboard_', 'free_', 'health_', 'internal_', 'largest_', 'low_',
+    'missing_', 'modem_', 'mqtt_', 'queue_', 'sd_', 'sms_', 'stack_',
+    'status_', 'storage_', 'task_', 'wifi_'
+];
+
+function sanitizeDeviceCapabilities(caps = {}) {
+    const clean = {};
+    if (!caps || typeof caps !== 'object' || Array.isArray(caps)) return clean;
+
+    Object.entries(caps).forEach(([key, value]) => {
+        if (!key || value == null) return;
+        const runtimeKey = !MODULE_CAPABILITY_KEYS.has(key)
+            && (RUNTIME_CAPABILITY_KEYS.has(key)
+                || RUNTIME_CAPABILITY_PREFIXES.some(prefix => key.startsWith(prefix)));
+        if (runtimeKey) return;
+
+        if (
+            MODULE_CAPABILITY_KEYS.has(key)
+            && typeof value === 'object'
+            && !Array.isArray(value)
+        ) {
+            clean[key] = Object.keys(value).length > 0;
+            return;
+        }
+
+        clean[key] = value;
+    });
+
+    return clean;
+}
 
 function deviceWifiConnected() {
     if (latestDeviceStatus?.wifi?.connected === true) {
@@ -1404,8 +1450,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Initialize Socket.IO
 function initializeSocket() {
-    // Show connecting state
-    updateConnectionStatus('connecting');
+    if (window._serverConnected !== true) {
+        updateConnectionStatus('connecting');
+    } else {
+        updateTopBarStatus();
+    }
 
     if (typeof io !== 'function') {
         console.error('Socket.IO client is not available');
@@ -1558,11 +1607,12 @@ function initializeSocket() {
     socket.on('device:capabilities', function(data) {
         if (!isActiveDevicePayload(data)) return;
         if (data && data.caps) {
+            const caps = sanitizeDeviceCapabilities(data.caps);
             try {
                 const deviceId = String(data.deviceId || getStatusActiveDeviceId() || '').trim();
-                localStorage.setItem('deviceCaps_' + deviceId, JSON.stringify(data.caps));
+                localStorage.setItem('deviceCaps_' + deviceId, JSON.stringify(caps));
             } catch (_) {}
-            applyDeviceCapabilities(data.caps);
+            applyDeviceCapabilities(caps);
         }
     });
     
@@ -1824,11 +1874,6 @@ function isActiveSimScopedEvent(data) {
     });
 }
 
-// Track connection states for top-bar status pill
-window._serverConnected = false;
-window._mqttConnected = false;
-window._mqttStatus = { connected: false, state: 'connecting', connecting: true };
-
 function normalizeMQTTStatus(status) {
     const mqttState = (typeof status === 'object' && status !== null) ? status : { connected: !!status };
     const connected = Boolean(mqttState.connected);
@@ -1851,6 +1896,15 @@ function normalizeMQTTStatus(status) {
         label
     };
 }
+
+// Track connection states for top-bar status pill.
+window._serverConnected = window.INITIAL_SERVER_CONNECTED !== false;
+window._mqttStatus = normalizeMQTTStatus(window.INITIAL_MQTT_STATUS || {
+    connected: false,
+    state: 'connecting',
+    connecting: true
+});
+window._mqttConnected = window._mqttStatus.connected;
 
 function updateTopBarStatus() {
     const pill = document.getElementById('statusPill');
@@ -2721,11 +2775,12 @@ function applyDeviceEnvelope(payload) {
         updateQueueStatus(latestQueueState);
     }
     if (payload.caps) {
+        const caps = sanitizeDeviceCapabilities(payload.caps);
         try {
             const deviceId = window.getActiveDeviceId ? window.getActiveDeviceId() : (window.DEVICE_ID || localStorage.getItem('activeDeviceId') || '');
-            localStorage.setItem('deviceCaps_' + deviceId, JSON.stringify(payload.caps));
+            localStorage.setItem('deviceCaps_' + deviceId, JSON.stringify(caps));
         } catch (_) {}
-        applyDeviceCapabilities(payload.caps);
+        applyDeviceCapabilities(caps);
     }
     if (payload.moduleHealth) renderSidebarModuleHealth(payload.moduleHealth);
 }
@@ -3101,7 +3156,9 @@ function loadCachedDeviceCapabilities(deviceId, options = {}) {
             return false;
         }
 
-        applyDeviceCapabilities(JSON.parse(cached));
+        const caps = sanitizeDeviceCapabilities(JSON.parse(cached));
+        localStorage.setItem('deviceCaps_' + deviceId, JSON.stringify(caps));
+        applyDeviceCapabilities(caps);
         return true;
     } catch (_) {
         if (!preserveVisibilityOnMiss) {
@@ -3114,16 +3171,32 @@ function loadCachedDeviceCapabilities(deviceId, options = {}) {
 // On page load: apply cached caps instantly; live status comes from the shared refresh flow.
 (function initDeviceCapabilities() {
     const deviceId = window.getActiveDeviceId ? window.getActiveDeviceId() : (window.DEVICE_ID || localStorage.getItem('activeDeviceId') || '');
-    latestDeviceStatus = {
-        ...(latestDeviceStatus || {}),
-        deviceId,
-        online: false
-    };
-    updateDeviceConnection(false);
-    updateHeaderDeviceSummary({
-        deviceId,
-        online: false
-    }, latestQueueState);
+    const initialStatus = window.INITIAL_DEVICE_STATUS && typeof window.INITIAL_DEVICE_STATUS === 'object'
+        ? {
+            ...window.INITIAL_DEVICE_STATUS,
+            deviceId: window.INITIAL_DEVICE_STATUS.deviceId || window.INITIAL_DEVICE_STATUS.device_id || deviceId
+        }
+        : null;
+    const initialOnline = initialStatus ? inferStatusOnline(initialStatus) : false;
+    latestDeviceStatus = initialStatus
+        ? {
+            ...(latestDeviceStatus || {}),
+            ...initialStatus,
+            online: initialOnline
+        }
+        : {
+            ...(latestDeviceStatus || {}),
+            deviceId,
+            online: false
+        };
+    updateDeviceConnection(Boolean(latestDeviceStatus.online));
+    updateSidebarDeviceStatus(latestDeviceStatus);
+    if (latestDeviceStatus.online) {
+        try {
+            saveLastDeviceStatusCache(latestDeviceStatus);
+        } catch (_) {}
+    }
+    updateHeaderDeviceSummary(latestDeviceStatus, latestQueueState);
     refreshSidebarDeviceNavigation();
     const restoredSidebarVisibility = loadCachedSidebarVisibility(deviceId);
     loadCachedDeviceCapabilities(deviceId, { preserveVisibilityOnMiss: restoredSidebarVisibility });

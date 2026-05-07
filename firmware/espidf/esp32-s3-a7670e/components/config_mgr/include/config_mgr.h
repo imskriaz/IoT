@@ -45,6 +45,12 @@ esp_err_t config_mgr_apply_key_value(
     bool *out_restart_required,
     bool *out_sensitive
 );
+esp_err_t config_mgr_apply_key_value_safe(
+    const char *key,
+    const char *value,
+    bool *out_restart_required,
+    bool *out_sensitive
+);
 uint32_t config_mgr_device_status_interval_ms(void);
 bool config_mgr_modem_fallback_enabled(void);
 bool config_mgr_storage_enabled(void);

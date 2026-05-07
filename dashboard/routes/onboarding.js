@@ -12,6 +12,7 @@ const logger = require('../utils/logger');
 const { encodeProvisioningToken } = require('../utils/provisioningToken');
 const { setupApIp, setupApLabel, setupApExampleLabel, bleNamePrefixes } = require('../config/onboarding');
 const { getWifiDisconnectReasonText } = require('../utils/wifiDisconnectReason');
+const { validateDeviceIdPrefix } = require('../utils/deviceIdPolicy');
 const DEFAULT_MQTT_PORT = 1883;
 const DEFAULT_TOPIC_PREFIX = normalizeTopicPrefix(process.env.MQTT_TOPIC_PREFIX || 'device');
 const ANDROID_APP_VARIANTS = Object.freeze([
@@ -483,6 +484,11 @@ router.post('/api/onboard/register', [
             wifi_pass,
             capabilities
         } = req.body;
+        const prefixError = validateDeviceIdPrefix(device_id, req.body);
+        if (prefixError) {
+            return res.status(400).json({ success: false, message: prefixError });
+        }
+
         const db = req.app.locals.db;
         const dashboardMqttHost = selectedMqttHost();
         const dashboardMqttPort = selectedMqttPort(process.env.MQTT_PORT);

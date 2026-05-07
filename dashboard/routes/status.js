@@ -11,8 +11,12 @@ const {
 } = require('../utils/deviceCapabilities');
 const { getDeviceModuleHealth } = require('../utils/moduleHealth');
 const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
+const { hydrateDeviceStatusFromCache } = require('../utils/deviceStatusCache');
 const { normalizeSsid } = require('../utils/hostWifiDiagnostics');
-const { publishWifiConnectSequence } = require('../utils/runtimeWifiConnect');
+const {
+    publishWifiConfigPersistence,
+    publishWifiConnectSequence
+} = require('../utils/runtimeWifiConnect');
 const { readStoredSimRows, applyStoredSimFallback } = require('../services/storedSimService');
 
 const STATUS_REFRESH_COOLDOWN_MS = 3000;
@@ -112,6 +116,45 @@ function waitForMqttEvent(eventName, deviceId, timeoutMs, predicate = null) {
     });
 }
 
+function isWifiConnectObserved(status, targetSsid) {
+    if (!status || typeof status !== 'object') {
+        return false;
+    }
+
+    const observedSsid = normalizeSsid(status.wifi_ssid || status.wifi?.ssid || status.wifiSsid);
+    const desiredSsid = normalizeSsid(targetSsid);
+    const wifiOnline = status.wifi_connected === true
+        || status.wifi?.connected === true
+        || String(status.active_path || status.activePath || '').trim().toLowerCase() === 'wifi';
+
+    if (observedSsid && desiredSsid) {
+        return observedSsid === desiredSsid && wifiOnline;
+    }
+
+    return wifiOnline;
+}
+
+async function persistWifiConfigToDevice(deviceId, ssid, password) {
+    try {
+        await runQueuedDeviceOperation(deviceId, () => publishWifiConfigPersistence({
+            mqttService: global.mqttService,
+            deviceId,
+            ssid,
+            password,
+            waitForResponse: true,
+            timeoutMs: 10000,
+            commandOptionsFactory: (command, options = {}) => buildStatusCommandOptions(command, options)
+        }));
+    } catch (error) {
+        logger.warn('Status Wi-Fi config persistence failed:', {
+            deviceId,
+            ssid,
+            code: error?.code,
+            detail: error?.detail || error?.message
+        });
+    }
+}
+
 async function requestFreshStatus(deviceId, timeoutMs = 8000, ignoreCooldown = false) {
     const mqttService = global.mqttService;
     if (!mqttService) {
@@ -195,8 +238,9 @@ async function readStoredSimNumber(db, deviceId) {
 }
 
 async function buildStatusEnvelope(req, deviceId) {
-    const status = modemService.getDeviceStatus(deviceId);
     const db = req.app.locals.db;
+    await hydrateDeviceStatusFromCache(db, modemService, deviceId).catch(() => null);
+    const status = modemService.getDeviceStatus(deviceId);
     const storedSimRows = await readStoredSimRows(db, deviceId).catch(() => []);
     let deviceStatus = buildDashboardDeviceStatus(status, status.online);
     deviceStatus = applyStoredSimFallback(deviceStatus, storedSimRows);
@@ -280,11 +324,7 @@ async function runHeaderModuleAction(req, deviceId, moduleKey) {
                 'status',
                 deviceId,
                 15000,
-                (payload) => payload && (
-                    normalizeSsid(payload.wifi_ssid) === storedProfile.desiredSsid
-                    || payload.wifi_connected === true
-                    || String(payload.active_path || '').trim().toLowerCase() === 'wifi'
-                )
+                (payload) => isWifiConnectObserved(payload, storedProfile.desiredSsid)
             ).catch(() => null);
 
             await runQueuedDeviceOperation(deviceId, () => publishWifiConnectSequence({
@@ -292,13 +332,17 @@ async function runHeaderModuleAction(req, deviceId, moduleKey) {
                 deviceId,
                 ssid: storedProfile.desiredSsid,
                 password: storedProfile.desiredPassword,
+                waitForResponse: false,
                 timeoutMs: 10000,
                 commandOptionsFactory: (command, options = {}) => buildStatusCommandOptions(command, options)
             }));
 
             const observedStatus = await statusProbe;
+            if (isWifiConnectObserved(observedStatus, storedProfile.desiredSsid)) {
+                await persistWifiConfigToDevice(deviceId, storedProfile.desiredSsid, storedProfile.desiredPassword);
+            }
             return {
-                message: observedStatus?.wifi_connected || String(observedStatus?.active_path || '').trim().toLowerCase() === 'wifi'
+                message: isWifiConnectObserved(observedStatus, storedProfile.desiredSsid)
                     ? `Saved Wi-Fi profile ${storedProfile.desiredSsid} is active.`
                     : `Requested Wi-Fi reconnect using saved profile ${storedProfile.desiredSsid}.`
             };

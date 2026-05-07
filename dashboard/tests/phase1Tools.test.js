@@ -21,7 +21,7 @@ const {
 
 function makeCapture({
     capturedAt,
-    deviceId = 'ws-a7670e-476178',
+    deviceId = 'esp-a7670e-476178',
     label = '',
     status = {},
     devices = null,

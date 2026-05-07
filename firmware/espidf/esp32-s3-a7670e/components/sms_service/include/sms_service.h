@@ -37,4 +37,5 @@ unified_action_response_t sms_service_send_with_options(
     uint32_t timeout_ms,
     const sms_service_send_options_t *options
 );
+unified_action_response_t sms_service_pull_pending(uint32_t timeout_ms, uint32_t *out_synced_count);
 void sms_service_get_status(sms_service_status_t *out_status);

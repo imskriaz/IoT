@@ -15,6 +15,7 @@ const {
     isRegisteredDevice,
     noteUnregisteredDevice
 } = require('../utils/unregisteredDevices');
+const { normalizeMultipartMetadata, normalizeMultipartTimestamp } = require('../utils/smsMultipart');
 
 const lastCallSnapshotKeyByDevice = new Map();
 
@@ -291,10 +292,19 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
         const simScope = extractSimScope(req.body);
         const read = isOutgoing ? 1 : (boolFromPayload(req.body.read ?? req.body.is_read, false) ? 1 : 0);
         const externalId = smsExternalId(req.body);
+        const multipart = normalizeMultipartMetadata(req.body, {
+            deviceId,
+            direction: isOutgoing ? 'outgoing' : 'incoming',
+            fromNumber: isOutgoing ? null : from,
+            toNumber: isOutgoing ? to : (to || null),
+            simSlot: simScope.simSlot
+        });
+        const storageTimestamp = normalizeMultipartTimestamp(timestamp, multipart);
         const result = await db.run(
             `INSERT OR IGNORE INTO sms
-                (device_id, from_number, to_number, message, type, status, timestamp, read, source, sim_slot, external_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                (device_id, from_number, to_number, message, type, status, timestamp, read, source, sim_slot, external_id,
+                 multipart_ref, multipart_part_index, multipart_part_count, multipart_group_key)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 deviceId,
                 isOutgoing ? null : from,
@@ -302,11 +312,15 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
                 content,
                 isOutgoing ? 'outgoing' : 'incoming',
                 isOutgoing ? 'sent' : 'received',
-                timestamp,
+                storageTimestamp,
                 read,
                 syncPayload ? 'android-http-sync' : 'android-http',
                 simScope.simSlot,
-                externalId
+                externalId,
+                multipart.multipart_ref,
+                multipart.multipart_part_index,
+                multipart.multipart_part_count,
+                multipart.multipart_group_key
             ]
         );
 
@@ -330,10 +344,14 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
                 status: isOutgoing ? 'sent' : 'received',
                 read,
                 external_id: externalId,
+                multipart_ref: multipart.multipart_ref,
+                multipart_part_index: multipart.multipart_part_index,
+                multipart_part_count: multipart.multipart_part_count,
+                multipart_group_key: multipart.multipart_group_key,
                 sim_slot: simScope.simSlot,
                 message: content,
                 text: content,
-                timestamp
+                timestamp: storageTimestamp
             });
         }
 

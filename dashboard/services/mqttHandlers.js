@@ -15,6 +15,7 @@ const {
     upsertModuleHealth
 } = require('../utils/moduleHealth');
 const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
+const { persistDeviceStatusCache } = require('../utils/deviceStatusCache');
 const {
     saveCapture
 } = require('./webcamCaptureService');
@@ -22,6 +23,7 @@ const { syncDeviceSimInventory } = require('./simInventoryService');
 const { parseUssdMenuOptions } = require('../utils/ussdSession');
 const { extractSimScope, appendSimScopeCondition } = require('../utils/simScope');
 const { normalizeSmsDeliveryPayload, normalizeSmsDeliveryReport } = require('../utils/smsDeliveryReports');
+const { normalizeMultipartMetadata, normalizeMultipartTimestamp } = require('../utils/smsMultipart');
 
 const INITIAL_STATUS_PRIME_DELAY_MS = 20000;
 const INITIAL_STATUS_PRIME_SPREAD_MS = 1000;
@@ -1002,6 +1004,9 @@ class MQTTHandlers {
                 syncDeviceSimInventory(db, deviceId, data).catch((error) => {
                     logger.debug(`SIM inventory sync failed for ${deviceId}: ${error.message}`);
                 });
+                persistDeviceStatusCache(db, deviceId, data).catch((error) => {
+                    logger.debug(`Status cache persist failed for ${deviceId}: ${error.message}`);
+                });
             }
 
             // Fire device.online webhook on first heartbeat after offline (track per device)
@@ -1427,9 +1432,19 @@ class MQTTHandlers {
                     const syncPayload = isSyncPayload(data);
                     const read = isOutgoing ? 1 : (boolFromPayload(data.read ?? data.is_read, false) ? 1 : 0);
                     const externalId = smsExternalId(data);
+                    const multipart = normalizeMultipartMetadata(data, {
+                        deviceId,
+                        direction: isOutgoing ? 'outgoing' : 'incoming',
+                        fromNumber: isOutgoing ? null : decodedFrom,
+                        toNumber: isOutgoing ? decodedTo : (decodedTo || null),
+                        simSlot: simScope.simSlot
+                    });
+                    const storageTimestamp = normalizeMultipartTimestamp(smsTimestamp, multipart);
                     const result = await db.run(`
-                        INSERT OR IGNORE INTO sms (from_number, to_number, message, type, status, device_id, timestamp, read, source, sim_slot, external_id)
-                        VALUES (?, ?, ?, ?, ?, COALESCE(?, ''), ?, ?, ?, ?, ?)
+                        INSERT OR IGNORE INTO sms
+                            (from_number, to_number, message, type, status, device_id, timestamp, read, source, sim_slot, external_id,
+                             multipart_ref, multipart_part_index, multipart_part_count, multipart_group_key)
+                        VALUES (?, ?, ?, ?, ?, COALESCE(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     `, [
                         isOutgoing ? null : decodedFrom,
                         isOutgoing ? decodedTo : (decodedTo || null),
@@ -1437,11 +1452,15 @@ class MQTTHandlers {
                         isOutgoing ? 'outgoing' : 'incoming',
                         isOutgoing ? 'sent' : 'received',
                         deviceId,
-                        smsTimestamp,
+                        storageTimestamp,
                         read,
                         syncPayload ? 'android-mqtt-sync' : 'android-mqtt',
                         simScope.simSlot,
-                        externalId
+                        externalId,
+                        multipart.multipart_ref,
+                        multipart.multipart_part_index,
+                        multipart.multipart_part_count,
+                        multipart.multipart_group_key
                     ]);
 
                     logger.info(`✅ Saved incoming SMS from ${decodedFrom} (ID: ${result.lastID})`);
@@ -1495,8 +1514,12 @@ class MQTTHandlers {
                         status: isOutgoing ? 'sent' : 'received',
                         read,
                         external_id: externalId,
+                        multipart_ref: multipart.multipart_ref,
+                        multipart_part_index: multipart.multipart_part_index,
+                        multipart_part_count: multipart.multipart_part_count,
+                        multipart_group_key: multipart.multipart_group_key,
                         unreadCount: smsCache.get(deviceId),
-                        timestamp: smsTimestamp
+                        timestamp: storageTimestamp
                     });
 
                     if (!isOutgoing && !data.sync) {

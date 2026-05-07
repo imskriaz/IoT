@@ -130,6 +130,15 @@ async function initializeDatabase() {
         `);
 
         await db.exec(`
+            CREATE TABLE IF NOT EXISTS device_status_cache (
+                device_id TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+            )
+        `);
+
+        await db.exec(`
             CREATE TABLE IF NOT EXISTS unregistered_devices (
                 device_id TEXT PRIMARY KEY,
                 first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -176,6 +185,10 @@ async function initializeDatabase() {
                 batch_id TEXT,
                 sim_slot INTEGER,
                 external_id TEXT,
+                multipart_ref TEXT,
+                multipart_part_index INTEGER,
+                multipart_part_count INTEGER,
+                multipart_group_key TEXT,
                 UNIQUE(device_id, timestamp, from_number),
                 FOREIGN KEY (device_id) REFERENCES devices(id),
                 FOREIGN KEY (user_id) REFERENCES users(id),
@@ -764,6 +777,7 @@ async function initializeDatabase() {
             CREATE INDEX IF NOT EXISTS idx_device_users_user   ON device_users(user_id);
             CREATE INDEX IF NOT EXISTS idx_device_users_device ON device_users(device_id);
             CREATE INDEX IF NOT EXISTS idx_device_profiles_device ON device_profiles(device_id);
+            CREATE INDEX IF NOT EXISTS idx_device_status_cache_updated ON device_status_cache(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_device_wifi_networks_device ON device_wifi_networks(device_id, updated_at DESC);
         `);
 
@@ -945,10 +959,15 @@ async function initializeDatabase() {
         try { await db.exec(`ALTER TABLE sms ADD COLUMN source TEXT DEFAULT 'device'`); } catch (e) {}
         try { await db.exec(`ALTER TABLE sms ADD COLUMN batch_id TEXT`); } catch (e) {}
         try { await db.exec(`ALTER TABLE sms ADD COLUMN external_id TEXT`); } catch (e) {}
+        try { await db.exec(`ALTER TABLE sms ADD COLUMN multipart_ref TEXT`); } catch (e) {}
+        try { await db.exec(`ALTER TABLE sms ADD COLUMN multipart_part_index INTEGER`); } catch (e) {}
+        try { await db.exec(`ALTER TABLE sms ADD COLUMN multipart_part_count INTEGER`); } catch (e) {}
+        try { await db.exec(`ALTER TABLE sms ADD COLUMN multipart_group_key TEXT`); } catch (e) {}
         await db.exec(`
             CREATE INDEX IF NOT EXISTS idx_sms_device_timestamp ON sms(device_id, timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_sms_conversation ON sms(conversation_id, timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_sms_batch ON sms(batch_id);
+            CREATE INDEX IF NOT EXISTS idx_sms_multipart_group ON sms(device_id, multipart_group_key, timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_sms_conversations_device ON sms_conversations(device_id, last_message_at DESC);
             CREATE INDEX IF NOT EXISTS idx_sms_conversations_key ON sms_conversations(device_id, conversation_key);
             CREATE INDEX IF NOT EXISTS idx_sms_conversation_participants_conv ON sms_conversation_participants(conversation_id);
@@ -1065,7 +1084,11 @@ async function initializeDatabase() {
                     'source',
                     'batch_id',
                     'sim_slot',
-                    'external_id'
+                    'external_id',
+                    'multipart_ref',
+                    'multipart_part_index',
+                    'multipart_part_count',
+                    'multipart_group_key'
                 ];
                 rebuildTable(
                     'sms',
@@ -1091,6 +1114,10 @@ async function initializeDatabase() {
                         batch_id TEXT,
                         sim_slot INTEGER,
                         external_id TEXT,
+                        multipart_ref TEXT,
+                        multipart_part_index INTEGER,
+                        multipart_part_count INTEGER,
+                        multipart_group_key TEXT,
                         UNIQUE(device_id, timestamp, from_number),
                         FOREIGN KEY (device_id) REFERENCES devices(id),
                         FOREIGN KEY (user_id) REFERENCES users(id),

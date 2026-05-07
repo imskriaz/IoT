@@ -8,7 +8,9 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "nvs.h"
 
@@ -66,6 +68,15 @@ static SemaphoreHandle_t s_lock;
 static config_mgr_data_t s_config;
 static uint32_t s_revision;
 static bool s_ready;
+
+typedef struct {
+    char key[CONFIG_MGR_MQTT_URI_LEN];
+    char value[CONFIG_MGR_MQTT_URI_LEN];
+    bool restart_required;
+    bool sensitive;
+    esp_err_t err;
+    SemaphoreHandle_t done;
+} config_mgr_apply_job_t;
 
 esp_err_t config_mgr_validate(const config_mgr_data_t *config);
 
@@ -681,6 +692,89 @@ esp_err_t config_mgr_apply_key_value(
         *out_sensitive = sensitive;
     }
     return ESP_OK;
+}
+
+static void config_mgr_apply_key_value_task(void *arg) {
+    config_mgr_apply_job_t *job = (config_mgr_apply_job_t *)arg;
+
+    if (!job) {
+        vTaskDelete(NULL);
+        return;
+    }
+
+    job->err = config_mgr_apply_key_value(
+        job->key,
+        job->value,
+        &job->restart_required,
+        &job->sensitive
+    );
+    if (job->done) {
+        xSemaphoreGive(job->done);
+    }
+    vTaskDelete(NULL);
+}
+
+esp_err_t config_mgr_apply_key_value_safe(
+    const char *key,
+    const char *value,
+    bool *out_restart_required,
+    bool *out_sensitive
+) {
+    config_mgr_apply_job_t *job = NULL;
+    SemaphoreHandle_t done = NULL;
+    BaseType_t task_ok = pdFAIL;
+    esp_err_t err = ESP_OK;
+
+    if (!key || !value) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    job = heap_caps_calloc(1U, sizeof(*job), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!job) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    if (!config_mgr_copy_string_value(key, job->key, sizeof(job->key)) ||
+        !config_mgr_copy_string_value(value, job->value, sizeof(job->value))) {
+        heap_caps_free(job);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    done = xSemaphoreCreateBinary();
+    if (!done) {
+        heap_caps_free(job);
+        return ESP_ERR_NO_MEM;
+    }
+    job->done = done;
+    job->err = ESP_ERR_INVALID_STATE;
+
+    task_ok = xTaskCreatePinnedToCore(
+        config_mgr_apply_key_value_task,
+        "cfg_apply",
+        CONFIG_UNIFIED_TASK_STACK_SMALL,
+        job,
+        tskIDLE_PRIORITY + 2,
+        NULL,
+        1
+    );
+    if (task_ok != pdPASS) {
+        vSemaphoreDelete(done);
+        heap_caps_free(job);
+        return ESP_ERR_NO_MEM;
+    }
+
+    (void)xSemaphoreTake(done, portMAX_DELAY);
+
+    err = job->err;
+    if (out_restart_required) {
+        *out_restart_required = job->restart_required;
+    }
+    if (out_sensitive) {
+        *out_sensitive = job->sensitive;
+    }
+    vSemaphoreDelete(done);
+    heap_caps_free(job);
+    return err;
 }
 
 uint32_t config_mgr_schema_version(void) {

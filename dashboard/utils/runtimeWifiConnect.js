@@ -28,6 +28,7 @@ async function publishWifiConnectSequence({
     ssid,
     password = '',
     security = '',
+    waitForResponse = true,
     timeoutMs = 15000,
     commandOptionsFactory = null
 }) {
@@ -53,7 +54,7 @@ async function publishWifiConnectSequence({
             deviceId,
             'wifi-connect',
             wifiConnectPayload,
-            true,
+            waitForResponse,
             timeoutMs,
             buildCommandOptions(commandOptionsFactory, 'wifi-connect', {
                 skipPersistentQueue: true,
@@ -75,6 +76,74 @@ async function publishWifiConnectSequence({
     }
 }
 
+function buildConfigSetCommandError(error, key) {
+    const detail = normalizeWifiConnectText(error?.message || error) || 'Wi-Fi config persist failed';
+    const enriched = new Error(`Device did not persist Wi-Fi config key ${key}.`);
+    enriched.code = 'WIFI_CONFIG_SET_FAILED';
+    enriched.statusCode = 502;
+    enriched.stage = 'config-set';
+    enriched.detail = detail;
+    enriched.key = key;
+    enriched.cause = error;
+    return enriched;
+}
+
+async function publishWifiConfigPersistence({
+    mqttService,
+    deviceId,
+    ssid,
+    password = '',
+    waitForResponse = true,
+    timeoutMs = 10000,
+    commandOptionsFactory = null
+}) {
+    const normalizedSsid = normalizeWifiConnectText(ssid);
+    const normalizedPassword = password === undefined || password === null ? '' : String(password);
+    const updates = [
+        ['wifi_ssid', normalizedSsid],
+        ['wifi_password', normalizedPassword]
+    ];
+    const responses = [];
+
+    if (!mqttService || typeof mqttService.publishCommand !== 'function') {
+        throw new Error('MQTT service unavailable');
+    }
+    if (!normalizedSsid) {
+        throw new Error('SSID is required');
+    }
+
+    for (const [key, value] of updates) {
+        try {
+            const response = await mqttService.publishCommand(
+                deviceId,
+                'config-set',
+                { key, value },
+                waitForResponse,
+                timeoutMs,
+                buildCommandOptions(commandOptionsFactory, 'config-set', {
+                    skipPersistentQueue: true,
+                    domain: 'network'
+                })
+            );
+            if (response?.success === false) {
+                throw buildConfigSetCommandError(
+                    response.detail || response.message || response.error || 'config-set returned unsuccessful response',
+                    key
+                );
+            }
+            responses.push(response);
+        } catch (error) {
+            if (error?.code === 'WIFI_CONFIG_SET_FAILED') {
+                throw error;
+            }
+            throw buildConfigSetCommandError(error, key);
+        }
+    }
+
+    return responses;
+}
+
 module.exports = {
-    publishWifiConnectSequence
+    publishWifiConnectSequence,
+    publishWifiConfigPersistence
 };

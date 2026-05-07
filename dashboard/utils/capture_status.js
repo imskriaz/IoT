@@ -113,7 +113,7 @@ function printHelp() {
             'MQTT device_status capture helper',
             '',
             'Usage:',
-            '  node utils/capture_status.js --device ws-a7670e-476178',
+            '  node utils/capture_status.js --device esp-a7670e-476178',
             '',
             'Options:',
             '  --device       Device ID; builds topic as device/{deviceId}/status',

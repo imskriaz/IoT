@@ -182,6 +182,22 @@ static void api_bridge_escape_json(const char *input, char *output, size_t outpu
     output[write_index] = '\0';
 }
 
+static bool api_bridge_raw_modem_line_is_valid(const char *line) {
+    if (!line || line[0] == '\0') {
+        return false;
+    }
+    if (line[0] != 'A' && line[0] != 'a') {
+        return false;
+    }
+    for (size_t index = 0U; line[index] != '\0'; ++index) {
+        const unsigned char current = (unsigned char)line[index];
+        if (current < 0x20U || current > 0x7EU) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool api_bridge_ota_url_supported(const char *url) {
     return url &&
            (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0);
@@ -221,6 +237,57 @@ static void api_bridge_schedule_restart(uint32_t delay_ms) {
     }
 }
 
+static unified_action_response_t api_bridge_execute_modem_at(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    char modem_response[256] = {0};
+    char escaped_line[UNIFIED_TEXT_LONG_LEN * 2U] = {0};
+    char escaped_response[sizeof(modem_response) * 2U] = {0};
+    esp_err_t err = ESP_OK;
+    const uint32_t timeout_ms = action && action->timeout_ms > 0U ? action->timeout_ms : 10000U;
+
+    if (!request || !api_bridge_raw_modem_line_is_valid(request->raw_line) || !payload || payload_len == 0U) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_INVALID_ARG,
+            UNIFIED_FEATURE_REASON_NONE,
+            "invalid_modem_at_line"
+        );
+    }
+
+    err = modem_a7670_command(request->raw_line, modem_response, sizeof(modem_response), timeout_ms);
+    api_bridge_escape_json(request->raw_line, escaped_line, sizeof(escaped_line));
+    api_bridge_escape_json(modem_response, escaped_response, sizeof(escaped_response));
+    if (snprintf(
+            payload,
+            payload_len,
+            "{\"line\":\"%s\",\"response\":\"%s\"}",
+            escaped_line,
+            escaped_response
+        ) >= (int)payload_len) {
+        payload[0] = '\0';
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            ESP_ERR_INVALID_SIZE,
+            UNIFIED_FEATURE_REASON_NONE,
+            "modem_at_payload_failed"
+        );
+    }
+
+    return api_bridge_build_response(
+        action,
+        err == ESP_OK ? UNIFIED_ACTION_RESULT_COMPLETED : (err == ESP_ERR_TIMEOUT ? UNIFIED_ACTION_RESULT_TIMEOUT : UNIFIED_ACTION_RESULT_FAILED),
+        err,
+        UNIFIED_FEATURE_REASON_NONE,
+        err == ESP_OK ? "modem_at_completed" : (err == ESP_ERR_TIMEOUT ? "modem_at_timeout" : "modem_at_failed")
+    );
+}
+
 static unified_action_response_t api_bridge_execute_config_set(
     const unified_action_envelope_t *action,
     const api_bridge_request_t *request,
@@ -237,7 +304,7 @@ static unified_action_response_t api_bridge_execute_config_set(
         return api_bridge_build_response(action, UNIFIED_ACTION_RESULT_REJECTED, ESP_ERR_INVALID_ARG, UNIFIED_FEATURE_REASON_NONE, "invalid_config_request");
     }
 
-    err = config_mgr_apply_key_value(request->key, request->value, &restart_required, &sensitive);
+    err = config_mgr_apply_key_value_safe(request->key, request->value, &restart_required, &sensitive);
     if (err == ESP_ERR_NOT_SUPPORTED) {
         return api_bridge_build_response(action, UNIFIED_ACTION_RESULT_REJECTED, err, UNIFIED_FEATURE_REASON_NONE, "unsupported_config_key");
     }
@@ -317,6 +384,7 @@ static unified_action_response_t api_bridge_execute_get_sms_history(
     size_t payload_len
 ) {
     uint16_t max_entries = request ? request->max_entries : 0U;
+    uint32_t synced_count = 0U;
     esp_err_t err = ESP_OK;
 
     if (!payload || payload_len == 0U) {
@@ -327,6 +395,17 @@ static unified_action_response_t api_bridge_execute_get_sms_history(
             UNIFIED_FEATURE_REASON_NONE,
             "invalid_sms_history_request"
         );
+    }
+
+    unified_action_response_t pull_response = sms_service_pull_pending(
+        action ? action->timeout_ms : 0U,
+        &synced_count
+    );
+    if (pull_response.result == UNIFIED_ACTION_RESULT_REJECTED ||
+        pull_response.result == UNIFIED_ACTION_RESULT_TIMEOUT ||
+        pull_response.result == UNIFIED_ACTION_RESULT_FAILED) {
+        payload[0] = '\0';
+        return pull_response;
     }
 
     err = storage_mgr_build_sms_history_json(payload, payload_len, max_entries);
@@ -346,7 +425,7 @@ static unified_action_response_t api_bridge_execute_get_sms_history(
         UNIFIED_ACTION_RESULT_COMPLETED,
         ESP_OK,
         UNIFIED_FEATURE_REASON_NONE,
-        "sms_history_snapshot"
+        synced_count > 0U ? "sms_pull_completed" : "sms_pull_empty"
     );
 }
 
@@ -949,7 +1028,7 @@ static unified_action_response_t api_bridge_execute_mobile_apn(
     modem_a7670_get_status(&modem);
     reopen_session = modem.data_mode_enabled;
 
-    err = config_mgr_apply_key_value("modem_apn", request->apn, &restart_required, &sensitive);
+    err = config_mgr_apply_key_value_safe("modem_apn", request->apn, &restart_required, &sensitive);
     if (err != ESP_OK) {
         return api_bridge_build_response(
             action,
@@ -1132,7 +1211,7 @@ static unified_action_response_t api_bridge_execute_routing_configure(
     failover = config_mgr_modem_fallback_enabled();
 
     if (request->failover_present && request->failover != failover) {
-        err = config_mgr_apply_key_value(
+        err = config_mgr_apply_key_value_safe(
             "modem_fallback_enabled",
             request->failover ? "true" : "false",
             &restart_required,
@@ -1380,6 +1459,8 @@ static unified_action_response_t api_bridge_dispatch_action(
             return api_bridge_execute_status_watch(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_OTA_UPDATE:
             return api_bridge_execute_ota_update(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_MODEM_AT:
+            return api_bridge_execute_modem_at(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_SEND_SMS:
         case UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART:
             return api_bridge_execute_send_sms(action, request, payload, payload_len);

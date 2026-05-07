@@ -15,6 +15,7 @@ const { resolveDeviceId } = require('./utils/deviceResolver');
 const { initializeDatabase } = require('./config/database');
 const { DEFAULT_DEVICE_ID } = require('./config/device');
 const { buildDashboardDeviceStatus } = require('./utils/dashboardStatus');
+const { hydrateDeviceStatusFromCache } = require('./utils/deviceStatusCache');
 const { withEffectiveRole } = require('./middleware/auth');
 const { captureRawBody, createErrorHandler } = require('./middleware/errorHandler');
 const { getEffectiveSystemSettings, normalizeStatusWatchSettings } = require('./services/systemSettingsService');
@@ -222,7 +223,7 @@ try {
 app.use(flash());
 
 // Make variables available to all views
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
     try {
         res.locals.user = withEffectiveRole(req.user || req.session.user || null);
         res.locals.success_msg = req.flash('success');
@@ -231,7 +232,25 @@ app.use((req, res, next) => {
         res.locals.currentYear = new Date().getFullYear();
         res.locals.nodeEnv = process.env.NODE_ENV || 'development';
         res.locals.assetVersion = ASSET_VERSION;
-        res.locals.deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const activeDeviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        res.locals.deviceId = activeDeviceId;
+        res.locals.initialDeviceStatus = null;
+        res.locals.initialDeviceStatusJson = 'null';
+        res.locals.initialMqttConnected = mqttService.connected === true;
+        res.locals.initialServerConnected = true;
+        res.locals.initialMqttStatusJson = JSON.stringify(mqttService.getStatus()).replace(/</g, '\\u003c');
+        if (activeDeviceId) {
+            await hydrateDeviceStatusFromCache(req.app?.locals?.db, modemService, activeDeviceId).catch(() => null);
+            const rawDeviceStatus = modemService.getDeviceStatus(activeDeviceId);
+            if (rawDeviceStatus) {
+                const initialDeviceStatus = {
+                    deviceId: activeDeviceId,
+                    ...buildDashboardDeviceStatus(rawDeviceStatus, rawDeviceStatus.online)
+                };
+                res.locals.initialDeviceStatus = initialDeviceStatus;
+                res.locals.initialDeviceStatusJson = JSON.stringify(initialDeviceStatus).replace(/</g, '\\u003c');
+            }
+        }
         res.locals.phoneCountryCode = process.env.PHONE_COUNTRY_CODE || '';
         res.locals.showSidebar = true;
 

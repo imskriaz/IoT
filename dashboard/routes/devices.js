@@ -10,8 +10,13 @@ const { hasRole, requireDeviceAccess, withEffectiveRole } = require('../middlewa
 const { DEFAULT_DEVICE_ID } = require('../config/device');
 const { resolveDeviceId } = require('../utils/deviceResolver');
 const { buildDeviceSpecs } = require('../utils/deviceSpecsCatalog');
-const { parseCapabilities } = require('../utils/deviceCapabilities');
+const {
+    inferCapabilitiesFromStatus,
+    mergeCapabilities,
+    parseCapabilities
+} = require('../utils/deviceCapabilities');
 const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
+const { hydrateDeviceStatusFromCache } = require('../utils/deviceStatusCache');
 const { getDeviceModuleHealth } = require('../utils/moduleHealth');
 const { encodeProvisioningToken } = require('../utils/provisioningToken');
 const packageService = require('../services/packageService');
@@ -21,6 +26,7 @@ const { readStoredSimRows, applyStoredSimFallback } = require('../services/store
 const { normalizeSsid, readHostScanSummary } = require('../utils/hostWifiDiagnostics');
 const { publishWifiConnectSequence } = require('../utils/runtimeWifiConnect');
 const { setupApIp } = require('../config/onboarding');
+const { validateDeviceIdPrefix } = require('../utils/deviceIdPolicy');
 
 const DEFAULT_MQTT_PORT = 1883;
 const DEFAULT_TOPIC_PREFIX = normalizeTopicPrefix(process.env.MQTT_TOPIC_PREFIX || 'device');
@@ -1013,9 +1019,13 @@ router.get('/', async (req, res) => {
         // Merge with live modem state
         const modemService = global.modemService;
         const activeDeviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
-        const devices = rows.map(row => {
+        const devices = await Promise.all(rows.map(async row => {
+            await hydrateDeviceStatusFromCache(db, modemService, row.id).catch(() => null);
             const live = modemService?.getStatus(row.id);
-            const caps = parseCapabilities(row);
+            const caps = mergeCapabilities(
+                parseCapabilities(row),
+                inferCapabilitiesFromStatus(live || {})
+            );
             const inferredType = inferDeviceListType(row, live, caps);
             return {
                 ...row,
@@ -1039,7 +1049,7 @@ router.get('/', async (req, res) => {
                 },
                 lastSeen: live?.lastSeen || row.last_seen
             };
-        });
+        }));
 
         res.json({ success: true, devices: sortDeviceList(devices, activeDeviceId) });
     } catch (error) {
@@ -1071,6 +1081,10 @@ router.post('/', [
         const deviceId = normalizeDeviceId(req.body.id || req.body.device_id);
         if (!deviceId) {
             return res.status(400).json({ success: false, message: 'Device ID required' });
+        }
+        const prefixError = validateDeviceIdPrefix(deviceId, req.body);
+        if (prefixError) {
+            return res.status(400).json({ success: false, message: prefixError });
         }
 
         const db = req.app.locals.db;

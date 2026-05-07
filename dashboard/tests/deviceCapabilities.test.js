@@ -2,7 +2,8 @@
 
 const {
     inferCapabilitiesFromStatus,
-    mergeCapabilities
+    mergeCapabilities,
+    parseCapabilities
 } = require('../utils/deviceCapabilities');
 
 describe('deviceCapabilities', () => {
@@ -72,5 +73,41 @@ describe('deviceCapabilities', () => {
             calls: false,
             ussd: false
         }));
+    });
+
+    test('removes stale runtime status fields from stored capability profiles', () => {
+        const caps = parseCapabilities({
+            capabilities: JSON.stringify({
+                active_path: 'modem',
+                wifi_ssid: 'RiazM',
+                wifi_connected: false,
+                mqtt_reconnect_count: 12,
+                storage_media_available: true,
+                activePath: 'modem',
+                mqtt: { connected: false },
+                wifi: true,
+                modem: true,
+                internet: true,
+                sms: true,
+                board: 'esp32-s3',
+                specs: { chip: 'esp32-s3' }
+            })
+        });
+
+        expect(caps).toEqual(expect.objectContaining({
+            wifi: true,
+            modem: true,
+            sms: true,
+            internet: true,
+            board: 'esp32-s3',
+            specs: { chip: 'esp32-s3' }
+        }));
+        expect(caps).not.toHaveProperty('active_path');
+        expect(caps).not.toHaveProperty('wifi_ssid');
+        expect(caps).not.toHaveProperty('wifi_connected');
+        expect(caps).not.toHaveProperty('mqtt_reconnect_count');
+        expect(caps).not.toHaveProperty('storage_media_available');
+        expect(caps).not.toHaveProperty('activePath');
+        expect(caps).not.toHaveProperty('mqtt');
     });
 });

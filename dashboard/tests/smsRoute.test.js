@@ -114,6 +114,48 @@ describe('sms route queue-first delivery', () => {
         );
     });
 
+    test('pull messages waits for device sync result and closes the sync cycle', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+        global.mqttService.publishCommand.mockResolvedValueOnce({
+            success: true,
+            payload: { count: 2, synced: 2 }
+        });
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/sync')
+            .send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(global.mqttService.publishCommand).toHaveBeenCalledWith(
+            'device-1',
+            'sync-sms',
+            expect.objectContaining({ reason: 'dashboard_pull' }),
+            true,
+            90000,
+            expect.objectContaining({ source: 'dashboard' })
+        );
+        expectDeviceEvent('device-1', 'sms:sync-started', {
+            deviceId: 'device-1',
+            total: 0,
+            requested: true
+        });
+        expectDeviceEvent('device-1', 'sms:sync-completed', expect.objectContaining({
+            deviceId: 'device-1',
+            device_id: 'device-1',
+            total: 2,
+            synced: 2,
+            requested: true
+        }));
+    });
+
     test('accepts multipart SMS under the device limit and queues dashboard-built PDU parts', async () => {
         const db = {
             run: jest.fn(async (sql) => {
@@ -387,6 +429,55 @@ describe('sms route queue-first delivery', () => {
             recipients: ['+8801700000001', '+8801700000002']
         });
         expect(global.mqttService.publishCommand).toHaveBeenCalledTimes(2);
+    });
+
+    test('queues bulk compose rows with each row message', async () => {
+        let insertId = 80;
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (String(sql).includes('INSERT INTO sms')) {
+                    insertId += 1;
+                    return { lastID: insertId, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('SELECT id FROM devices')) return { id: 'device-1' };
+                return null;
+            }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/send')
+            .send({
+                deviceId: 'device-1',
+                bulkRows: [
+                    { sender: '01700000001', message: 'first row message' },
+                    { sender: '01700000002', message: 'second row message' }
+                ]
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            success: true,
+            multiRecipient: true,
+            bulkQueue: true,
+            count: 2,
+            recipients: ['+8801700000001', '+8801700000002']
+        });
+        expect(global.mqttService.publishCommand).toHaveBeenCalledTimes(2);
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO sms'),
+            expect.arrayContaining(['+8801700000001', 'first row message'])
+        );
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO sms'),
+            expect.arrayContaining(['+8801700000002', 'second row message'])
+        );
     });
 
     test('returns unread count scoped to the requested device', async () => {
@@ -758,6 +849,81 @@ describe('sms route queue-first delivery', () => {
             expect.stringContaining('s.device_id = ?'),
             ['device-8', '880324828386241', '4828386241', '+880324828386241', 20]
         );
+    });
+
+    test('thread view merges Android multipart fragments with explicit metadata into one rendered message', async () => {
+        const rows = [
+            {
+                id: 348,
+                device_id: 'device-8',
+                from_number: '3=:24;82=8<3=86<2:41',
+                to_number: null,
+                message: ', \u09f3\u09e8\u09eb\u09ec-\u09e8\u09e6\u099c\u09bf\u09ac\u09bf+\u09e7\u09eb\u09e6\u09ae\u09bf\u09a8\u09bf\u099f-\u09e9\u09e6\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09ec#; \u09f3\u09e8\u09ee\u09ea-\u09e8\u09eb\u099c\u09bf\u09ac\u09bf-\u09e9\u09e6\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09e7#',
+                timestamp: '2026-05-06T11:02:09.420Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 49,
+                source: 'android-mqtt',
+                error: null,
+                external_id: null,
+                multipart_ref: '44',
+                multipart_part_index: 2,
+                multipart_part_count: 2,
+                multipart_group_key: 'multipart:device-8:incoming:3=:24;82=8<3=86<2:41:0:44:2',
+                sent_by: null
+            },
+            {
+                id: 347,
+                device_id: 'device-8',
+                from_number: '3=:24;82=8<3=86<2:41',
+                to_number: null,
+                message: '\u09b8\u09aa\u09cd\u09a4\u09be\u09b9 \u0995\u09bf\u0982\u09ac\u09be \u09ae\u09be\u09b8\u09c7\u09b0- \u09b8\u09c1\u09aa\u09be\u09b0 \u0985\u09ab\u09be\u09b0 \u09b0\u09ac\u09bf\'\u09a4\u09c7\u0987! \u0986\u099c \u09f3\u09ef\u09eb-\u09eb\u099c\u09bf\u09ac\u09bf-\u09ed\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ee\u09e7#',
+                timestamp: '2026-05-06T11:01:48.808Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 49,
+                source: 'android-mqtt',
+                error: null,
+                external_id: null,
+                multipart_ref: '44',
+                multipart_part_index: 1,
+                multipart_part_count: 2,
+                multipart_group_key: 'multipart:device-8:incoming:3=:24;82=8<3=86<2:41:0:44:2',
+                sent_by: null
+            }
+        ];
+
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue({ primary_number: '+880324828386241', title: 'Robi' }),
+            all: jest.fn().mockResolvedValue(rows)
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/thread?deviceId=device-8&conversationId=49&number=%2B880324828386241&limit=20');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.meta).toMatchObject({
+            conversationId: 49,
+            title: 'Robi',
+            count: 1
+        });
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            id: 347,
+            display_from: 'Robi',
+            merged_multipart: true,
+            merged_sms_count: 2,
+            merged_sms_ids: [347, 348],
+            message: '\u09b8\u09aa\u09cd\u09a4\u09be\u09b9 \u0995\u09bf\u0982\u09ac\u09be \u09ae\u09be\u09b8\u09c7\u09b0- \u09b8\u09c1\u09aa\u09be\u09b0 \u0985\u09ab\u09be\u09b0 \u09b0\u09ac\u09bf\'\u09a4\u09c7\u0987! \u0986\u099c \u09f3\u09ef\u09eb-\u09eb\u099c\u09bf\u09ac\u09bf-\u09ed\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ee\u09e7#, \u09f3\u09e8\u09eb\u09ec-\u09e8\u09e6\u099c\u09bf\u09ac\u09bf+\u09e7\u09eb\u09e6\u09ae\u09bf\u09a8\u09bf\u099f-\u09e9\u09e6\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09ec#; \u09f3\u09e8\u09ee\u09ea-\u09e8\u09eb\u099c\u09bf\u09ac\u09bf-\u09e9\u09e6\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09e7#'
+        }));
     });
 
     test('returns conversation summaries scoped to the selected device', async () => {

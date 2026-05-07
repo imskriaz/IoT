@@ -48,4 +48,14 @@ describe('main.js device HTTP helper export', () => {
         expect(source).toContain("nextMessage = mqttState.reconnecting || mqttState.connecting ? 'Connecting' : 'Offline';");
         expect(source).not.toContain('Opening System Settings in ${getMQTTDownRedirectSecondsRemaining()} seconds');
     });
+
+    test('boots connection badges from the server-rendered snapshot instead of forcing a disconnected state', () => {
+        const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'main.js'), 'utf8');
+
+        expect(source).toContain('window._serverConnected = window.INITIAL_SERVER_CONNECTED !== false;');
+        expect(source).toContain('window._mqttStatus = normalizeMQTTStatus(window.INITIAL_MQTT_STATUS || {');
+        expect(source).toContain('if (window._serverConnected !== true) {');
+        expect(source).toContain("updateConnectionStatus('connecting');");
+        expect(source).toContain('updateTopBarStatus();');
+    });
 });

@@ -292,7 +292,11 @@ describe('androidBridgeAdapter routes', () => {
                 1,
                 'android-http-sync',
                 null,
-                'android-sms-42'
+                'android-sms-42',
+                null,
+                null,
+                null,
+                null
             ]
         );
         expect(emit).toHaveBeenCalledWith(
@@ -403,5 +407,66 @@ describe('androidBridgeAdapter routes', () => {
         );
         const { refreshSmsConversationBySmsId } = require('../services/smsConversations');
         expect(refreshSmsConversationBySmsId).toHaveBeenCalledWith(db, 41);
+    });
+
+    test('POST /messages/receive stores multipart metadata for Android HTTP inbound SMS', async () => {
+        const emit = jest.fn();
+        const { attachSmsToConversation } = require('../services/smsConversations');
+        attachSmsToConversation.mockResolvedValueOnce(81);
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue({ id: 'android-http-01' }),
+            run: jest.fn().mockResolvedValue({ lastID: 64, changes: 1 })
+        });
+        global.io = {
+            to: jest.fn().mockReturnValue({ emit })
+        };
+
+        const router = require('../routes/androidBridgeAdapter');
+        const app = buildApp(router, db, { deviceIds: ['android-http-01'] });
+        const res = await request(app)
+            .post('/v1/android/bridge/messages/receive')
+            .send({
+                device_id: 'android-http-01',
+                from: '3=:24;82=8<3=86<2:41',
+                content: ', second part',
+                timestamp: '2026-05-06T11:02:09.420Z',
+                multipart_ref: '44',
+                multipart_part_index: 2,
+                multipart_part_count: 3,
+                sim_slot: 0
+            });
+
+        expect(res.status).toBe(200);
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('multipart_group_key'),
+            [
+                'android-http-01',
+                '3=:24;82=8<3=86<2:41',
+                null,
+                ', second part',
+                'incoming',
+                'received',
+                '2026-05-06T11:02:09.421Z',
+                0,
+                'android-http',
+                0,
+                null,
+                '44',
+                2,
+                3,
+                'multipart:android-http-01:incoming:3=:24;82=8<3=86<2:41:0:44:3'
+            ]
+        );
+        expect(emit).toHaveBeenCalledWith(
+            'sms:received',
+            expect.objectContaining({
+                id: 64,
+                conversationId: 81,
+                multipart_ref: '44',
+                multipart_part_index: 2,
+                multipart_part_count: 3,
+                timestamp: '2026-05-06T11:02:09.421Z'
+            })
+        );
     });
 });

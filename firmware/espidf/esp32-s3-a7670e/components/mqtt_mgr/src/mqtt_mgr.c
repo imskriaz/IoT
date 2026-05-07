@@ -36,9 +36,11 @@ static const char *TAG = "mqtt_mgr";
 #define MQTT_MGR_MODEM_RESET_THRESHOLD        3U
 #define MQTT_MGR_MODEM_RESPONSE_LEN          512U
 #define MQTT_MGR_ESP_START_RETRY_MS       15000U
-#define MQTT_MGR_ESP_START_INTERNAL_MARGIN_BYTES 1024U
-#define MQTT_MGR_WIFI_PRIMARY_MIN_RSSI_DBM   (-85)
+#define MQTT_MGR_ESP_START_INTERNAL_MARGIN_BYTES 512U
+#define MQTT_MGR_ESP_CLIENT_STACK_LEN     6144U
+#define MQTT_MGR_WIFI_PRIMARY_MIN_RSSI_DBM   (-92)
 #define MQTT_MGR_ESP_CONNECT_GRACE_MS      20000U
+#define MQTT_MGR_WIFI_PROMOTION_HOLD_MS    30000U
 #define MQTT_MGR_MODEM_RESUBSCRIBE_MS     300000U
 #define MQTT_MGR_ACTION_RESULT_BATCH_LIMIT     6U
 #define MQTT_MGR_TASK_STACK_LEN            8192U
@@ -73,7 +75,8 @@ typedef struct {
     char from[64];
     char text[1024];
     char detail[64];
-    char json[1280];
+    char multipart_ref[64];
+    char json[1408];
 } mqtt_mgr_sms_publish_scratch_t;
 
 static SemaphoreHandle_t s_lock;
@@ -116,6 +119,7 @@ static uint32_t s_config_revision;
 static config_mgr_data_t s_loop_config;
 static uint32_t s_loop_config_revision;
 static uint32_t s_esp_connect_started_ms;
+static uint32_t s_esp_connected_since_ms;
 
 static esp_err_t mqtt_mgr_refresh_config_locked(void);
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data);
@@ -362,7 +366,7 @@ static esp_err_t mqtt_mgr_start_esp_client_locked(void) {
         if (!s_status.connected && s_esp_connect_started_ms == 0U) {
             s_esp_connect_started_ms = now_ms;
         }
-        if (s_status.connected || s_transport != MQTT_MGR_TRANSPORT_MODEM) {
+        if (s_transport != MQTT_MGR_TRANSPORT_MODEM) {
             s_transport = MQTT_MGR_TRANSPORT_ESP;
         }
         return ESP_OK;
@@ -373,7 +377,7 @@ static esp_err_t mqtt_mgr_start_esp_client_locked(void) {
         return ESP_ERR_TIMEOUT;
     }
     internal_largest = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (internal_largest < (MQTT_MGR_TASK_STACK_LEN + MQTT_MGR_ESP_START_INTERNAL_MARGIN_BYTES)) {
+    if (internal_largest < (MQTT_MGR_ESP_CLIENT_STACK_LEN + MQTT_MGR_ESP_START_INTERNAL_MARGIN_BYTES)) {
         s_next_esp_start_retry_ms = now_ms + MQTT_MGR_ESP_START_RETRY_MS;
         s_status.runtime.last_error = ESP_ERR_NO_MEM;
         snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "mqtt_esp_internal_heap_low");
@@ -381,7 +385,7 @@ static esp_err_t mqtt_mgr_start_esp_client_locked(void) {
             TAG,
             "skip esp mqtt start internal_largest=%" PRIu32 " required=%u",
             internal_largest,
-            (unsigned)(MQTT_MGR_TASK_STACK_LEN + MQTT_MGR_ESP_START_INTERNAL_MARGIN_BYTES)
+            (unsigned)(MQTT_MGR_ESP_CLIENT_STACK_LEN + MQTT_MGR_ESP_START_INTERNAL_MARGIN_BYTES)
         );
         return ESP_ERR_NO_MEM;
     }
@@ -482,6 +486,7 @@ static esp_err_t mqtt_mgr_stop_transport_locked(void) {
     s_disconnect_modem_after_esp_connected = false;
     s_modem_connection_seen = false;
     s_esp_connect_started_ms = 0U;
+    s_esp_connected_since_ms = 0U;
     s_last_modem_subscribe_ms = 0U;
     s_next_modem_connect_retry_ms = 0U;
     s_next_esp_start_retry_ms = 0U;
@@ -1031,6 +1036,7 @@ static esp_err_t mqtt_mgr_refresh_config_locked(void) {
     s_client_started = false;
     s_disconnect_modem_after_esp_connected = false;
     s_next_esp_start_retry_ms = 0U;
+    s_esp_connected_since_ms = 0U;
     s_status.connected = false;
     s_status.subscribed = false;
     s_status.runtime.running = false;
@@ -1048,7 +1054,7 @@ static esp_err_t mqtt_mgr_refresh_config_locked(void) {
     scratch->mqtt_config.credentials.authentication.password = s_password[0] ? s_password : NULL;
     scratch->mqtt_config.credentials.client_id = s_esp_client_id;
     scratch->mqtt_config.session.keepalive = 60;
-    scratch->mqtt_config.task.stack_size = MQTT_MGR_TASK_STACK_LEN;
+    scratch->mqtt_config.task.stack_size = MQTT_MGR_ESP_CLIENT_STACK_LEN;
     scratch->mqtt_config.task.priority = 5;
 
     ESP_LOGI(
@@ -1079,6 +1085,7 @@ static esp_err_t mqtt_mgr_refresh_config_locked(void) {
 
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
+    uint32_t now_ms = 0U;
 
     (void)handler_args;
     (void)base;
@@ -1099,9 +1106,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     switch ((esp_mqtt_event_id_t)event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "connected to broker=%s", s_status.broker[0] != '\0' ? s_status.broker : "<unset>");
+            now_ms = unified_tick_now_ms();
             s_transport = MQTT_MGR_TRANSPORT_ESP;
-            s_disconnect_modem_after_esp_connected = modem_a7670_mqtt_is_connected();
+            s_disconnect_modem_after_esp_connected = false;
             s_esp_connect_started_ms = 0U;
+            s_esp_connected_since_ms = 0U;
             s_status.connected = true;
             s_status.subscribed = false;
             s_status.runtime.running = true;
@@ -1111,6 +1120,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                 s_status.command_rejects++;
                 s_status.runtime.last_error = ESP_FAIL;
                 snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "mqtt_subscribe_failed");
+            } else {
+                s_esp_connected_since_ms = now_ms;
+                s_disconnect_modem_after_esp_connected = modem_a7670_mqtt_is_connected();
             }
             mqtt_mgr_set_health_locked();
             xSemaphoreGive(s_lock);
@@ -1118,6 +1130,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "disconnected from broker");
             s_esp_connect_started_ms = unified_tick_now_ms();
+            s_esp_connected_since_ms = 0U;
+            s_disconnect_modem_after_esp_connected = false;
             s_status.connected = false;
             s_status.subscribed = false;
             s_status.reconnect_count++;
@@ -1129,6 +1143,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         case MQTT_EVENT_ERROR:
             ESP_LOGW(TAG, "broker error");
             s_esp_connect_started_ms = unified_tick_now_ms();
+            s_esp_connected_since_ms = 0U;
+            s_disconnect_modem_after_esp_connected = false;
             s_status.connected = false;
             s_status.subscribed = false;
             s_status.publish_failures++;
@@ -1261,6 +1277,25 @@ static void mqtt_mgr_task(void *arg) {
                             }
                         }
                     }
+                    if (s_transport == MQTT_MGR_TRANSPORT_ESP &&
+                        s_status.connected &&
+                        !s_status.subscribed) {
+                        if (mqtt_mgr_subscribe_commands_locked() == ESP_OK) {
+                            s_esp_connected_since_ms = now_ms;
+                            s_disconnect_modem_after_esp_connected = modem_mqtt_connected;
+                            s_status.runtime.last_error = ESP_OK;
+                            s_status.runtime.last_error_text[0] = '\0';
+                        } else {
+                            s_status.command_rejects++;
+                            s_status.runtime.last_error = ESP_FAIL;
+                            snprintf(
+                                s_status.runtime.last_error_text,
+                                sizeof(s_status.runtime.last_error_text),
+                                "%s",
+                                "mqtt_subscribe_failed"
+                            );
+                        }
+                    }
                 } else if (!wait_for_wifi_primary &&
                            mqtt_mgr_modem_fallback_ready(&scratch->config, &scratch->modem)) {
                     uint32_t now_ms = unified_tick_now_ms();
@@ -1313,22 +1348,31 @@ static void mqtt_mgr_task(void *arg) {
                         }
                     }
                 } else {
-                    (void)mqtt_mgr_stop_transport_locked();
-                    s_status.runtime.last_error = ESP_ERR_INVALID_STATE;
-                    snprintf(
-                        s_status.runtime.last_error_text,
-                        sizeof(s_status.runtime.last_error_text),
-                        "%s",
-                        wait_for_wifi_primary
-                            ? "wifi_primary_connecting"
-                            : !scratch->modem.data_mode_enabled
-                            ? "mobile_data_disabled"
-                            : (scratch->modem.data_session_open && scratch->modem.data_ip_address[0] != '\0')
-                            ? "modem_mqtt_pending"
-                            : (scratch->modem.data_session_open && !scratch->modem.ip_bearer_ready)
-                                ? "modem_data_not_ready"
-                                : "wifi_not_ready"
-                    );
+                    if (wait_for_wifi_primary &&
+                        s_transport == MQTT_MGR_TRANSPORT_MODEM &&
+                        modem_mqtt_connected) {
+                        s_status.connected = true;
+                        s_status.runtime.running = true;
+                        s_status.runtime.last_error = ESP_OK;
+                        s_status.runtime.last_error_text[0] = '\0';
+                    } else {
+                        (void)mqtt_mgr_stop_transport_locked();
+                        s_status.runtime.last_error = ESP_ERR_INVALID_STATE;
+                        snprintf(
+                            s_status.runtime.last_error_text,
+                            sizeof(s_status.runtime.last_error_text),
+                            "%s",
+                            wait_for_wifi_primary
+                                ? "wifi_primary_connecting"
+                                : !scratch->modem.data_mode_enabled
+                                ? "mobile_data_disabled"
+                                : (scratch->modem.data_session_open && scratch->modem.data_ip_address[0] != '\0')
+                                ? "modem_mqtt_pending"
+                                : (scratch->modem.data_session_open && !scratch->modem.ip_bearer_ready)
+                                    ? "modem_data_not_ready"
+                                    : "wifi_not_ready"
+                        );
+                    }
                 }
                 if (s_transport == MQTT_MGR_TRANSPORT_MODEM && modem_mqtt_connected) {
                     s_status.connected = true;
@@ -1341,9 +1385,15 @@ static void mqtt_mgr_task(void *arg) {
             }
             if (s_disconnect_modem_after_esp_connected &&
                 s_transport == MQTT_MGR_TRANSPORT_ESP &&
-                s_status.connected) {
-                s_disconnect_modem_after_esp_connected = false;
-                disconnect_modem_after_esp_connected = true;
+                s_status.connected &&
+                s_status.subscribed) {
+                uint32_t now_ms = unified_tick_now_ms();
+                if (s_esp_connected_since_ms == 0U) {
+                    s_esp_connected_since_ms = now_ms;
+                } else if ((now_ms - s_esp_connected_since_ms) >= MQTT_MGR_WIFI_PROMOTION_HOLD_MS) {
+                    s_disconnect_modem_after_esp_connected = false;
+                    disconnect_modem_after_esp_connected = true;
+                }
             }
             loop_transport = s_transport;
             loop_connected = s_status.connected;
@@ -1409,7 +1459,7 @@ static void mqtt_mgr_task(void *arg) {
                 if (!s_modem_connection_seen) {
                     s_modem_connection_seen = true;
                 }
-                if (s_transport == MQTT_MGR_TRANSPORT_ESP && s_status.connected) {
+                if (s_transport == MQTT_MGR_TRANSPORT_ESP && s_status.connected && s_status.subscribed) {
                     process_modem_messages = false;
                 } else {
                     resubscribe_modem = s_last_modem_subscribe_ms == 0U ||
@@ -1627,16 +1677,33 @@ esp_err_t mqtt_mgr_publish_sms_incoming(const unified_sms_payload_t *payload) {
     mqtt_mgr_copy_json_string(scratch->from, sizeof(scratch->from), payload->from);
     mqtt_mgr_copy_json_string(scratch->text, sizeof(scratch->text), payload->text);
     mqtt_mgr_copy_json_string(scratch->detail, sizeof(scratch->detail), payload->detail);
-    snprintf(
-        scratch->json,
-        sizeof(scratch->json),
-        "{\"type\":\"sms_incoming\",\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp\":%" PRIu32 "}",
-        scratch->from,
-        scratch->text,
-        scratch->detail,
-        (unsigned)payload->sim_slot,
-        payload->timestamp_ms
-    );
+    mqtt_mgr_copy_json_string(scratch->multipart_ref, sizeof(scratch->multipart_ref), payload->multipart_ref);
+    if (payload->multipart_part_count > 1U || scratch->multipart_ref[0] != '\0') {
+        snprintf(
+            scratch->json,
+            sizeof(scratch->json),
+            "{\"type\":\"sms_incoming\",\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp\":%" PRIu32 ",\"multipart_ref\":\"%s\",\"multipart_part_index\":%u,\"multipart_part_count\":%u}",
+            scratch->from,
+            scratch->text,
+            scratch->detail,
+            (unsigned)payload->sim_slot,
+            payload->timestamp_ms,
+            scratch->multipart_ref,
+            (unsigned)payload->multipart_part_index,
+            (unsigned)payload->multipart_part_count
+        );
+    } else {
+        snprintf(
+            scratch->json,
+            sizeof(scratch->json),
+            "{\"type\":\"sms_incoming\",\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp\":%" PRIu32 "}",
+            scratch->from,
+            scratch->text,
+            scratch->detail,
+            (unsigned)payload->sim_slot,
+            payload->timestamp_ms
+        );
+    }
     err = mqtt_mgr_publish_text("sms/incoming", scratch->json);
     heap_caps_free(scratch);
     return err;

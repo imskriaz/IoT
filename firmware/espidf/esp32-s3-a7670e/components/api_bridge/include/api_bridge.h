@@ -58,6 +58,7 @@ typedef struct {
     char password[64];
     char auth[16];
     char url[CONFIG_UNIFIED_API_BRIDGE_URL_LEN];
+    char raw_line[UNIFIED_TEXT_LONG_LEN];
     bool enabled_present;
     bool enabled;
     bool failover_present;

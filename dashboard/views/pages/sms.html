@@ -200,11 +200,12 @@
                         <div class="sms-conversation-state-detail">Or add a recipient below to start a new SMS.</div>
                     </div>
                 </div>
+                <div class="sms-chat-system-bottom-notice d-none" id="smsChatSystemBottomNotice">You can't reply to this thread.</div>
             </div>
-            <div class="card-footer bg-white sms-chat-footer">
+            <div class="card-footer bg-white sms-chat-footer" id="smsChatFooter">
                 <input type="hidden" id="smsChatTo">
                 <div class="sms-chat-compose-shell">
-                    <div class="d-flex align-items-center gap-2 sms-recipient-row">
+                    <div class="d-flex align-items-center gap-2 sms-recipient-row" id="smsChatRecipientRow">
                         <div class="sms-chat-recipient-strip flex-grow-1">
                             <span class="sms-chat-recipient-label">Recipients</span>
                             <div class="sms-chat-recipient-flow">
@@ -225,7 +226,7 @@
                             </button>
                         </div>
                     </div>
-                    <div class="sms-chat-summary-row">
+                    <div class="sms-chat-summary-row" id="smsChatSummaryRow">
                         <div class="small text-muted text-truncate" id="smsChatRecipientMeta"></div>
                         <small class="text-muted sms-chat-send-mode-meta text-end" id="smsChatSendModeMeta">0 chars | 1 part</small>
                     </div>
@@ -286,7 +287,7 @@
                             </div>
                         </div>
                     </form>
-                    <div class="sms-chat-help">
+                    <div class="sms-chat-help" id="smsChatHelp">
                         Instant uses MQTT runtime. Scheduled SMS stays dashboard-owned until dispatch.
                         <span data-sms-http-required="true" data-sms-http-display="inline">Attachments preview only until MMS transport is enabled.</span>
                     </div>
@@ -1129,21 +1130,50 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>
             <div class="modal-body">
                 <form id="composeSmsForm">
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">To</label>
-                        <div class="d-flex gap-2">
-                            <input type="tel" class="form-control" id="modalTo" name="to" data-intl-tel-input
-                                   placeholder="Choose country or type number" required>
-                            <button class="btn btn-outline-primary flex-shrink-0" type="button" id="pickContactBtn" onclick="openContactsModal('modalTo')">
-                                <i class="bi bi-person-lines-fill"></i> Contacts
+                    <ul class="nav nav-tabs sms-compose-tabs mb-3" id="composeSmsTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="composeSingleTab" data-bs-toggle="tab" data-bs-target="#composeSinglePane" type="button" role="tab" aria-controls="composeSinglePane" aria-selected="true">
+                                <i class="bi bi-person me-1"></i>Single
                             </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="composeBulkTab" data-bs-toggle="tab" data-bs-target="#composeBulkPane" type="button" role="tab" aria-controls="composeBulkPane" aria-selected="false">
+                                <i class="bi bi-people me-1"></i>Bulk
+                            </button>
+                        </li>
+                    </ul>
+                    <div class="tab-content mb-3" id="composeSmsTabContent">
+                        <div class="tab-pane fade show active" id="composeSinglePane" role="tabpanel" aria-labelledby="composeSingleTab" tabindex="0">
+                            <label class="form-label fw-bold">To</label>
+                            <div class="d-flex gap-2">
+                                <input type="tel" class="form-control" id="modalTo" name="to" data-intl-tel-input
+                                       placeholder="Choose country or type number">
+                                <button class="btn btn-outline-primary flex-shrink-0" type="button" id="pickContactBtn" onclick="openContactsModal('modalTo')">
+                                    <i class="bi bi-person-lines-fill"></i> Contacts
+                                </button>
+                            </div>
+                            <div class="sms-recipient-pills d-none mt-2" id="modalRecipientPills" aria-live="polite"></div>
+                            <div class="form-text">
+                                <i class="bi bi-info-circle me-1"></i>
+                                One phone number or short service code for a normal SMS thread.
+                            </div>
+                            <div class="small text-muted mt-1" id="modalRecipientMeta">1 recipient will use the normal SMS thread.</div>
                         </div>
-                        <div class="sms-recipient-pills d-none mt-2" id="modalRecipientPills" aria-live="polite"></div>
-                        <div class="form-text">
-                            <i class="bi bi-info-circle me-1"></i>
-                            Paste one or many numbers. Separate entries with comma, semicolon, or new line. Short service codes are also allowed.
+                        <div class="tab-pane fade" id="composeBulkPane" role="tabpanel" aria-labelledby="composeBulkTab" tabindex="0">
+                            <div class="border rounded p-3 bg-light-subtle">
+                                <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap mb-2">
+                                    <div>
+                                        <label class="form-label fw-bold mb-1">Bulk Excel Upload</label>
+                                        <div class="form-text mt-0">Upload an Excel CSV/TSV with a phone column. The message box below is sent to every uploaded number.</div>
+                                    </div>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" id="composeBulkTemplateBtn">
+                                        <i class="bi bi-download me-1"></i>Template
+                                    </button>
+                                </div>
+                                <input type="file" class="form-control form-control-sm" id="composeBulkFile" accept=".csv,.tsv,.txt,text/csv,text/plain">
+                                <div class="small text-muted mt-2" id="composeBulkMeta">No bulk file selected.</div>
+                            </div>
                         </div>
-                        <div class="small text-muted mt-1" id="modalRecipientMeta">1 recipient will use the normal SMS thread.</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label fw-bold">Message</label>
@@ -1443,6 +1473,8 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .sms-chat-body {
+    display: flex;
+    flex-direction: column;
     padding: 0.5rem !important;
     background:
         radial-gradient(circle at 12px 12px, rgba(13, 110, 253, 0.07) 2px, transparent 2px),
@@ -1451,6 +1483,7 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .sms-chat-thread {
+    flex: 1 1 auto;
     min-height: 42vh;
     max-height: 54vh;
     overflow-y: auto;
@@ -1499,6 +1532,18 @@ document.addEventListener('DOMContentLoaded', function() {
 .sms-recipient-row {
     min-height: 2rem;
     position: relative;
+}
+
+.sms-chat-system-bottom-notice {
+    align-self: center;
+    margin: 0.45rem 0 0.15rem;
+    padding: 0.34rem 0.72rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.82);
+    color: #667085;
+    font-size: 0.78rem;
+    font-weight: 600;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
 }
 
 .sms-chat-recipient-strip {

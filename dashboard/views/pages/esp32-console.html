@@ -1,135 +1,172 @@
 <div class="container-fluid px-0 esp32-console-page">
-    <div class="d-flex flex-column flex-xl-row justify-content-between align-items-start align-items-xl-center mb-3 gap-2">
+    <div class="d-flex flex-column flex-xl-row justify-content-between align-items-start align-items-xl-center mb-2 gap-2">
         <div>
-            <h2 class="mb-0 fs-4">
-                <i class="bi bi-terminal me-2 text-primary"></i>ESP32 MQTT Console
+            <h2 class="mb-0 fs-5">
+                <i class="bi bi-terminal me-2 text-primary"></i>Console
             </h2>
-            <small class="text-muted">Serial-monitor style command testing through the live MQTT runtime path</small>
+            <small class="text-muted">Unified MQTT, Serial, tests, commands, and events</small>
         </div>
         <div class="d-flex flex-wrap gap-2 align-items-center">
-            <span class="badge text-bg-light border" id="esp32ConsoleDeviceBadge">Device: --</span>
-            <span class="badge text-bg-secondary" id="esp32ConsoleMqttBadge">MQTT: checking</span>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="esp32ConsoleClearBtn" title="Clear console">
+            <span class="badge text-bg-light border" id="esp32ConsoleDeviceBadge">Device: <%= deviceId || '--' %></span>
+            <span class="badge <%= initialMqttConnected ? 'text-bg-success' : 'text-bg-secondary' %>" id="esp32ConsoleMqttBadge">MQTT: <%= initialMqttConnected ? 'connected' : 'checking' %></span>
+            <span class="badge text-bg-secondary" id="esp32ConsoleSerialBadge">Serial: idle</span>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="esp32ConsoleClearBtn" title="Clear events">
                 <i class="bi bi-eraser"></i>
             </button>
-            <button type="button" class="btn btn-sm btn-outline-primary" id="esp32ConsoleExportBtn" title="Export console log">
+            <button type="button" class="btn btn-sm btn-outline-primary" id="esp32ConsoleExportBtn" title="Export events">
                 <i class="bi bi-download"></i>
             </button>
         </div>
     </div>
 
-    <div class="row g-3">
-        <div class="col-12 col-xl-8">
-            <section class="console-shell mb-3">
+    <div class="row g-2">
+        <div class="col-12">
+            <section class="console-panel mb-2">
                 <div class="console-toolbar">
                     <div class="d-flex align-items-center gap-2">
                         <span class="console-dot bg-danger"></span>
                         <span class="console-dot bg-warning"></span>
                         <span class="console-dot bg-success"></span>
-                        <span class="small text-white-50 ms-1">live mqtt session</span>
+                        <span class="small text-white-50 ms-1" id="esp32ConsoleSessionLabel">console</span>
                     </div>
                     <div class="small text-white-50" id="esp32ConsoleLastRun">idle</div>
                 </div>
-                <div class="console-output" id="esp32ConsoleOutput" aria-live="polite">
-                    <div class="console-line text-success">
-                        <span class="text-secondary">[system]</span> Console ready. Commands publish to device/&lt;id&gt;/command/&lt;command&gt; over MQTT.
-                    </div>
+                <div class="console-events" id="esp32ConsoleOutput" aria-live="polite">
+                    <button type="button" class="console-event text-success" data-entry-index="0">
+                        <span class="event-time">system</span>
+                        <span class="event-source">ready</span>
+                        <span class="event-message">Pick MQTT, Serial, or System, then send a command or chain.</span>
+                    </button>
                 </div>
             </section>
 
             <section class="command-panel">
+                <ul class="nav nav-tabs console-tabs mb-2" role="tablist" aria-label="Console transport tabs">
+                    <li class="nav-item" role="presentation">
+                        <button type="button" class="nav-link active" data-console-tab="mqtt" role="tab" aria-selected="true">
+                            <i class="bi bi-broadcast-pin me-1"></i>MQTT
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button type="button" class="nav-link" data-console-tab="serial" role="tab" aria-selected="false">
+                            <i class="bi bi-usb-symbol me-1"></i>Serial
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button type="button" class="nav-link" data-console-tab="system" role="tab" aria-selected="false">
+                            <i class="bi bi-cpu me-1"></i>System
+                        </button>
+                    </li>
+                </ul>
+                <div class="tab-context small text-muted mb-2" id="esp32ConsoleTabHint"></div>
                 <div class="row g-2 align-items-end">
-                    <div class="col-12 col-md-5">
-                        <label class="form-label small mb-1" for="esp32CommandInput">Command</label>
-                        <input type="text" class="form-control form-control-sm" id="esp32CommandInput" value="get-status" autocomplete="off" spellcheck="false">
-                    </div>
-                    <div class="col-6 col-md-2">
-                        <label class="form-label small mb-1" for="esp32TimeoutInput">Timeout ms</label>
-                        <input type="number" class="form-control form-control-sm" id="esp32TimeoutInput" value="30000" min="1000" max="120000" step="1000">
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <label class="form-label small mb-1" for="esp32WaitSelect">Response</label>
-                        <select class="form-select form-select-sm" id="esp32WaitSelect">
-                            <option value="true" selected>Wait for response</option>
-                            <option value="false">Publish only</option>
+                    <div class="col-6 col-lg-3">
+                        <label class="form-label small mb-1" for="esp32CommandModeSelect">Mode</label>
+                        <select class="form-select form-select-sm" id="esp32CommandModeSelect">
+                            <option value="single" selected>Single</option>
+                            <option value="chain">Chain</option>
                         </select>
                     </div>
-                    <div class="col-12 col-md-2 d-grid">
-                        <button type="button" class="btn btn-primary btn-sm" id="esp32SendCommandBtn">
-                            <i class="bi bi-send"></i> Send
-                        </button>
+
+                    <div class="col-12 col-lg-9 single-command-row">
+                        <label class="form-label small mb-1" for="esp32CommandPresetSelect">Command</label>
+                        <select class="form-select form-select-sm" id="esp32CommandPresetSelect"></select>
                     </div>
                     <div class="col-12">
+                        <div class="command-description small" id="esp32OptionDetails"></div>
+                    </div>
+
+                    <div class="col-6 col-lg-2 mqtt-control">
+                        <label class="form-label small mb-1" for="esp32TimeoutInput">Timeout</label>
+                        <input type="number" class="form-control form-control-sm" id="esp32TimeoutInput" value="30000" min="1000" max="120000" step="1000">
+                    </div>
+                    <div class="col-6 col-lg-2 mqtt-control">
+                        <label class="form-label small mb-1" for="esp32WaitSelect">Response</label>
+                        <select class="form-select form-select-sm" id="esp32WaitSelect">
+                            <option value="true" selected>Wait</option>
+                            <option value="false">Publish</option>
+                        </select>
+                    </div>
+                    <div class="col-6 col-lg-2 serial-control">
+                        <label class="form-label small mb-1" for="esp32SerialBaudSelect">Baud</label>
+                        <select class="form-select form-select-sm" id="esp32SerialBaudSelect">
+                            <option value="115200" selected>115200</option>
+                            <option value="9600">9600</option>
+                            <option value="57600">57600</option>
+                            <option value="921600">921600</option>
+                        </select>
+                    </div>
+                    <div class="col-6 col-lg-2 serial-control">
+                        <label class="form-label small mb-1" for="esp32SerialLineEndingSelect">Ending</label>
+                        <select class="form-select form-select-sm" id="esp32SerialLineEndingSelect">
+                            <option value="crlf" selected>CRLF</option>
+                            <option value="lf">LF</option>
+                            <option value="cr">CR</option>
+                            <option value="none">None</option>
+                        </select>
+                    </div>
+                    <div class="col-12 col-lg-2 d-grid serial-control">
+                        <button type="button" class="btn btn-outline-primary btn-sm" id="esp32SerialConnectBtn">
+                            <i class="bi bi-usb-symbol"></i> Connect
+                        </button>
+                    </div>
+
+                    <div class="col-12 chain-command-row">
+                        <label class="form-label small mb-1" for="esp32ChainInput">Command chain</label>
+                        <textarea class="form-control console-payload compact-chain" id="esp32ChainInput" rows="4" spellcheck="false">AT
+AT+CPIN?
+AT+CSQ</textarea>
+                    </div>
+
+                    <div class="col-12 mqtt-control" id="esp32PayloadPanel">
                         <div class="d-flex justify-content-between align-items-center mb-1">
                             <label class="form-label small mb-0" for="esp32PayloadInput">Payload JSON</label>
                             <button type="button" class="btn btn-sm btn-link py-0 px-1" id="esp32FormatPayloadBtn">Format</button>
                         </div>
-                        <textarea class="form-control console-payload" id="esp32PayloadInput" rows="7" spellcheck="false">{}</textarea>
+                        <textarea class="form-control console-payload" id="esp32PayloadInput" rows="4" spellcheck="false">{}</textarea>
+                    </div>
+
+                    <div class="col-12 d-grid">
+                        <button type="button" class="btn btn-primary btn-sm" id="esp32SendCommandBtn">
+                            <i class="bi bi-send"></i> Send
+                        </button>
                     </div>
                 </div>
-            </section>
-
-            <section class="mt-3">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h3 class="fs-6 mb-0">Command Presets</h3>
-                    <span class="small text-muted">Live only, no durable queue</span>
-                </div>
-                <div class="preset-grid" id="esp32PresetGrid"></div>
-            </section>
-        </div>
-
-        <div class="col-12 col-xl-4">
-            <section class="docs-panel mb-3">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h3 class="fs-6 mb-0">Runtime Contract</h3>
-                    <span class="badge text-bg-primary">MQTT</span>
-                </div>
-                <dl class="small mb-0 docs-list">
-                    <dt>Topic</dt>
-                    <dd><code>device/&lt;deviceId&gt;/command/&lt;command&gt;</code></dd>
-                    <dt>Payload</dt>
-                    <dd>JSON object plus firmware fields such as <code>command</code>, <code>action_id</code>, <code>timeout</code>, and <code>source</code>.</dd>
-                    <dt>Rule</dt>
-                    <dd>Use this console to prove the MQTT runtime command before keeping new firmware behavior.</dd>
-                    <dt>Raw AT</dt>
-                    <dd>Raw modem AT passthrough requires explicit firmware support, for example a future <code>modem-at</code> action.</dd>
-                </dl>
-            </section>
-
-            <section class="docs-panel mb-3">
-                <h3 class="fs-6 mb-2">Vendor Quick Notes</h3>
-                <div id="esp32VendorNotes"></div>
-            </section>
-
-            <section class="docs-panel">
-                <h3 class="fs-6 mb-2">Workflow Gate</h3>
-                <ul class="small mb-0 ps-3">
-                    <li>Check vendor docs before assuming modem, board, or AT behavior.</li>
-                    <li>Validate a new AT sequence from terminal or serial first.</li>
-                    <li>Expose it in firmware only after response, timing, and failure behavior are clear.</li>
-                    <li>Then test the firmware action here over MQTT.</li>
-                </ul>
             </section>
         </div>
     </div>
 </div>
 
+<div class="modal fade" id="esp32EventDetailModal" tabindex="-1" aria-labelledby="esp32EventDetailTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header py-2">
+                <h5 class="modal-title fs-6" id="esp32EventDetailTitle">Event details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <dl class="row small mb-2" id="esp32EventDetailSummary"></dl>
+                <pre class="event-detail-json mb-0" id="esp32EventDetailJson"></pre>
+            </div>
+        </div>
+    </div>
+</div>
+
 <style>
-.esp32-console-page .console-shell,
-.esp32-console-page .command-panel,
-.esp32-console-page .docs-panel {
+.esp32-console-page .console-panel,
+.esp32-console-page .command-panel {
     border: 1px solid rgba(0, 0, 0, 0.08);
     border-radius: 8px;
     background: var(--bs-body-bg);
 }
 
-.esp32-console-page .console-shell {
+.esp32-console-page .console-panel {
     overflow: hidden;
 }
 
 .esp32-console-page .console-toolbar {
-    min-height: 34px;
-    padding: 0.45rem 0.65rem;
+    min-height: 30px;
+    padding: 0.35rem 0.6rem;
     background: #20242a;
     display: flex;
     align-items: center;
@@ -137,100 +174,137 @@
 }
 
 .esp32-console-page .console-dot {
-    width: 0.62rem;
-    height: 0.62rem;
+    width: 0.56rem;
+    height: 0.56rem;
     border-radius: 50%;
     display: inline-block;
 }
 
-.esp32-console-page .console-output {
-    min-height: 360px;
-    max-height: 52vh;
+.esp32-console-page .console-events {
+    min-height: 260px;
+    max-height: 42vh;
     overflow: auto;
-    background: #111418;
+    background: #101418;
     color: #e6edf3;
     font-family: Consolas, "Liberation Mono", monospace;
-    font-size: 0.82rem;
-    line-height: 1.45;
+    font-size: 0.78rem;
+    line-height: 1.3;
+    padding: 0.35rem;
+}
+
+.esp32-console-page .console-event {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 72px 82px minmax(0, 1fr);
+    gap: 0.45rem;
+    align-items: center;
+    border: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    padding: 0.25rem 0.2rem;
+}
+
+.esp32-console-page .console-event:hover,
+.esp32-console-page .console-event:focus {
+    background: rgba(255, 255, 255, 0.06);
+    outline: none;
+}
+
+.esp32-console-page .event-time,
+.esp32-console-page .event-source {
+    color: #9aa7b6;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.esp32-console-page .event-message {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.esp32-console-page .command-panel {
     padding: 0.65rem;
 }
 
-.esp32-console-page .console-line {
-    white-space: pre-wrap;
-    word-break: break-word;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-    padding: 0.18rem 0;
+.esp32-console-page .console-tabs .nav-link {
+    padding: 0.36rem 0.7rem;
+    font-size: 0.86rem;
 }
 
-.esp32-console-page .command-panel,
-.esp32-console-page .docs-panel {
-    padding: 0.85rem;
+.esp32-console-page .tab-context {
+    min-height: 1.2rem;
 }
 
 .esp32-console-page .console-payload {
     font-family: Consolas, "Liberation Mono", monospace;
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     resize: vertical;
 }
 
-.esp32-console-page .preset-grid {
+.esp32-console-page .compact-chain {
+    min-height: 92px;
+}
+
+.esp32-console-page .command-description {
+    min-height: 42px;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 6px;
+    padding: 0.45rem 0.55rem;
+    background: rgba(13, 110, 253, 0.04);
+}
+
+.esp32-console-page .command-description dl {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-    gap: 0.5rem;
+    grid-template-columns: minmax(80px, auto) minmax(0, 1fr);
+    column-gap: 0.75rem;
+    row-gap: 0.18rem;
 }
 
-.esp32-console-page .preset-btn {
-    min-height: 58px;
-    text-align: left;
-    border-radius: 8px;
+.esp32-console-page .command-description dt,
+.esp32-console-page .command-description dd {
+    margin-bottom: 0;
 }
 
-.esp32-console-page .preset-btn .small {
-    display: block;
-    line-height: 1.25;
+.esp32-console-page .command-description dd {
+    min-width: 0;
 }
 
-.esp32-console-page .docs-list dd {
-    margin-bottom: 0.65rem;
+.esp32-console-page .command-description code {
+    word-break: break-word;
 }
 
-.esp32-console-page .vendor-note {
-    border-top: 1px solid rgba(0, 0, 0, 0.08);
-    padding-top: 0.65rem;
-    margin-top: 0.65rem;
+.event-detail-json {
+    max-height: 55vh;
+    overflow: auto;
+    background: #101418;
+    color: #e6edf3;
+    border-radius: 6px;
+    padding: 0.75rem;
+    font-size: 0.82rem;
 }
 
-.esp32-console-page .vendor-note:first-child {
-    border-top: 0;
-    padding-top: 0;
-    margin-top: 0;
-}
-
-.esp32-console-page .command-chip {
-    display: inline-block;
-    margin: 0.12rem 0.15rem 0.12rem 0;
-    padding: 0.12rem 0.32rem;
-    border-radius: 5px;
-    background: rgba(13, 110, 253, 0.08);
-    color: var(--bs-body-color);
-    font-family: Consolas, "Liberation Mono", monospace;
-    font-size: 0.76rem;
-}
-
-[data-bs-theme="dark"] .esp32-console-page .console-shell,
-[data-bs-theme="dark"] .esp32-console-page .command-panel,
-[data-bs-theme="dark"] .esp32-console-page .docs-panel {
+[data-bs-theme="dark"] .esp32-console-page .console-panel,
+[data-bs-theme="dark"] .esp32-console-page .command-panel {
     border-color: rgba(255, 255, 255, 0.12);
 }
 
-[data-bs-theme="dark"] .esp32-console-page .vendor-note {
-    border-top-color: rgba(255, 255, 255, 0.12);
+[data-bs-theme="dark"] .esp32-console-page .command-description {
+    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(13, 110, 253, 0.08);
 }
 
 @media (max-width: 767.98px) {
-    .esp32-console-page .console-output {
-        min-height: 260px;
-        max-height: 42vh;
+    .esp32-console-page .console-events {
+        min-height: 220px;
+        max-height: 38vh;
+    }
+
+    .esp32-console-page .console-event {
+        grid-template-columns: 64px 70px minmax(0, 1fr);
     }
 }
 </style>

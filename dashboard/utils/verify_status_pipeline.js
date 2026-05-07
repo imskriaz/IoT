@@ -83,7 +83,7 @@ function printHelp() {
             'Dashboard status pipeline verifier',
             '',
             'Usage:',
-            '  node utils/verify_status_pipeline.js --device ws-a7670e-476178',
+            '  node utils/verify_status_pipeline.js --device esp-a7670e-476178',
             '',
             'Options:',
             '  --base-url     Dashboard base URL (default: http://127.0.0.1:3001)',

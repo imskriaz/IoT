@@ -14,6 +14,7 @@ const { DEFAULT_DEVICE_ID } = require('../config/device');
 const { resolveDeviceId } = require('../utils/deviceResolver');
 const { decodeSmsRecord } = require('../utils/smsUnicode');
 const { validateSmsMessageSize } = require('../utils/smsLimits');
+const { mergeMultipartThreadMessages } = require('../utils/smsMultipart');
 const smsCache = require('../services/smsCache');
 const { createRateLimiter } = require('../utils/rateLimiter');
 const { queueSmsForDelivery } = require('../services/smsQueue');
@@ -85,6 +86,50 @@ function normalizeSmsRecipients(value) {
     });
 
     return { recipients, invalid };
+}
+
+function getBulkSmsRecipientValue(row) {
+    if (!row || typeof row !== 'object') return '';
+    return row.to ?? row.sender ?? row.phone ?? row.number ?? row.recipient ?? row.mobile ?? '';
+}
+
+function normalizeBulkSmsQueueRows(value) {
+    if (!Array.isArray(value) || !value.length) {
+        return { queueRows: [], invalid: [] };
+    }
+    if (value.length > 500) {
+        return { queueRows: [], invalid: ['Cannot queue more than 500 SMS at once'] };
+    }
+
+    const queueRows = [];
+    const invalid = [];
+    value.forEach((row, index) => {
+        const rowNumber = Number(row?.rowNumber || 0) || index + 1;
+        const rawRecipient = getBulkSmsRecipientValue(row);
+        const message = String(row?.message || '').trim();
+        const normalized = normalizeSmsRecipients(rawRecipient);
+        if (!normalized.recipients.length) {
+            invalid.push(normalized.invalid.length
+                ? `Row ${rowNumber} has invalid phone number: ${normalized.invalid[0]}`
+                : `Row ${rowNumber} has no phone number`);
+            return;
+        }
+        if (normalized.invalid.length) {
+            invalid.push(`Row ${rowNumber} has invalid phone number: ${normalized.invalid[0]}`);
+            return;
+        }
+        try {
+            validateSmsMessageSize(message);
+        } catch (error) {
+            invalid.push(`Row ${rowNumber}: ${error.message || 'Invalid message'}`);
+            return;
+        }
+        normalized.recipients.forEach((recipient) => {
+            queueRows.push({ recipient, message, rowNumber });
+        });
+    });
+
+    return { queueRows, invalid };
 }
 
 function parseDelimitedLine(line) {
@@ -400,6 +445,10 @@ router.get('/thread', async (req, res) => {
                        s.error,
                        s.external_id,
                        s.sim_slot,
+                       s.multipart_ref,
+                       s.multipart_part_index,
+                       s.multipart_part_count,
+                       s.multipart_group_key,
                        u.username AS sent_by
                 FROM sms s
                 LEFT JOIN users u ON s.user_id = u.id
@@ -438,6 +487,10 @@ router.get('/thread', async (req, res) => {
                        s.error,
                        s.external_id,
                        s.sim_slot,
+                       s.multipart_ref,
+                       s.multipart_part_index,
+                       s.multipart_part_count,
+                       s.multipart_group_key,
                        u.username AS sent_by
                 FROM sms s
                 LEFT JOIN users u ON s.user_id = u.id
@@ -455,7 +508,7 @@ router.get('/thread', async (req, res) => {
             rows = await loadRowsByNumber(number);
         }
 
-        const messages = rows.map(decodeSmsRecord).reverse();
+        const messages = mergeMultipartThreadMessages(rows.map(decodeSmsRecord).reverse());
         const resolvedNumber = number
             || String(conversation?.primary_number || messages[messages.length - 1]?.to_number || messages[messages.length - 1]?.from_number || '').trim();
         const resolvedTitle = String(conversation?.title || messages[messages.length - 1]?.display_from || resolvedNumber || '').trim();
@@ -730,22 +783,32 @@ router.post('/sync', async (req, res) => {
             return res.status(503).json({ success: false, message: 'Device command service unavailable' });
         }
 
-        await global.mqttService.publishCommand(
+        emitDeviceEvent(deviceId, 'sms:sync-started', {
+            deviceId,
+            total: 0,
+            requested: true
+        });
+
+        const response = await global.mqttService.publishCommand(
             deviceId,
             'sync-sms',
             {
                 reason: 'dashboard_pull',
                 requestedAt: new Date().toISOString()
             },
-            false,
+            true,
             90000,
             { source: 'dashboard' }
         );
 
-        emitDeviceEvent(deviceId, 'sms:sync-started', {
+        const synced = Number(response?.payload?.synced ?? response?.payload?.count ?? 0);
+        emitDeviceEvent(deviceId, 'sms:sync-completed', {
             deviceId,
-            total: 0,
-            requested: true
+            device_id: deviceId,
+            total: Number(response?.payload?.count ?? synced ?? 0) || 0,
+            synced: Number.isFinite(synced) ? synced : 0,
+            requested: true,
+            timestamp: new Date().toISOString()
         });
         res.json({ success: true, message: 'Message pull requested' });
     } catch (error) {
@@ -780,7 +843,10 @@ router.post('/sync', async (req, res) => {
  *             schema: { $ref: '#/components/schemas/Error' }
  */
 router.post('/send', smsRateLimit, [
-    body('message').custom(validateSmsMessageSize),
+    body('message').custom((value, { req }) => {
+        if (Array.isArray(req.body?.bulkRows) && req.body.bulkRows.length) return true;
+        return validateSmsMessageSize(value);
+    }),
     body('simSlot').optional({ values: 'falsy' }).isInt({ min: 0, max: 7 }).withMessage('simSlot must be a valid SIM slot')
 ], async (req, res) => {
     try {
@@ -798,16 +864,29 @@ router.post('/send', smsRateLimit, [
         const deviceId = requestedDeviceId || resolveDeviceId(req, DEFAULT_DEVICE_ID);
         const db = req.app.locals.db;
         const actorId = req.user?.id || req.session?.user?.id || null;
-        const { recipients, invalid } = normalizeSmsRecipients(req.body.recipients ?? req.body.to);
+        const bulkQueue = normalizeBulkSmsQueueRows(req.body.bulkRows);
+        const isBulkQueue = bulkQueue.queueRows.length > 0 || (Array.isArray(req.body.bulkRows) && req.body.bulkRows.length > 0);
+        const normalizedSingle = isBulkQueue
+            ? { recipients: [], invalid: [] }
+            : normalizeSmsRecipients(req.body.recipients ?? req.body.to);
+        const queueRows = isBulkQueue
+            ? bulkQueue.queueRows
+            : normalizedSingle.recipients.map((recipient) => ({ recipient, message, rowNumber: null }));
+        const invalid = isBulkQueue ? bulkQueue.invalid : normalizedSingle.invalid;
 
         if (!db) {
             throw new Error('Database not available');
         }
-        if (!recipients.length) {
-            return res.status(400).json({ success: false, message: invalid.length ? `Invalid phone number format: ${invalid[0]}` : 'Phone number is required' });
+        if (!queueRows.length) {
+            return res.status(400).json({
+                success: false,
+                message: invalid.length
+                    ? (isBulkQueue ? invalid[0] : `Invalid phone number format: ${invalid[0]}`)
+                    : 'Phone number is required'
+            });
         }
         if (invalid.length) {
-            return res.status(400).json({ success: false, message: `Invalid phone number format: ${invalid[0]}` });
+            return res.status(400).json({ success: false, message: isBulkQueue ? invalid[0] : `Invalid phone number format: ${invalid[0]}` });
         }
         if (!deviceId) {
             return res.status(400).json({ success: false, message: 'No active device selected' });
@@ -817,16 +896,16 @@ router.post('/send', smsRateLimit, [
             return res.status(400).json({ success: false, message: 'Device not registered' });
         }
 
-        const batchId = recipients.length > 1 ? `sms_batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : null;
+        const batchId = queueRows.length > 1 ? `sms_batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : null;
         const results = [];
-        for (const recipient of recipients) {
-            logger.info(`Queueing SMS to ${recipient}`);
+        for (const row of queueRows) {
+            logger.info(`Queueing SMS to ${row.recipient}`);
             const queued = await queueSmsForDelivery({
                 db,
                 mqttService: global.mqttService,
                 deviceId,
-                to: recipient,
-                message,
+                to: row.recipient,
+                message: row.message,
                 simSlot: simScope.simSlot,
                 userId: actorId,
                 source: 'dashboard',
@@ -855,9 +934,10 @@ router.post('/send', smsRateLimit, [
             success: true,
             queued: true,
             multiRecipient: true,
+            bulkQueue: isBulkQueue,
             batchId,
             count: results.length,
-            recipients,
+            recipients: queueRows.map((row) => row.recipient),
             results,
             message: `${results.length} SMS queued for delivery`
         });

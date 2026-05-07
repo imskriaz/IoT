@@ -5,6 +5,7 @@ const logger = require('../utils/logger');
 const { DEFAULT_DEVICE_ID } = require('../config/device');
 const { getDeviceCapabilities, isCapabilityAvailable } = require('../utils/deviceCapabilities');
 const { resolveSmsCommand } = require('../utils/smsLimits');
+const { appendConsoleEvent } = require('../services/consoleEventLog');
 const fs = require('fs');
 const path = require('path');
 
@@ -1880,6 +1881,22 @@ function appendTestTrace(deviceId, runId, level, message, data = null) {
         runId,
         ...trace
     });
+
+    try {
+        appendConsoleEvent({
+            timestamp,
+            deviceId,
+            source: 'system-test',
+            level,
+            message,
+            data: {
+                runId,
+                ...((data && typeof data === 'object' && !Array.isArray(data)) ? data : { value: data })
+            }
+        });
+    } catch (error) {
+        logger.warn('Could not append test trace to console log:', error.message);
+    }
 }
 
 async function publishTestCommand(

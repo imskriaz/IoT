@@ -455,23 +455,13 @@ static esp_err_t wifi_mgr_prepare_connect_config(char *ssid, size_t ssid_size) {
 
     memset(scratch, 0, sizeof(*scratch));
 
-    config_mgr_snapshot(&scratch->config);
-    if (scratch->config.wifi_ssid[0] == '\0') {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    unified_copy_cstr(ssid, ssid_size, scratch->config.wifi_ssid);
-    err = esp_wifi_get_mode(&current_mode);
-    if (err != ESP_OK) {
-        return err;
-    }
-    if (current_mode != WIFI_MODE_STA && current_mode != WIFI_MODE_APSTA) {
-        ESP_LOGW(WIFI_MGR_TAG, "connect preparation skipped because wifi mode is %s", wifi_mgr_wifi_mode_name(current_mode));
-        return ESP_ERR_INVALID_STATE;
-    }
-
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
+    }
+    (void)wifi_mgr_refresh_config_locked(&scratch->config);
+    if (scratch->config.wifi_ssid[0] == '\0') {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_STATE;
     }
     if (s_scan_in_progress) {
         xSemaphoreGive(s_lock);
@@ -480,6 +470,17 @@ static esp_err_t wifi_mgr_prepare_connect_config(char *ssid, size_t ssid_size) {
     s_scan_in_progress = true;
     claimed_scan_slot = true;
     xSemaphoreGive(s_lock);
+
+    unified_copy_cstr(ssid, ssid_size, scratch->config.wifi_ssid);
+    err = esp_wifi_get_mode(&current_mode);
+    if (err != ESP_OK) {
+        goto done;
+    }
+    if (current_mode != WIFI_MODE_STA && current_mode != WIFI_MODE_APSTA) {
+        ESP_LOGW(WIFI_MGR_TAG, "connect preparation skipped because wifi mode is %s", wifi_mgr_wifi_mode_name(current_mode));
+        err = ESP_ERR_INVALID_STATE;
+        goto done;
+    }
 
     /* Start every pre-connect scan from a clean driver/runtime state. */
     wifi_mgr_reset_scan_runtime(true, WIFI_MGR_PRECONNECT_RESET_SETTLE_MS);

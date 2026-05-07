@@ -67,7 +67,7 @@ describe('dashboard screen coverage', () => {
         ['/location', 'pages/location', 'GPS Location'],
         ['/gpio', 'pages/gpio', 'GPIO'],
         ['/devices/queue', 'pages/queue-manager', 'Queue Manager'],
-        ['/esp32-console', 'pages/esp32-console', 'ESP32 MQTT Console'],
+        ['/console', 'pages/esp32-console', 'Console'],
         ['/devices/settings', 'pages/device-settings', 'Device Settings'],
         ['/devices', 'pages/devices', 'Device Manager'],
         ['/devices/about', 'pages/device-about', 'Device About'],
@@ -87,6 +87,46 @@ describe('dashboard screen coverage', () => {
         expect(res.status).toBe(200);
         expect(res.body.view).toBe(expectedView);
         expect(res.body.locals.title).toBe(expectedTitle);
+    });
+
+    test('legacy ESP32 console URL redirects to Console', async () => {
+        const router = require('../routes/index');
+        const app = buildRenderedApp(router, '/', adminUser, makeDbMock());
+
+        const res = await request(app).get('/esp32-console');
+
+        expect(res.status).toBe(301);
+        expect(res.headers.location).toBe('/console');
+    });
+
+    test('legacy test page redirects to the merged Console', async () => {
+        const router = require('../routes/index');
+        const app = buildRenderedApp(router, '/', adminUser, makeDbMock());
+
+        const res = await request(app).get('/test');
+
+        expect(res.status).toBe(301);
+        expect(res.headers.location).toBe('/console');
+    });
+
+    test('Console command surface uses tabs with one dropdown and inline description', () => {
+        const html = fs.readFileSync(path.join(__dirname, '..', 'views', 'pages', 'esp32-console.html'), 'utf8');
+        const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'esp32-console.js'), 'utf8');
+
+        expect(html).toContain('data-console-tab="mqtt"');
+        expect(html).toContain('data-console-tab="serial"');
+        expect(html).toContain('data-console-tab="system"');
+        expect(html).not.toContain('id="esp32TransportSelect"');
+        expect(html).toContain('for="esp32CommandPresetSelect">Command</label>');
+        expect(html).toContain('class="command-description small" id="esp32OptionDetails"');
+        expect(html).not.toContain('Command / raw modem line');
+        expect(html).not.toContain('Selection Details');
+        expect(html).not.toContain('Quick Notes');
+        expect(html).not.toContain('id="esp32DocumentList"');
+        expect(js).toContain('function commandLabel(option)');
+        expect(js).toContain('function setConsoleTab(tab)');
+        expect(js).toContain('state.activeTab !== \'system\'');
+        expect(js).not.toContain('Custom typed command');
     });
 
     test('system settings screen loads the dedicated page script', async () => {
@@ -920,6 +960,48 @@ describe('sidebar navigation coverage', () => {
         expect(js).toContain('function syncConversationSelection(number, conversationId = threadState.conversationId)');
         expect(js).toContain('syncConversationSelection(target, conversationId);');
         expect(js).toContain("syncConversationSelection('', null);");
+    });
+
+    test('sms system message threads hide reply composer controls and block sending', () => {
+        const js = fs.readFileSync(smsJsPath, 'utf8');
+        const html = fs.readFileSync(smsPagePath, 'utf8');
+
+        expect(html).toContain('id="smsChatFooter"');
+        expect(html).toContain('id="smsChatRecipientRow"');
+        expect(html).toContain('id="smsChatSummaryRow"');
+        expect(html).toContain('id="smsChatSystemBottomNotice"');
+        expect(html).toContain('id="smsChatForm"');
+        expect(html).toContain('id="smsChatHelp"');
+        expect(html).toContain("You can't reply to this thread.");
+        expect(html).not.toContain('id="smsChatSystemNotice"');
+        expect(js).toContain('function isSystemSmsThread(number = threadState.number, messages = threadState.messages)');
+        expect(js).toContain('sms?.sender_is_phone === false');
+        expect(js).toContain('function setChatComposerSystemMode(enabled)');
+        expect(js).toContain("if (footer) footer.classList.toggle('d-none', enabled);");
+        expect(js).toContain("if (bottomNotice) bottomNotice.classList.toggle('d-none', !enabled);");
+        expect(js).toContain("if (form) form.classList.toggle('d-none', enabled);");
+        expect(js).toContain("if (help) help.classList.toggle('d-none', enabled);");
+        expect(js).toContain("if (summaryRow) summaryRow.classList.toggle('d-none', enabled);");
+        expect(js).toContain("if (isSystemSmsThread())");
+        expect(js).toContain("showToast('System message threads cannot be replied to.', 'warning');");
+    });
+
+    test('sms compose modal separates single and bulk recipient flows', () => {
+        const js = fs.readFileSync(smsJsPath, 'utf8');
+        const html = fs.readFileSync(smsPagePath, 'utf8');
+
+        expect(html).toContain('id="composeSingleTab"');
+        expect(html).toContain('id="composeBulkTab"');
+        expect(html).toContain('id="composeSinglePane"');
+        expect(html).toContain('id="composeBulkPane"');
+        expect(js).toContain('function getComposeSmsMode()');
+        expect(js).toContain('function setComposeSmsMode(mode)');
+        expect(js).toContain("setComposeSmsMode('bulk');");
+        expect(js).toContain('Single SMS accepts one recipient. Use the Bulk tab for multiple recipients.');
+        expect(js).toContain('let composeBulkRows = [];');
+        expect(js).toContain('bulkRows');
+        expect(js).toContain("['phone', 'number', 'to', 'recipient', 'mobile', 'sender']");
+        expect(js).toContain('Each row will use its own message.');
     });
 
     test('sms empty conversation state clears the selected thread and URL', () => {

@@ -15,6 +15,7 @@
     let smsThreadToken = 0;
     let shouldReopenComposeAfterContacts = false;
     let contactTargetFieldId = 'smsChatTo';
+    let composeBulkRows = [];
     const threadState = {
         number: '',
         conversationId: null,
@@ -353,6 +354,189 @@
             .split(/[\n,;]+/)
             .map(function (entry) { return entry.trim(); })
             .filter(Boolean);
+    }
+
+    function parseComposeBulkLine(line) {
+        const cells = [];
+        let current = '';
+        let quoted = false;
+        const raw = String(line || '');
+        for (let i = 0; i < raw.length; i += 1) {
+            const ch = raw[i];
+            if (ch === '"') {
+                if (quoted && raw[i + 1] === '"') {
+                    current += '"';
+                    i += 1;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if ((ch === ',' || ch === '\t' || ch === ';') && !quoted) {
+                cells.push(current.trim());
+                current = '';
+            } else {
+                current += ch;
+            }
+        }
+        cells.push(current.trim());
+        return cells;
+    }
+
+    function findComposeBulkColumn(columns, names) {
+        const allowed = new Set(names.map(function (name) { return String(name).trim().toLowerCase(); }));
+        return columns.findIndex(function (column) {
+            return allowed.has(String(column || '').trim().toLowerCase());
+        });
+    }
+
+    function parseComposeBulkText(text) {
+        const lines = String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/).filter(function (line) {
+            return line.trim();
+        });
+        if (!lines.length) {
+            return { rows: [], recipients: [], messages: [], errors: ['Template is empty'] };
+        }
+
+        const firstRow = parseComposeBulkLine(lines[0]);
+        let phoneIndex = findComposeBulkColumn(firstRow, ['phone', 'number', 'to', 'recipient', 'mobile', 'sender']);
+        let messageIndex = findComposeBulkColumn(firstRow, ['message', 'body', 'text']);
+        let startIndex = 1;
+        if (phoneIndex < 0) {
+            phoneIndex = 0;
+            messageIndex = -1;
+            startIndex = 0;
+        }
+
+        const recipients = [];
+        const messages = [];
+        const rows = [];
+        const errors = [];
+        for (let i = startIndex; i < lines.length; i += 1) {
+            const cells = parseComposeBulkLine(lines[i]);
+            const phone = String(cells[phoneIndex] || '').trim();
+            const message = messageIndex >= 0 ? String(cells[messageIndex] || '').trim() : '';
+            if (!phone && !message) continue;
+            if (!phone) {
+                errors.push(`Row ${i + 1} has no phone number`);
+                continue;
+            }
+            recipients.push(phone);
+            if (message) messages.push(message);
+            rows.push({
+                sender: phone,
+                to: phone,
+                message,
+                rowNumber: i + 1
+            });
+        }
+
+        return {
+            rows,
+            recipients: Array.from(new Set(recipients)),
+            messages: Array.from(new Set(messages)),
+            errors
+        };
+    }
+
+    function resetComposeBulkUpload() {
+        const input = document.getElementById('composeBulkFile');
+        const meta = document.getElementById('composeBulkMeta');
+        composeBulkRows = [];
+        if (input) input.value = '';
+        if (meta) {
+            meta.textContent = 'No bulk file selected.';
+            meta.classList.remove('text-danger', 'text-success');
+            meta.classList.add('text-muted');
+        }
+    }
+
+    function getComposeSmsMode() {
+        return document.getElementById('composeBulkTab')?.classList.contains('active') ? 'bulk' : 'single';
+    }
+
+    function setComposeSmsMode(mode) {
+        const targetId = mode === 'bulk' ? 'composeBulkTab' : 'composeSingleTab';
+        const tab = document.getElementById(targetId);
+        if (!tab) return;
+        if (window.bootstrap?.Tab) {
+            bootstrap.Tab.getOrCreateInstance(tab).show();
+            return;
+        }
+        document.getElementById('composeSingleTab')?.classList.toggle('active', mode !== 'bulk');
+        document.getElementById('composeBulkTab')?.classList.toggle('active', mode === 'bulk');
+        document.getElementById('composeSinglePane')?.classList.toggle('show', mode !== 'bulk');
+        document.getElementById('composeSinglePane')?.classList.toggle('active', mode !== 'bulk');
+        document.getElementById('composeBulkPane')?.classList.toggle('show', mode === 'bulk');
+        document.getElementById('composeBulkPane')?.classList.toggle('active', mode === 'bulk');
+    }
+
+    function setComposeBulkMeta(message, type) {
+        const meta = document.getElementById('composeBulkMeta');
+        if (!meta) return;
+        meta.textContent = message;
+        meta.classList.toggle('text-danger', type === 'danger');
+        meta.classList.toggle('text-success', type === 'success');
+        meta.classList.toggle('text-muted', !type || type === 'muted');
+    }
+
+    function downloadComposeBulkTemplate() {
+        const csv = [
+            'sender,message',
+            '+8801700000000,"Message for this recipient"'
+        ].join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'sms-bulk-template.csv';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    }
+
+    function handleComposeBulkUploadChange(event) {
+        const file = event.target?.files?.[0];
+        if (!file) {
+            resetComposeBulkUpload();
+            return;
+        }
+
+        const name = String(file.name || '').toLowerCase();
+        if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+            setComposeBulkMeta('Save the Excel sheet as CSV or TSV, then upload it here.', 'danger');
+            event.target.value = '';
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = function () {
+            const parsed = parseComposeBulkText(reader.result || '');
+            if (!parsed.recipients.length) {
+                setComposeBulkMeta(parsed.errors[0] || 'No phone numbers found in this file.', 'danger');
+                return;
+            }
+
+            setRecipientValues('modalTo', parsed.recipients);
+            composeBulkRows = parsed.rows || [];
+            setComposeSmsMode('bulk');
+
+            const messageEl = document.getElementById('modalMessage');
+            if (messageEl && !messageEl.value.trim() && parsed.messages.length === 1) {
+                messageEl.value = parsed.messages[0];
+                messageEl.dispatchEvent(new Event('input'));
+            }
+
+            const skipped = parsed.errors.length ? ` ${parsed.errors.length} row${parsed.errors.length === 1 ? '' : 's'} skipped.` : '';
+            const missingMessages = composeBulkRows.filter(function (row) { return !String(row.message || '').trim(); }).length;
+            const messageNote = missingMessages
+                ? ` ${missingMessages} row${missingMessages === 1 ? '' : 's'} will use the message box.`
+                : ' Each row will use its own message.';
+            setComposeBulkMeta(`${composeBulkRows.length} queued row${composeBulkRows.length === 1 ? '' : 's'} loaded.${skipped}${messageNote}`, 'success');
+        };
+        reader.onerror = function () {
+            setComposeBulkMeta('Could not read this bulk file.', 'danger');
+        };
+        reader.readAsText(file);
     }
 
     function getRecipientMetaId(fieldId) {
@@ -723,6 +907,15 @@
                 if (!updated) {
                     scheduleThreadRefresh(80);
                 }
+                return;
+            }
+
+            if (eventName === 'sms:received' && isLiveSmsCurrentThread(data, eventName)) {
+                if (data?.unreadCount !== undefined && data?.unreadCount !== null) {
+                    updateUnreadBadge(data.unreadCount);
+                }
+                scheduleSmsRefresh(60);
+                scheduleThreadRefresh(60);
                 return;
             }
 
@@ -1638,6 +1831,74 @@
         return String(number || '').trim();
     }
 
+    function looksLikePhoneSmsAddress(value) {
+        const text = String(value || '').trim();
+        if (!text || !/^\+?[\d\s().-]+$/.test(text)) return false;
+        return text.replace(/\D/g, '').length >= 7;
+    }
+
+    function looksLikeEncodedSystemSender(value) {
+        const text = String(value || '').trim();
+        return text.length >= 6 && text.length % 2 === 0 && /^[0-9:;<=>?]+$/.test(text);
+    }
+
+    function isSystemSmsThread(number = threadState.number, messages = threadState.messages) {
+        const target = getThreadActionNumber(number);
+        if (looksLikeEncodedSystemSender(target)) return true;
+        if (Array.isArray(messages) && messages.some(function (sms) {
+            const incoming = String(sms?.type || '').toLowerCase() !== 'outgoing';
+            return incoming && sms?.sender_is_phone === false;
+        })) {
+            return true;
+        }
+        return Boolean(target) && !looksLikePhoneSmsAddress(target);
+    }
+
+    function setChatComposerSystemMode(enabled) {
+        const footer = document.getElementById('smsChatFooter');
+        const recipientRow = document.getElementById('smsChatRecipientRow');
+        const recipientEditor = document.getElementById('smsChatRecipientEditor');
+        const recipientMeta = document.getElementById('smsChatRecipientMeta');
+        const summaryRow = document.getElementById('smsChatSummaryRow');
+        const bottomNotice = document.getElementById('smsChatSystemBottomNotice');
+        const attachmentPreview = document.getElementById('smsAttachmentPreview');
+        const modeRow = document.getElementById('smsChatModeRow');
+        const form = document.getElementById('smsChatForm');
+        const help = document.getElementById('smsChatHelp');
+        const chatTo = document.getElementById('smsChatTo');
+        const messageEl = document.getElementById('smsChatMessage');
+        const sendBtn = document.getElementById('smsChatSendBtn');
+        const sendToggle = document.querySelector('.sms-send-toggle');
+        const attachmentBtn = document.getElementById('smsAttachBtn');
+
+        if (footer) footer.classList.toggle('d-none', enabled);
+        if (recipientRow) recipientRow.classList.toggle('d-none', enabled);
+        if (recipientEditor) recipientEditor.classList.add('d-none');
+        if (summaryRow) summaryRow.classList.toggle('d-none', enabled);
+        if (bottomNotice) bottomNotice.classList.toggle('d-none', !enabled);
+        if (attachmentPreview) attachmentPreview.classList.toggle('d-none', enabled || !smsAttachment);
+        if (modeRow) modeRow.classList.toggle('d-none', enabled || getChatSendMode() !== 'scheduled');
+        if (form) form.classList.toggle('d-none', enabled);
+        if (help) help.classList.toggle('d-none', enabled);
+        if (messageEl) {
+            messageEl.disabled = enabled;
+            messageEl.placeholder = enabled ? 'System message thread' : 'Type SMS reply...';
+            if (enabled) messageEl.value = '';
+        }
+        [sendBtn, sendToggle, attachmentBtn].forEach(function (button) {
+            if (button) button.disabled = enabled;
+        });
+        if (enabled && chatTo) {
+            chatTo.value = '';
+            renderRecipientPills('smsChatTo');
+            if (recipientMeta) recipientMeta.textContent = '';
+            resetSmsAttachment();
+            setChatSendMode('instant', { revealSchedule: false });
+            return;
+        }
+        updateRecipientMeta('smsChatTo');
+    }
+
     function buildComposerFollowUpThread(number, options = {}) {
         const target = getThreadActionNumber(number);
         if (!target) {
@@ -1891,6 +2152,48 @@
         window.location.href = `/calls?to=${encodeURIComponent(target)}`;
     }
 
+    function resetComposeSmsModalFields(options = {}) {
+        const form = document.getElementById('composeSmsForm');
+        if (form) form.reset();
+
+        setPhoneFieldValue('modalTo', options.to || '');
+        setComposeSmsMode(options.to ? 'single' : 'single');
+
+        const messageEl = document.getElementById('modalMessage');
+        if (messageEl) {
+            messageEl.value = options.message || '';
+        }
+
+        updateRecipientMeta('modalTo');
+        updateSmsComposeCounter('modalMessage', {
+            countId: 'modalCharCount',
+            byteId: 'modalByteCount',
+            partsId: 'smsParts'
+        });
+        resetComposeBulkUpload();
+    }
+
+    function openComposeSmsPopup(options = {}) {
+        const modalEl = document.getElementById('composeSmsModal');
+        if (!modalEl) return;
+
+        if (options.reset !== false) {
+            resetComposeSmsModalFields(options);
+        } else if (options.to !== undefined) {
+            setPhoneFieldValue('modalTo', options.to || '');
+        }
+
+        modalEl.addEventListener('shown.bs.modal', function handleShown() {
+            const focusTarget = options.focusMessage
+                ? document.getElementById('modalMessage')
+                : document.getElementById('modalTo');
+            focusTarget?.focus();
+            focusTarget?.select?.();
+        }, { once: true });
+
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    }
+
     function openComposeForNumber(number) {
         const target = getThreadActionNumber(number);
         if (!target) return;
@@ -1909,14 +2212,12 @@
         if (threadModal) {
             threadModal.hide();
             setTimeout(() => {
-                const composeModal = new bootstrap.Modal(document.getElementById('composeSmsModal'));
-                composeModal.show();
+                openComposeSmsPopup({ reset: false, to: target, focusMessage: true });
             }, 180);
             return;
         }
 
-        const composeModal = new bootstrap.Modal(document.getElementById('composeSmsModal'));
-        composeModal.show();
+        openComposeSmsPopup({ reset: false, to: target, focusMessage: true });
     }
 
     function renderThreadMessages(messages, number, title = threadState.title || number) {
@@ -1925,6 +2226,7 @@
         const numberEl = document.getElementById('smsChatNumber') || document.getElementById('smsThreadNumber');
         const metaEl = document.getElementById('smsChatMeta') || document.getElementById('smsThreadMeta');
         const scheduledItems = getScheduledItemsForNumber(number);
+        setChatComposerSystemMode(isSystemSmsThread(number, messages));
 
         if (numberEl) {
             numberEl.innerHTML = (title || number)
@@ -1978,7 +2280,11 @@
             const outgoing = String(sms.type || '').toLowerCase() === 'outgoing';
             const speaker = outgoing ? 'You' : (sms.display_from || sms.from_number || number || 'Unknown');
             const meta = [formatTs(sms.timestamp)];
+            const mergedIds = getSmsRowIds(sms);
+            const actionIds = mergedIds.join(',');
+            const isMerged = mergedIds.length > 1;
             if (!outgoing && !sms.read) meta.push('Unread');
+            if (isMerged) meta.push(`${mergedIds.length} parts`);
 
             return `
                 <div class="d-flex ${outgoing ? 'justify-content-end' : 'justify-content-start'}">
@@ -2000,8 +2306,8 @@
                                             <i class="bi bi-three-dots-vertical"></i>
                                         </button>
                                         <ul class="dropdown-menu dropdown-menu-end">
-                                            ${!outgoing && !sms.read ? `<li><button type="button" class="dropdown-item" data-thread-message-action="mark-read" data-sms-id="${Number(sms.id) || ''}"><i class="bi bi-envelope-open me-2"></i>Mark Read</button></li>` : ''}
-                                            <li><button type="button" class="dropdown-item text-danger" data-thread-message-action="delete-message" data-sms-id="${Number(sms.id) || ''}"><i class="bi bi-trash me-2"></i>Delete</button></li>
+                                            ${!outgoing && !sms.read ? `<li><button type="button" class="dropdown-item" data-thread-message-action="mark-read" data-sms-ids="${esc(actionIds)}"><i class="bi bi-envelope-open me-2"></i>Mark Read</button></li>` : ''}
+                                            <li><button type="button" class="dropdown-item text-danger" data-thread-message-action="delete-message" data-sms-ids="${esc(actionIds)}"><i class="bi bi-trash me-2"></i>${isMerged ? 'Delete Parts' : 'Delete'}</button></li>
                                         </ul>
                                     </div>
                                 </div>
@@ -2040,17 +2346,18 @@
 
     function updateThreadActionButtons(number) {
         const target = getThreadActionNumber(number);
+        const systemThread = isSystemSmsThread(target, []);
         const callBtn = document.getElementById('smsChatCallBtn') || document.getElementById('smsThreadCallBtn');
         const replyBtn = document.getElementById('smsThreadReplyBtn');
         const menuButtons = ['smsChatThreadMenuBtn', 'smsThreadMenuBtn'];
         const chatTo = document.getElementById('smsChatTo');
 
         if (callBtn) {
-            callBtn.disabled = !target;
+            callBtn.disabled = !target || systemThread;
             callBtn.dataset.number = target;
         }
         if (replyBtn) {
-            replyBtn.disabled = !target;
+            replyBtn.disabled = !target || systemThread;
             replyBtn.dataset.number = target;
         }
         menuButtons.forEach(function (id) {
@@ -2060,15 +2367,19 @@
             button.dataset.number = target;
             button.dataset.conversationId = threadState.conversationId || '';
         });
-        if (chatTo && target) {
+        if (chatTo && target && !systemThread) {
             setPhoneFieldValue('smsChatTo', target);
+        } else if (chatTo && systemThread) {
+            chatTo.value = '';
+            updateRecipientMeta('smsChatTo');
         }
+        setChatComposerSystemMode(systemThread);
     }
 
     function markThreadMessagesRead(messages) {
         const ids = (Array.isArray(messages) ? messages : [])
             .filter((sms) => String(sms?.type || '').toLowerCase() !== 'outgoing' && !sms?.read)
-            .map((sms) => Number(sms.id))
+            .flatMap(function (sms) { return getSmsRowIds(sms); })
             .filter((id) => Number.isInteger(id) && id > 0);
         if (!ids.length) return Promise.resolve();
 
@@ -2095,7 +2406,15 @@
 
     function getThreadMessageIds(messages) {
         return (Array.isArray(messages) ? messages : [])
-            .map(function (sms) { return Number(sms?.id); })
+            .flatMap(function (sms) { return getSmsRowIds(sms); })
+            .filter(function (id) { return Number.isInteger(id) && id > 0; });
+    }
+
+    function getSmsRowIds(message) {
+        const merged = Array.isArray(message?.merged_sms_ids) ? message.merged_sms_ids : [];
+        const ids = merged.length ? merged : [message?.id];
+        return ids
+            .map(function (id) { return Number(id); })
             .filter(function (id) { return Number.isInteger(id) && id > 0; });
     }
 
@@ -2160,9 +2479,10 @@
             return false;
         }
 
-        if (count === 1) {
+        if (count === 1 || options.threadSubset) {
             threadState.messages = threadState.messages.filter(function (sms) {
-                return Number(sms?.id) !== smsIds[0];
+                const rowIds = getSmsRowIds(sms);
+                return !rowIds.some(function (id) { return smsIds.includes(id); });
             });
             showToast('SMS deleted successfully', 'success');
         } else {
@@ -2886,8 +3206,14 @@
                 if (messageAction) {
                     event.preventDefault();
                     event.stopPropagation();
-                    const smsId = Number(messageAction.dataset.smsId || 0);
-                    const message = threadState.messages.find(function (sms) { return Number(sms?.id) === smsId; });
+                    const smsIds = String(messageAction.dataset.smsIds || '')
+                        .split(',')
+                        .map(function (value) { return Number(value); })
+                        .filter(function (value) { return Number.isInteger(value) && value > 0; });
+                    const smsId = smsIds[0] || 0;
+                    const message = threadState.messages.find(function (sms) {
+                        return getSmsRowIds(sms).includes(smsId);
+                    });
                     if (!message) return;
                     if (String(messageAction.dataset.threadMessageAction || '').trim() === 'mark-read') {
                         markThreadMessagesRead([message]).then(function () {
@@ -2896,7 +3222,7 @@
                         return;
                     }
                     if (String(messageAction.dataset.threadMessageAction || '').trim() === 'delete-message') {
-                        deleteSmsIds([smsId]).then(function (deleted) {
+                        deleteSmsIds(getSmsRowIds(message), { threadSubset: true }).then(function (deleted) {
                             if (!deleted) return;
                             renderThreadMessages(threadState.messages, threadState.number, threadState.title);
                             if (!threadState.messages.length) {
@@ -2967,13 +3293,7 @@
         if (focusComposerBtn && focusComposerBtn.dataset.focusBound !== '1') {
             focusComposerBtn.dataset.focusBound = '1';
             focusComposerBtn.addEventListener('click', function () {
-                const chatTo = document.getElementById('smsChatTo');
-                const chatMessage = document.getElementById('smsChatMessage');
-                if (chatTo && !chatTo.value) {
-                    focusChatRecipientEditor();
-                } else if (chatMessage) {
-                    chatMessage.focus();
-                }
+                openComposeSmsPopup({ reset: true });
             });
         }
     }
@@ -3026,17 +3346,7 @@
                 document.getElementById('searchSms')?.focus();
             } else if (e.key.toLowerCase() === 'c') {
                 e.preventDefault();
-                const chatTo = document.getElementById('smsChatTo');
-                if (chatTo) {
-                    if (chatTo.value) {
-                        document.getElementById('smsChatMessage')?.focus();
-                    } else {
-                        focusChatRecipientEditor();
-                    }
-                } else {
-                    const modal = new bootstrap.Modal(document.getElementById('composeSmsModal'));
-                    modal.show();
-                }
+                openComposeSmsPopup({ reset: true });
             } else if (e.key === '?') {
                 e.preventDefault();
                 const modal = new bootstrap.Modal(document.getElementById('smsShortcutsModal'));
@@ -3147,12 +3457,26 @@
             sendBtn.addEventListener('click', handleSendSms);
         }
 
+        const bulkTemplateBtn = document.getElementById('composeBulkTemplateBtn');
+        if (bulkTemplateBtn && bulkTemplateBtn.dataset.bulkTemplateBound !== '1') {
+            bulkTemplateBtn.dataset.bulkTemplateBound = '1';
+            bulkTemplateBtn.addEventListener('click', downloadComposeBulkTemplate);
+        }
+
+        const bulkFileInput = document.getElementById('composeBulkFile');
+        if (bulkFileInput && bulkFileInput.dataset.bulkUploadBound !== '1') {
+            bulkFileInput.dataset.bulkUploadBound = '1';
+            bulkFileInput.addEventListener('change', handleComposeBulkUploadChange);
+        }
+
         // Reset compose modal on close
         const composeModal = document.getElementById('composeSmsModal');
         if (composeModal) {
             composeModal.addEventListener('hidden.bs.modal', function () {
                 const form = document.getElementById('composeSmsForm');
                 if (form) form.reset();
+                setComposeSmsMode('single');
+                resetComposeBulkUpload();
                 updateRecipientMeta('modalTo');
                 updateSmsComposeCounter('modalMessage', {
                     countId: 'modalCharCount',
@@ -3419,6 +3743,11 @@
     function handleChatSendSms(e) {
         e.preventDefault();
 
+        if (isSystemSmsThread()) {
+            showToast('System message threads cannot be replied to.', 'warning');
+            return;
+        }
+
         const phoneValidation = validatePhoneField('smsChatTo', { allowShortCode: true });
         const recipients = Array.isArray(phoneValidation.values) ? phoneValidation.values : [phoneValidation.value].filter(Boolean);
         const to = recipients[0] || '';
@@ -3547,19 +3876,21 @@
         const phoneValidation = validatePhoneField('modalTo', { allowShortCode: true });
         const recipients = Array.isArray(phoneValidation.values) ? phoneValidation.values : [phoneValidation.value].filter(Boolean);
         const to = recipients[0] || '';
-        const message = document.getElementById('modalMessage')?.value.trim();
-        const messageAnalysis = analyzeSmsComposeText(message);
+        const messageEl = document.getElementById('modalMessage');
+        const message = messageEl?.value.trim() || '';
         const button = this;
         const activeDeviceId = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
+        const composeMode = getComposeSmsMode();
+        let requestBody = null;
+        let queuedCountForToast = recipients.length || 1;
 
         // Validate
-        if (!message) {
-            showToast('Please fill in all fields', 'warning');
+        if (!phoneValidation.ok) {
+            showToast(composeMode === 'bulk' ? 'Upload a bulk recipient file first.' : phoneValidation.message, 'warning');
             return;
         }
-
-        if (!phoneValidation.ok) {
-            showToast(phoneValidation.message, 'warning');
+        if (composeMode === 'single' && recipients.length > 1) {
+            showToast('Single SMS accepts one recipient. Use the Bulk tab for multiple recipients.', 'warning');
             return;
         }
 
@@ -3567,9 +3898,42 @@
             showToast('Select a device first.', 'warning');
             return;
         }
-        if (!messageAnalysis.valid) {
-            showToast(window.smsComposeLimits?.formatError?.(messageAnalysis) || 'SMS message exceeds the device limit.', 'warning');
-            return;
+
+        if (composeMode === 'bulk' && composeBulkRows.length) {
+            const bulkRows = composeBulkRows.map(function (row) {
+                return {
+                    sender: row.sender || row.to,
+                    to: row.to || row.sender,
+                    message: String(row.message || '').trim() || message,
+                    rowNumber: row.rowNumber || null
+                };
+            });
+            const missingMessage = bulkRows.find(function (row) { return !row.message; });
+            if (missingMessage) {
+                showToast('Bulk rows need a message column or a shared message in the message box.', 'warning');
+                return;
+            }
+            const invalidMessage = bulkRows.find(function (row) {
+                return !analyzeSmsComposeText(row.message).valid;
+            });
+            if (invalidMessage) {
+                const analysis = analyzeSmsComposeText(invalidMessage.message);
+                showToast(window.smsComposeLimits?.formatError?.(analysis) || 'One bulk message exceeds the device limit.', 'warning');
+                return;
+            }
+            queuedCountForToast = bulkRows.length;
+            requestBody = { bulkRows, deviceId: activeDeviceId };
+        } else {
+            if (!message) {
+                showToast('Please fill in all fields', 'warning');
+                return;
+            }
+            const messageAnalysis = analyzeSmsComposeText(message);
+            if (!messageAnalysis.valid) {
+                showToast(window.smsComposeLimits?.formatError?.(messageAnalysis) || 'SMS message exceeds the device limit.', 'warning');
+                return;
+            }
+            requestBody = { to, recipients, message, deviceId: activeDeviceId };
         }
 
         const spinner = button.querySelector('.spinner-border');
@@ -3590,7 +3954,7 @@
         request(buildSmsRequestUrl('/api/sms/send'), {
             method: 'POST',
             headers,
-            body: JSON.stringify({ to, recipients, message, deviceId: activeDeviceId })
+            body: JSON.stringify(requestBody)
         })
             .then(async response => {
                 let payload = null;
@@ -3622,13 +3986,13 @@
                     if (modal) modal.hide();
 
                     showToast(
-                        Number(data.count || recipients.length || 1) > 1
-                            ? `${Number(data.count || recipients.length || 1)} SMS queued for delivery.`
+                        Number(data.count || queuedCountForToast || 1) > 1
+                            ? `${Number(data.count || queuedCountForToast || 1)} SMS queued for delivery.`
                             : (data.queued ? 'SMS queued for delivery.' : 'SMS sent successfully.'),
                         'success'
                     );
 
-                    const queuedCount = Number(data.count || recipients.length || 1);
+                    const queuedCount = Number(data.count || queuedCountForToast || 1);
                     const followUpThread = queuedCount === 1
                         ? buildComposerFollowUpThread(to, { conversationId: data?.conversationId })
                         : null;

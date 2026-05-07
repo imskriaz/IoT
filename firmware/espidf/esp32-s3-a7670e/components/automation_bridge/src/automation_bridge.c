@@ -107,6 +107,7 @@ static uint16_t automation_bridge_command_priority(unified_action_command_t comm
         case UNIFIED_ACTION_CMD_CANCEL_USSD:
         case UNIFIED_ACTION_CMD_DIAL_NUMBER:
         case UNIFIED_ACTION_CMD_HANGUP_CALL:
+        case UNIFIED_ACTION_CMD_MODEM_AT:
             return 10U;
         case UNIFIED_ACTION_CMD_WIFI_CONNECT:
         case UNIFIED_ACTION_CMD_WIFI_RECONNECT:
@@ -398,7 +399,10 @@ static unified_action_command_t automation_bridge_parse_command_name(const char 
     if (strcmp(normalized, "status_watch") == 0) {
         return UNIFIED_ACTION_CMD_STATUS_WATCH;
     }
-    if (strcmp(normalized, "get_sms_history") == 0) {
+    if (strcmp(normalized, "get_sms_history") == 0 ||
+        strcmp(normalized, "sync_sms") == 0 ||
+        strcmp(normalized, "pull_sms") == 0 ||
+        strcmp(normalized, "pull_messages") == 0) {
         return UNIFIED_ACTION_CMD_GET_SMS_HISTORY;
     }
     if (strcmp(normalized, "get_status") == 0) {
@@ -406,6 +410,10 @@ static unified_action_command_t automation_bridge_parse_command_name(const char 
     }
     if (strcmp(normalized, "ota_update") == 0) {
         return UNIFIED_ACTION_CMD_OTA_UPDATE;
+    }
+    if (strcmp(normalized, "modem_at") == 0 ||
+        strcmp(normalized, "raw_at") == 0) {
+        return UNIFIED_ACTION_CMD_MODEM_AT;
     }
     if (strcmp(normalized, "send_sms") == 0) {
         return UNIFIED_ACTION_CMD_SEND_SMS;
@@ -648,6 +656,13 @@ static esp_err_t automation_bridge_parse_item(
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "password"), out_request->password, sizeof(out_request->password));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "auth"), out_request->auth, sizeof(out_request->auth));
     automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "url"), out_request->url, sizeof(out_request->url));
+    automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "line"), out_request->raw_line, sizeof(out_request->raw_line));
+    if (out_request->raw_line[0] == '\0') {
+        automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "raw_line"), out_request->raw_line, sizeof(out_request->raw_line));
+    }
+    if (out_request->raw_line[0] == '\0') {
+        automation_bridge_copy_json_string(cJSON_GetObjectItemCaseSensitive(payload, "rawLine"), out_request->raw_line, sizeof(out_request->raw_line));
+    }
     node = cJSON_GetObjectItemCaseSensitive(payload, "enabled");
     if (cJSON_IsBool(node)) {
         out_request->enabled_present = true;

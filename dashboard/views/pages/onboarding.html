@@ -209,7 +209,7 @@
                         <label class="form-label">Device ID <span class="text-danger">*</span></label>
                         <div class="input-group">
                             <input type="text" class="form-control" id="fDeviceId" required
-                                   placeholder="32dg3-dgds32-fg2335"
+                                   placeholder="esp-32dg3-dgds32-fg2335"
                                    pattern="[a-zA-Z0-9_\-]+"
                                    maxlength="64">
                             <button class="btn btn-outline-secondary" type="button" id="btnGenerateId" onclick="generateDeviceId()">
@@ -221,7 +221,7 @@
                                 <span class="visually-hidden">Check availability</span>
                             </button>
                         </div>
-                        <div class="form-text" id="deviceIdFeedback">Use a unique lowercase ID. You can generate one instantly.</div>
+                        <div class="form-text" id="deviceIdFeedback">Use a unique lowercase ID. ESP devices use esp-, Android devices use android-.</div>
                         <div class="invalid-feedback">Only letters, numbers, hyphens and underscores allowed.</div>
                     </div>
 
@@ -896,7 +896,7 @@ function generateDeviceIdValue() {
     if (wizardState.deviceType === 'android') {
         return `android-${randomToken(8)}`;
     }
-    return `${randomToken(5)}-${randomToken(6)}-${randomToken(6)}`;
+    return `esp-${randomToken(5)}-${randomToken(6)}-${randomToken(6)}`;
 }
 
 function selectedDeviceModel() {
@@ -1076,7 +1076,7 @@ function prefillStep3() {
                        : 'esp32-s3-a7670e';
         modelSel.value = modelVal;
     }
-    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase ID. You can generate one instantly.';
+    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase ID. ESP devices use esp-, Android devices use android-.';
     document.getElementById('deviceIdFeedback').className = 'form-text';
 }
 
@@ -1591,7 +1591,7 @@ function resetWizard() {
     document.getElementById('fFirmwareFile').value = '';
     document.getElementById('fFirmwareUpload').value = '';
     document.getElementById('fDeviceId').value = generateDeviceIdValue();
-    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase ID. You can generate one instantly.';
+    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase ID. ESP devices use esp-, Android devices use android-.';
     document.getElementById('firmwareHelp').textContent = 'Upload or select a firmware `.bin` so it is ready for OTA after the device comes online.';
     applyStep3FieldVisibility();
     loadFirmwareOptions();

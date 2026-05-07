@@ -17,6 +17,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "modem_a7670.h"
+#include "wifi_mgr.h"
 
 #define SERIAL_CONFIG_UART_NUM       ((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM)
 #define SERIAL_CONFIG_RX_BUFFER_LEN  512
@@ -47,6 +48,9 @@ typedef struct {
     char set_token[256];
     char set_decoded[SERIAL_CONFIG_DECODED_VALUE_LEN];
     char set_applied[192];
+    char wifi_ssid[CONFIG_MGR_WIFI_SSID_LEN];
+    char wifi_password[CONFIG_MGR_WIFI_PASS_LEN];
+    char wifi_ssid_b64[96];
     char line[896];
 } serial_config_scratch_t;
 
@@ -385,6 +389,78 @@ static void serial_config_schedule_reboot(void) {
     esp_restart();
 }
 
+static void serial_config_handle_wifi_connect(char *cursor) {
+    serial_config_scratch_t *scratch = s_scratch;
+    bool has_ssid = false;
+    bool has_password = false;
+    esp_err_t err = ESP_OK;
+
+    if (!scratch) {
+        serial_config_emit_line("wifi_connect ok=no code=scratch_unavailable");
+        return;
+    }
+    memset(scratch, 0, sizeof(*scratch));
+
+    while (serial_config_next_token(&cursor, scratch->set_token, sizeof(scratch->set_token))) {
+        char *equals = strchr(scratch->set_token, '=');
+        const char *key = scratch->set_token;
+        const char *value = equals ? equals + 1 : "";
+
+        if (!equals) {
+            serial_config_emit_line("wifi_connect ok=no code=invalid_arg detail=missing_equals");
+            return;
+        }
+        *equals = '\0';
+
+        if (strcmp(key, "ssid_b64") == 0) {
+            if (!serial_config_decode_b64(value, scratch->wifi_ssid, sizeof(scratch->wifi_ssid)) ||
+                scratch->wifi_ssid[0] == '\0') {
+                serial_config_emit_line("wifi_connect ok=no code=invalid_arg detail=ssid");
+                return;
+            }
+            has_ssid = true;
+        } else if (strcmp(key, "password_b64") == 0) {
+            if (!serial_config_decode_b64(value, scratch->wifi_password, sizeof(scratch->wifi_password))) {
+                serial_config_emit_line("wifi_connect ok=no code=invalid_arg detail=password");
+                return;
+            }
+            has_password = scratch->wifi_password[0] != '\0';
+        } else {
+            serial_config_emit_line("wifi_connect ok=no code=not_supported detail=key");
+            return;
+        }
+    }
+
+    if (!has_ssid) {
+        serial_config_emit_line("wifi_connect ok=no code=invalid_arg detail=missing_ssid");
+        return;
+    }
+
+    err = wifi_mgr_request_runtime_connect(scratch->wifi_ssid, scratch->wifi_password);
+    (void)serial_config_encode_b64(scratch->wifi_ssid, scratch->wifi_ssid_b64, sizeof(scratch->wifi_ssid_b64));
+    if (err != ESP_OK) {
+        (void)snprintf(
+            scratch->line,
+            sizeof(scratch->line),
+            "wifi_connect ok=no code=%s ssid_b64=%s password_set=%s",
+            esp_err_to_name(err),
+            scratch->wifi_ssid_b64,
+            has_password ? "yes" : "no"
+        );
+        serial_config_emit_line(scratch->line);
+        return;
+    }
+
+    (void)snprintf(
+        scratch->line,
+        sizeof(scratch->line),
+        "wifi_connect ok=yes ssid_b64=%s password_set=%s detail=requested",
+        scratch->wifi_ssid_b64,
+        has_password ? "yes" : "no"
+    );
+    serial_config_emit_line(scratch->line);
+}
+
 static void serial_config_handle_set(char *cursor) {
     config_mgr_data_t next = {0};
     serial_config_scratch_t *scratch = s_scratch;
@@ -544,6 +620,10 @@ static void serial_config_handle_command(char *line) {
         serial_config_schedule_reboot();
         return;
     }
+    if (strncmp(cursor, "wifi_connect", 12) == 0 && (cursor[12] == '\0' || cursor[12] == ' ')) {
+        serial_config_handle_wifi_connect(cursor + 12);
+        return;
+    }
     if (strncmp(cursor, "cfg_set", 7) == 0 && (cursor[7] == '\0' || cursor[7] == ' ')) {
         serial_config_handle_set(cursor + 7);
         return;
@@ -657,28 +737,15 @@ esp_err_t serial_config_init(void) {
         }
     }
 
-    #if CONFIG_SPIRAM && CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
-    task_ok = xTaskCreatePinnedToCoreWithCaps(
+    task_ok = xTaskCreatePinnedToCore(
         serial_config_task,
         "serial_cfg",
         SERIAL_CONFIG_TASK_STACK_LEN,
         NULL,
         tskIDLE_PRIORITY + 1,
         &s_serial_task,
-        1,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+        1
     );
-    #endif
-    if (task_ok != pdPASS) {
-        task_ok = xTaskCreate(
-            serial_config_task,
-            "serial_cfg",
-            SERIAL_CONFIG_TASK_STACK_LEN,
-            NULL,
-            tskIDLE_PRIORITY + 1,
-            &s_serial_task
-        );
-    }
     if (task_ok != pdPASS) {
         return ESP_ERR_NO_MEM;
     }

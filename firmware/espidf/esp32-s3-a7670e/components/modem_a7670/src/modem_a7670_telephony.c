@@ -1045,6 +1045,8 @@ static esp_err_t modem_a7670_consume_concat_sms_indexes_locked(
             err = ESP_ERR_INVALID_SIZE;
             goto cleanup;
         }
+        out_payload->multipart_part_index = 1U;
+        out_payload->multipart_part_count = (uint16_t)index_count;
         out_payload->sim_slot = 0U;
         out_payload->timestamp_ms = segment->timestamp_ms;
         out_payload->outgoing = false;

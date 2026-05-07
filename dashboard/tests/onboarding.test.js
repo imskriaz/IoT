@@ -119,6 +119,9 @@ describe('onboarding routes', () => {
         expect(html).not.toContain('id="fMqttPass"');
         expect(html).toContain('data-onboard-scope="android-transport"');
         expect(html).toContain('function applyStep3FieldVisibility()');
+        expect(html).toContain('return `android-${randomToken(8)}`;');
+        expect(html).toContain('return `esp-${randomToken(5)}-${randomToken(6)}-${randomToken(6)}`;');
+        expect(html).toContain('ESP devices use esp-, Android devices use android-.');
         expect(html).toContain("if (scope === 'esp32') show = !bridgeDevice;");
         expect(html).not.toContain("if (scope === 'mqtt')");
         expect(html).toContain("if (scope === 'android-transport') show = wizardState.deviceType === 'android';");
@@ -380,6 +383,42 @@ describe('onboarding routes', () => {
         );
     });
 
+    test('rejects Android onboarding IDs without android prefix', async () => {
+        const db = makeDbMock();
+        const router = require('../routes/onboarding');
+        const app = buildApiApp(router, db);
+
+        const res = await request(app)
+            .post('/api/onboard/register')
+            .send({
+                device_id: 'esp-wrong-01',
+                name: 'Android Bridge',
+                model: 'android-sms-bridge',
+                bridge_type: 'android'
+            });
+
+        expect(res.status).toBe(400);
+        expect(res.body.message).toBe('Android device IDs must start with android-');
+    });
+
+    test('rejects ESP onboarding IDs without esp prefix', async () => {
+        const db = makeDbMock();
+        const router = require('../routes/onboarding');
+        const app = buildApiApp(router, db);
+
+        const res = await request(app)
+            .post('/api/onboard/register')
+            .send({
+                device_id: 'device-without-prefix',
+                name: 'ESP32 S3',
+                model: 'esp32-s3-a7670e',
+                bridge_type: 'esp32-s3'
+            });
+
+        expect(res.status).toBe(400);
+        expect(res.body.message).toBe('ESP device IDs must start with esp-');
+    });
+
     test('does not return provisioning for unsupported legacy bridge types', async () => {
         const db = makeDbMock();
         const router = require('../routes/onboarding');
@@ -410,7 +449,7 @@ describe('onboarding routes', () => {
                     if (options.path === '/api/config') {
                         response.emit('data', JSON.stringify({
                             meta: {
-                                device_id: 'ws-a7670e-476178',
+                                device_id: 'esp-a7670e-476178',
                                 hotspot_ssid: 'cfg-476178',
                                 hotspot_ip: '192.168.4.1',
                                 provisioning_active: true,
@@ -445,7 +484,7 @@ describe('onboarding routes', () => {
             expect(data.success).toBe(true);
             expect(data.reachable).toBe(true);
             expect(data.protocol).toBe('api-config');
-            expect(data.device.device_id).toBe('ws-a7670e-476178');
+            expect(data.device.device_id).toBe('esp-a7670e-476178');
             expect(data.device.hotspot_ssid).toBe('cfg-476178');
             expect(data.device.wifi_disconnect_reason_text).toBe('');
             expect(data.device.config.mqtt_uri).toBe('mqtt://144.79.218.153:1883');

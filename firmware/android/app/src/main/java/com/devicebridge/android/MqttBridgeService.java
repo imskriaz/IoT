@@ -78,6 +78,9 @@ public class MqttBridgeService extends Service {
     static final String EXTRA_TEXT = "text";
     static final String EXTRA_TIMESTAMP = "timestamp";
     static final String EXTRA_SLOT = "slot";
+    static final String EXTRA_MULTIPART_REF = "multipart_ref";
+    static final String EXTRA_MULTIPART_PART_INDEX = "multipart_part_index";
+    static final String EXTRA_MULTIPART_PART_COUNT = "multipart_part_count";
 
     private static final String TAG = "DeviceBridge";
     private static final String CHANNEL_ID = "device_bridge";
@@ -197,7 +200,8 @@ public class MqttBridgeService extends Service {
                     intent.getStringExtra(EXTRA_FROM),
                     intent.getStringExtra(EXTRA_TEXT),
                     intent.getLongExtra(EXTRA_TIMESTAMP, System.currentTimeMillis()),
-                    intent.getIntExtra(EXTRA_SLOT, -1)
+                    intent.getIntExtra(EXTRA_SLOT, -1),
+                    buildMultipartInfoFromIntent(intent)
             );
         }
 
@@ -232,10 +236,10 @@ public class MqttBridgeService extends Service {
         super.onDestroy();
     }
 
-    static void publishIncomingFromReceiver(Context context, String from, String text, long timestamp, int slot) {
+    static void publishIncomingFromReceiver(Context context, String from, String text, long timestamp, int slot, SmsMultipartInfo multipartInfo) {
         MqttBridgeService service = activeService;
         if (service != null) {
-            service.publishIncomingSms(from, text, timestamp, slot);
+            service.publishIncomingSms(from, text, timestamp, slot, multipartInfo);
             return;
         }
 
@@ -249,6 +253,11 @@ public class MqttBridgeService extends Service {
                 .putExtra(EXTRA_TEXT, text)
                 .putExtra(EXTRA_TIMESTAMP, timestamp)
                 .putExtra(EXTRA_SLOT, slot);
+        if (multipartInfo != null && multipartInfo.isMultipart()) {
+            intent.putExtra(EXTRA_MULTIPART_REF, multipartInfo.reference);
+            intent.putExtra(EXTRA_MULTIPART_PART_INDEX, multipartInfo.partIndex);
+            intent.putExtra(EXTRA_MULTIPART_PART_COUNT, multipartInfo.partCount);
+        }
         try {
             if (Build.VERSION.SDK_INT >= 26) {
                 context.startForegroundService(intent);
@@ -1065,7 +1074,7 @@ public class MqttBridgeService extends Service {
         publishActionResult(actionId, "wifi_scan", "completed", 0, "wifi_scan_completed", payload, timeoutMs);
     }
 
-    private void publishIncomingSms(String from, String text, long timestamp, int slot) {
+    private void publishIncomingSms(String from, String text, long timestamp, int slot, SmsMultipartInfo multipartInfo) {
         BridgeSmsStore.recordIncoming(this, from, text, timestamp);
         logConsoleEvent("sms", "Incoming SMS from " + firstNonEmpty(from, "unknown"));
         JSONObject json = new JSONObject();
@@ -1079,6 +1088,11 @@ public class MqttBridgeService extends Service {
             if (slot >= 0) {
                 json.put("sim_slot", slot);
             }
+            if (multipartInfo != null && multipartInfo.isMultipart()) {
+                json.put("multipart_ref", multipartInfo.reference);
+                json.put("multipart_part_index", multipartInfo.partIndex);
+                json.put("multipart_part_count", multipartInfo.partCount);
+            }
         } catch (JSONException ignored) {
         }
         if (currentTransportUsesHttp()) {
@@ -1086,6 +1100,20 @@ public class MqttBridgeService extends Service {
             return;
         }
         publishJson(currentConfig().topic("sms/incoming"), json);
+    }
+
+    private static SmsMultipartInfo buildMultipartInfoFromIntent(Intent intent) {
+        if (intent == null) {
+            return null;
+        }
+        String reference = intent.getStringExtra(EXTRA_MULTIPART_REF);
+        if (reference == null || reference.trim().isEmpty()) {
+            return null;
+        }
+        int partIndex = intent.getIntExtra(EXTRA_MULTIPART_PART_INDEX, 0);
+        int partCount = intent.getIntExtra(EXTRA_MULTIPART_PART_COUNT, 0);
+        SmsMultipartInfo info = new SmsMultipartInfo(reference, partIndex, partCount);
+        return info.isMultipart() ? info : null;
     }
 
     private void syncSmsAndCallsToDashboardOnce(boolean allowInitialBackfill) {
@@ -1128,6 +1156,10 @@ public class MqttBridgeService extends Service {
                     .putBoolean(doneKey, true)
                     .putLong(watermarkKey, newestTimestamp)
                     .apply();
+            if (allowInitialBackfill) {
+                publishSmsSyncState("sms_sync_start", 0, 0);
+                publishSmsSyncState("sms_sync_complete", 0, 0);
+            }
             return;
         }
         List<java.util.Map<String, Object>> messages = filterSmsSyncMessages(localMessages, watermark);
@@ -1136,6 +1168,10 @@ public class MqttBridgeService extends Service {
                     .putBoolean(doneKey, true)
                     .putLong(watermarkKey, newestTimestamp)
                     .apply();
+            if (allowInitialBackfill) {
+                publishSmsSyncState("sms_sync_start", 0, 0);
+                publishSmsSyncState("sms_sync_complete", 0, 0);
+            }
             return;
         }
         prefs.edit().putLong(watermarkKey, newestTimestamp).apply();
@@ -1173,6 +1209,10 @@ public class MqttBridgeService extends Service {
                     .putBoolean(doneKey, true)
                     .putLong(watermarkKey, newestTimestamp)
                     .apply();
+            if (allowInitialBackfill) {
+                sender.send(buildSmsSyncStatePayload(cfg, "sms_sync_start", 0, 0));
+                sender.send(buildSmsSyncStatePayload(cfg, "sms_sync_complete", 0, 0));
+            }
             return;
         }
         List<java.util.Map<String, Object>> messages = filterSmsSyncMessages(localMessages, watermark);
@@ -1181,6 +1221,10 @@ public class MqttBridgeService extends Service {
                     .putBoolean(doneKey, true)
                     .putLong(watermarkKey, newestTimestamp)
                     .apply();
+            if (allowInitialBackfill) {
+                sender.send(buildSmsSyncStatePayload(cfg, "sms_sync_start", 0, 0));
+                sender.send(buildSmsSyncStatePayload(cfg, "sms_sync_complete", 0, 0));
+            }
             return;
         }
         prefs.edit().putLong(watermarkKey, newestTimestamp).apply();

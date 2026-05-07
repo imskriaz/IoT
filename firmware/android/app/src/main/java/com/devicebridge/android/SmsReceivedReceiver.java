@@ -25,6 +25,7 @@ public class SmsReceivedReceiver extends BroadcastReceiver {
             StringBuilder body = new StringBuilder();
             String from = "";
             long timestamp = System.currentTimeMillis();
+            SmsMultipartInfo multipartInfo = null;
             for (SmsMessage message : messages) {
                 if (message == null) {
                     continue;
@@ -32,13 +33,16 @@ public class SmsReceivedReceiver extends BroadcastReceiver {
                 if (from.isEmpty() && message.getOriginatingAddress() != null) {
                     from = message.getOriginatingAddress();
                 }
+                if (multipartInfo == null) {
+                    multipartInfo = SmsMultipartInfo.fromMessage(message);
+                }
                 body.append(message.getMessageBody() == null ? "" : message.getMessageBody());
                 timestamp = Math.max(timestamp, message.getTimestampMillis());
             }
 
             int slot = intent.getIntExtra("android.telephony.extra.SLOT_INDEX", -1);
             BridgeSmsStore.recordIncoming(context, from, body.toString(), timestamp);
-            MqttBridgeService.publishIncomingFromReceiver(context, from, body.toString(), timestamp, slot);
+            MqttBridgeService.publishIncomingFromReceiver(context, from, body.toString(), timestamp, slot, multipartInfo);
         } catch (RuntimeException error) {
             Log.e(TAG, "Failed to process inbound SMS", error);
         }

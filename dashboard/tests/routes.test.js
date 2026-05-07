@@ -550,6 +550,9 @@ describe('POST /api/test/run (MQTT not connected)', () => {
     });
 
     test('skipped response includes runId, testId, and skipped flag', async () => {
+        const { clearConsoleEvents, readConsoleEvents } = require('../services/consoleEventLog');
+        clearConsoleEvents();
+
         const res = await request(app)
             .post('/api/test/run')
             .send({ deviceId: '1', testId: 'battery' });
@@ -557,6 +560,18 @@ describe('POST /api/test/run (MQTT not connected)', () => {
         expect(res.body.data).toHaveProperty('runId');
         expect(res.body.data.testId).toBe('battery');
         expect(res.body.data.skipped).toBe(true);
+
+        const events = readConsoleEvents(10, '1');
+        expect(events).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                deviceId: '1',
+                source: 'system-test',
+                data: expect.objectContaining({
+                    runId: res.body.data.runId
+                })
+            })
+        ]));
+        clearConsoleEvents();
     });
 });
 
@@ -2862,8 +2877,8 @@ describe('rendered dashboard pages', () => {
 
         const testPage = await request(app).get('/test');
 
-        expect(testPage.status).toBe(200);
-        expect(testPage.body.view).toBe('pages/test');
+        expect(testPage.status).toBe(301);
+        expect(testPage.headers.location).toBe('/console');
     });
 
     test('renders the Automation page', async () => {
@@ -2987,6 +3002,32 @@ describe('POST /api/devices', () => {
         expect(res.body.success).toBe(true);
         expect(res.body.device.id).toBe('phone-1');
         expect(res.body.device.type).toBe('phone');
+    });
+
+    test('rejects admin-created ESP devices without esp prefix', async () => {
+        const db = makeDbMock();
+        const router = require('../routes/devices');
+        const app = buildApp(router, '/api/devices', { id: 1, role: 'admin', username: 'admin' }, db);
+
+        const res = await request(app)
+            .post('/api/devices')
+            .send({ id: 'device-1', name: 'ESP32', type: 'esp32' });
+
+        expect(res.status).toBe(400);
+        expect(res.body.message).toBe('ESP device IDs must start with esp-');
+    });
+
+    test('rejects admin-created Android bridge devices without android prefix', async () => {
+        const db = makeDbMock();
+        const router = require('../routes/devices');
+        const app = buildApp(router, '/api/devices', { id: 1, role: 'admin', username: 'admin' }, db);
+
+        const res = await request(app)
+            .post('/api/devices')
+            .send({ id: 'phone-bridge-1', name: 'Android Bridge', type: 'android-sms-bridge' });
+
+        expect(res.status).toBe(400);
+        expect(res.body.message).toBe('Android device IDs must start with android-');
     });
 });
 

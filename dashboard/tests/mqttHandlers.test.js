@@ -514,6 +514,10 @@ describe('MQTTHandlers SMS storage', () => {
                 0,
                 'android-mqtt',
                 null,
+                null,
+                null,
+                null,
+                null,
                 null
             ]
         );
@@ -577,6 +581,52 @@ describe('MQTTHandlers SMS storage', () => {
                 sync: true,
                 read: 1,
                 external_id: 'android-sms-42'
+            })
+        );
+    });
+
+    test('stores multipart metadata for incoming Android MQTT SMS', async () => {
+        const { mqttService, db, room } = buildSmsSubject();
+
+        mqttService.emit('sms:incoming', 'test-device-1', {
+            from: '3=:24;82=8<3=86<2:41',
+            message: ', second part',
+            timestamp: '2026-05-06T11:02:09.420Z',
+            multipart_ref: '44',
+            multipart_part_index: 2,
+            multipart_part_count: 3,
+            sim_slot: 0
+        });
+
+        await flushAsync();
+
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('multipart_group_key'),
+            [
+                '3=:24;82=8<3=86<2:41',
+                null,
+                ', second part',
+                'incoming',
+                'received',
+                'test-device-1',
+                '2026-05-06T11:02:09.421Z',
+                0,
+                'android-mqtt',
+                0,
+                null,
+                '44',
+                2,
+                3,
+                'multipart:test-device-1:incoming:3=:24;82=8<3=86<2:41:0:44:3'
+            ]
+        );
+        expect(room.emit).toHaveBeenCalledWith(
+            'sms:received',
+            expect.objectContaining({
+                multipart_ref: '44',
+                multipart_part_index: 2,
+                multipart_part_count: 3,
+                timestamp: '2026-05-06T11:02:09.421Z'
             })
         );
     });

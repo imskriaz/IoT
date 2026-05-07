@@ -37,6 +37,7 @@ const DEVICE_REQUIRED_PAGE_PATHS = new Set([
     '/devices/queue-manager',
     '/devices/capabilities',
     '/automation',
+    '/console',
     '/esp32-console',
     '/device-about',
     '/devices/about',
@@ -1133,16 +1134,24 @@ router.get('/automation', async (req, res) => {
     }
 });
 
-router.get('/esp32-console', async (req, res) => {
+router.get('/esp32-console', (req, res) => {
+    res.redirect(301, '/console');
+});
+
+router.get('/test', (req, res) => {
+    res.redirect(301, '/console');
+});
+
+router.get('/console', async (req, res) => {
     try {
         res.render('pages/esp32-console', {
-            title: 'ESP32 MQTT Console',
+            title: 'Console',
             user: getViewUser(req),
             pageScript: 'esp32-console.js'
         });
     } catch (error) {
-        logger.error('ESP32 MQTT Console page error:', error);
-        req.flash('error', 'Failed to load ESP32 MQTT Console');
+        logger.error('Console page error:', error);
+        req.flash('error', 'Failed to load Console');
         res.redirect('/');
     }
 });
@@ -1271,21 +1280,5 @@ router.get('/ota', async (req, res) => {
         res.redirect('/');
     }
 });
-
-router.get('/test', async (req, res) => {
-    try {
-        res.render('pages/test', {
-            title: 'Device Test Center',
-            user: getViewUser(req),
-            layout: 'layouts/main',
-            pageScript: 'test.js'
-        });
-    } catch (error) {
-        logger.error('Test page error:', error);
-        req.flash('error', 'Failed to load test page');
-        res.redirect('/');
-    }
-});
-
 
 module.exports = router;

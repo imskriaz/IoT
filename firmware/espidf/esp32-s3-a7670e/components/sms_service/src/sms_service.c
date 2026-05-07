@@ -662,6 +662,78 @@ unified_action_response_t sms_service_send_with_options(
     );
 }
 
+unified_action_response_t sms_service_pull_pending(uint32_t timeout_ms, uint32_t *out_synced_count) {
+    modem_a7670_status_t modem_status = {0};
+    unified_sms_payload_t *payload = NULL;
+    const uint32_t effective_timeout_ms = sms_service_requested_timeout_ms(timeout_ms);
+    uint32_t synced_count = 0U;
+    esp_err_t err = ESP_OK;
+
+    if (out_synced_count) {
+        *out_synced_count = 0U;
+    }
+
+    modem_a7670_get_status(&modem_status);
+    if (sms_service_telephony_unavailable(&modem_status)) {
+        return sms_service_build_response(
+            UNIFIED_ACTION_CMD_GET_SMS_HISTORY,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_NOT_SUPPORTED,
+            "telephony_unavailable",
+            effective_timeout_ms
+        );
+    }
+    if (!modem_status.runtime.running || !modem_status.sim_ready) {
+        return sms_service_build_response(
+            UNIFIED_ACTION_CMD_GET_SMS_HISTORY,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_INVALID_STATE,
+            "modem_not_ready",
+            effective_timeout_ms
+        );
+    }
+
+    payload = sms_service_alloc_zeroed(sizeof(*payload));
+    if (!payload) {
+        return sms_service_build_response(
+            UNIFIED_ACTION_CMD_GET_SMS_HISTORY,
+            UNIFIED_ACTION_RESULT_FAILED,
+            ESP_ERR_NO_MEM,
+            "sms_pull_alloc_failed",
+            effective_timeout_ms
+        );
+    }
+
+    while ((err = modem_a7670_consume_pending_sms(payload, effective_timeout_ms)) == ESP_OK) {
+        sms_service_emit_incoming(payload, "incoming_sms_pull");
+        synced_count++;
+        memset(payload, 0, sizeof(*payload));
+    }
+
+    sms_service_free(payload);
+    if (out_synced_count) {
+        *out_synced_count = synced_count;
+    }
+
+    if (err == ESP_ERR_TIMEOUT && synced_count == 0U) {
+        return sms_service_build_response(
+            UNIFIED_ACTION_CMD_GET_SMS_HISTORY,
+            UNIFIED_ACTION_RESULT_TIMEOUT,
+            err,
+            "sms_pull_timeout",
+            effective_timeout_ms
+        );
+    }
+
+    return sms_service_build_response(
+        UNIFIED_ACTION_CMD_GET_SMS_HISTORY,
+        UNIFIED_ACTION_RESULT_COMPLETED,
+        ESP_OK,
+        synced_count > 0U ? "sms_pull_completed" : "sms_pull_empty",
+        effective_timeout_ms
+    );
+}
+
 void sms_service_get_status(sms_service_status_t *out_status) {
     if (!out_status) {
         return;

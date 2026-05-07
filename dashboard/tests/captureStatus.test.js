@@ -40,13 +40,13 @@ describe('capture_status helper', () => {
 
     test('parseArgs builds the device status topic and flag values', () => {
         const args = parseArgs([
-            '--device', 'ws-a7670e-476178',
+            '--device', 'esp-a7670e-476178',
             '--timeout-ms', '45000',
             '--quiet'
         ]);
 
-        expect(args.deviceId).toBe('ws-a7670e-476178');
-        expect(args.topic).toBe('device/ws-a7670e-476178/status');
+        expect(args.deviceId).toBe('esp-a7670e-476178');
+        expect(args.topic).toBe('device/esp-a7670e-476178/status');
         expect(args.timeoutMs).toBe(45000);
         expect(args.quiet).toBe(true);
         expect(args.validate).toBe(true);
@@ -84,8 +84,8 @@ describe('capture_status helper', () => {
         const capturePromise = captureStatus({
             host: '127.0.0.1',
             port: 1883,
-            deviceId: 'ws-a7670e-476178',
-            topic: 'device/ws-a7670e-476178/status',
+            deviceId: 'esp-a7670e-476178',
+            topic: 'device/esp-a7670e-476178/status',
             outDir,
             timeoutMs: 5000
         });
@@ -94,10 +94,10 @@ describe('capture_status helper', () => {
             client.emit('connect');
             client.emit(
                 'message',
-                'device/ws-a7670e-476178/status',
+                'device/esp-a7670e-476178/status',
                 Buffer.from(JSON.stringify({
                     type: 'device_status',
-                    device_id: 'ws-a7670e-476178',
+                    device_id: 'esp-a7670e-476178',
                     active_path: 'modem',
                     uptime_ms: 12345,
                     modem_signal: -1,
@@ -112,7 +112,7 @@ describe('capture_status helper', () => {
             reconnectPeriod: 0
         }));
         expect(client.subscribe).toHaveBeenCalledWith(
-            'device/ws-a7670e-476178/status',
+            'device/esp-a7670e-476178/status',
             { qos: 0 },
             expect.any(Function)
         );
@@ -120,7 +120,7 @@ describe('capture_status helper', () => {
         expect(fs.existsSync(result.outputPath)).toBe(true);
         expect(JSON.parse(fs.readFileSync(result.outputPath, 'utf8'))).toEqual(expect.objectContaining({
             type: 'device_status',
-            device_id: 'ws-a7670e-476178',
+            device_id: 'esp-a7670e-476178',
             imei: '123456789012345'
         }));
         expect(result.validation).toEqual(expect.objectContaining({

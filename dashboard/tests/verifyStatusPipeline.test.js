@@ -53,7 +53,7 @@ describe('verify_status_pipeline helper', () => {
     test('compareStatusPipeline matches normalized dashboard fields from firmware payload', () => {
         const comparison = compareStatusPipeline(
             {
-                device_id: 'ws-a7670e-476178',
+                device_id: 'esp-a7670e-476178',
                 active_path: 'modem',
                 modem_operator_name: 'Grameenphone',
                 modem_ip_address: '10.172.126.118',
@@ -134,7 +134,7 @@ describe('verify_status_pipeline helper', () => {
         const payloadPath = path.join(tempDir, 'payload.json');
 
         fs.writeFileSync(payloadPath, JSON.stringify({
-            device_id: 'ws-a7670e-476178',
+            device_id: 'esp-a7670e-476178',
             active_path: 'modem',
             modem_operator_name: 'Grameenphone',
             modem_ip_address: '10.172.126.118',
@@ -157,7 +157,7 @@ describe('verify_status_pipeline helper', () => {
                 status: 200,
                 data: {
                     success: true,
-                    deviceId: 'ws-a7670e-476178',
+                    deviceId: 'esp-a7670e-476178',
                     data: {
                         activePath: 'modem',
                         operator: 'Grameenphone',
@@ -197,11 +197,11 @@ describe('verify_status_pipeline helper', () => {
             })
         }));
         expect(client.get).toHaveBeenCalledWith(
-            '/api/status?deviceId=ws-a7670e-476178',
+            '/api/status?deviceId=esp-a7670e-476178',
             expect.any(Object)
         );
         expect(result.comparison.ok).toBe(true);
-        expect(result.deviceId).toBe('ws-a7670e-476178');
+        expect(result.deviceId).toBe('esp-a7670e-476178');
         expect(result.payloadPath).toBe(payloadPath);
     });
 });

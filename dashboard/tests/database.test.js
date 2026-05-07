@@ -42,6 +42,17 @@ describe('Database schema', () => {
         expect(cols.length).toBeGreaterThan(0);
     });
 
+    test('device_status_cache table exists for restart-safe live status', async () => {
+        const cols = await db.all(`PRAGMA table_info(device_status_cache)`);
+        const names = cols.map(c => c.name);
+
+        expect(names).toEqual(expect.arrayContaining([
+            'device_id',
+            'payload_json',
+            'updated_at'
+        ]));
+    });
+
     test('sims table exists with slot-based inventory columns', async () => {
         const cols = await db.all(`PRAGMA table_info(sims)`);
         const names = cols.map(c => c.name);

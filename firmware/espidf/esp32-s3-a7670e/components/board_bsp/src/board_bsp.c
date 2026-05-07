@@ -37,7 +37,7 @@ esp_err_t board_bsp_init(void) {
     snprintf(
         s_identity.device_id,
         sizeof(s_identity.device_id),
-        "ws-a7670e-%02x%02x%02x",
+        "esp-a7670e-%02x%02x%02x",
         mac[3],
         mac[4],
         mac[5]

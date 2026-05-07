@@ -1,7 +1,121 @@
+const MODULE_CAPABILITY_KEYS = new Set([
+    'audio',
+    'battery',
+    'calls',
+    'camera',
+    'display',
+    'gpio',
+    'gps',
+    'intercom',
+    'internet',
+    'keyboard',
+    'modem',
+    'nfc',
+    'rfid',
+    'sd',
+    'sms',
+    'storage',
+    'touch',
+    'ussd',
+    'wifi'
+]);
+
+const RUNTIME_STATUS_KEYS = new Set([
+    'active_path',
+    'activePath',
+    'applied_version',
+    'appliedVersion',
+    'call',
+    'charging',
+    'dashboard_ack_age_ms',
+    'dashboardAckAgeMs',
+    'desired_version',
+    'desiredVersion',
+    'imei',
+    'in_sync',
+    'inSync',
+    'ip',
+    'message',
+    'messageId',
+    'message_id',
+    'moduleHealth',
+    'mqtt',
+    'network',
+    'online',
+    'operator',
+    'queueState',
+    'reboot_reason',
+    'rebootReason',
+    'sim',
+    'simNumber',
+    'sim_number',
+    'sync',
+    'systemRuntime',
+    'temperature',
+    'timestamp',
+    'transport',
+    'type',
+    'uptime',
+    'uptimeMs',
+    'uptime_ms',
+    'voltageMv',
+    'voltage_mV'
+]);
+
+const RUNTIME_STATUS_PREFIXES = [
+    'dashboard_',
+    'free_',
+    'health_',
+    'internal_',
+    'largest_',
+    'low_',
+    'missing_',
+    'modem_',
+    'mqtt_',
+    'queue_',
+    'sd_',
+    'sms_',
+    'stack_',
+    'status_',
+    'storage_',
+    'task_',
+    'wifi_'
+];
+
+function isRuntimeStatusCapabilityKey(key) {
+    if (MODULE_CAPABILITY_KEYS.has(key)) return false;
+    if (RUNTIME_STATUS_KEYS.has(key)) return true;
+    return RUNTIME_STATUS_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
+function sanitizeStoredCapabilities(caps = {}) {
+    const clean = {};
+    if (!caps || typeof caps !== 'object' || Array.isArray(caps)) {
+        return clean;
+    }
+
+    for (const [key, value] of Object.entries(caps)) {
+        if (!key || value == null || isRuntimeStatusCapabilityKey(key)) continue;
+
+        if (
+            MODULE_CAPABILITY_KEYS.has(key)
+            && typeof value === 'object'
+            && !Array.isArray(value)
+        ) {
+            clean[key] = hasMeaningfulObject(value);
+            continue;
+        }
+
+        clean[key] = value;
+    }
+
+    return clean;
+}
+
 function parseCapabilities(row = {}) {
     let caps = {};
     try {
-        caps = JSON.parse(row.capabilities || '{}');
+        caps = sanitizeStoredCapabilities(JSON.parse(row.capabilities || '{}'));
     } catch (_) {
         caps = {};
     }
@@ -236,5 +350,6 @@ module.exports = {
     inferCapabilitiesFromStatus,
     isCapabilityAvailable,
     mergeCapabilities,
-    parseCapabilities
+    parseCapabilities,
+    sanitizeStoredCapabilities
 };

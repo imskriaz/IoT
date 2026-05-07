@@ -608,7 +608,10 @@ esp_err_t wifi_mgr_request_runtime_connect(const char *ssid, const char *passwor
     char effective_ssid[CONFIG_MGR_WIFI_SSID_LEN] = {0};
     bool started = false;
     bool connected = false;
+    bool ip_assigned = false;
+    bool already_on_target = false;
     bool apply_disconnect = false;
+    bool direct_connect = false;
     esp_err_t err = ESP_OK;
 
     if (!ssid || ssid[0] == '\0') {
@@ -653,18 +656,36 @@ esp_err_t wifi_mgr_request_runtime_connect(const char *ssid, const char *passwor
 
     started = s_status.started;
     connected = s_status.connected;
+    ip_assigned = s_status.ip_assigned;
+    already_on_target = connected &&
+        ip_assigned &&
+        strncmp(s_status.ssid, ssid, sizeof(s_status.ssid)) == 0;
     s_runtime_connect_suppressed = false;
     s_status.reconnect_suppressed = false;
     s_startup_connect_suppressed = false;
     s_next_connect_attempt_ms = 0U;
     wifi_mgr_reset_absent_retry_backoff();
-    if (!connected) {
-        wifi_mgr_request_connect_locked();
+    if (already_on_target) {
+        s_status.runtime.last_error = ESP_OK;
+        s_status.runtime.last_error_text[0] = '\0';
+        s_status.runtime.state = UNIFIED_MODULE_STATE_RUNNING;
+    } else if (!connected) {
+        if (started) {
+            direct_connect = true;
+            s_connect_requested = false;
+        } else {
+            wifi_mgr_request_connect_locked();
+        }
     } else {
         s_status.connected = false;
         s_status.ip_assigned = false;
         s_status.ip_address[0] = '\0';
-        wifi_mgr_request_connect_locked();
+        if (started) {
+            direct_connect = true;
+            s_connect_requested = false;
+        } else {
+            wifi_mgr_request_connect_locked();
+        }
         apply_disconnect = true;
     }
     snprintf(effective_ssid, sizeof(effective_ssid), "%s", s_status.ssid);
@@ -680,9 +701,23 @@ esp_err_t wifi_mgr_request_runtime_connect(const char *ssid, const char *passwor
         }
     }
 
+    if (already_on_target) {
+        ESP_LOGI(TAG, "runtime connect already active ssid=%s", effective_ssid[0] ? effective_ssid : "<unset>");
+        return ESP_OK;
+    }
+
     if (apply_disconnect) {
         (void)esp_wifi_disconnect();
         vTaskDelay(pdMS_TO_TICKS(150));
+    }
+
+    if (direct_connect) {
+        ESP_LOGI(TAG, "runtime direct connect requested ssid=%s", effective_ssid[0] ? effective_ssid : "<unset>");
+        err = wifi_mgr_issue_connect("runtime connect requested");
+        if (err == ESP_ERR_WIFI_CONN || err == ESP_ERR_WIFI_STATE) {
+            return ESP_OK;
+        }
+        return err;
     }
 
     ESP_LOGI(TAG, "runtime connect request scheduled ssid=%s", effective_ssid[0] ? effective_ssid : "<unset>");

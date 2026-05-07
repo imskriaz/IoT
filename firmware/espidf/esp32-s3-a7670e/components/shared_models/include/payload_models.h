@@ -11,6 +11,9 @@ typedef struct {
      * multiple text-mode segments while staying below the MQTT command budget. */
     char text[UNIFIED_SMS_TEXT_MAX_LEN];
     char detail[UNIFIED_TEXT_SHORT_LEN];
+    char multipart_ref[UNIFIED_TEXT_SHORT_LEN];
+    uint16_t multipart_part_index;
+    uint16_t multipart_part_count;
     uint8_t sim_slot;
     uint32_t timestamp_ms;
     bool outgoing;

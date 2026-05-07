@@ -6,6 +6,9 @@
     <meta name="csrf-token" content="<%= csrfToken || '' %>">
     <script>
         window.DEVICE_ID = '<%- (deviceId || '').replace(/'/g, '') %>';
+        window.INITIAL_DEVICE_STATUS = <%- typeof initialDeviceStatusJson === 'string' ? initialDeviceStatusJson : 'null' %>;
+        window.INITIAL_SERVER_CONNECTED = <%- initialServerConnected === false ? 'false' : 'true' %>;
+        window.INITIAL_MQTT_STATUS = <%- typeof initialMqttStatusJson === 'string' ? initialMqttStatusJson : 'null' %>;
         window.setActiveDeviceContext = function (deviceId) {
             const nextId = String(deviceId || '').trim();
             window.DEVICE_ID = nextId;
