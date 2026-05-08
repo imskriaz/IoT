@@ -11,7 +11,7 @@ const {
 } = require('../utils/deviceCapabilities');
 const { getDeviceModuleHealth } = require('../utils/moduleHealth');
 const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
-const { hydrateDeviceStatusFromCache } = require('../utils/deviceStatusCache');
+const { hydrateDeviceStatusFromCache, readFreshDeviceStatusCache } = require('../utils/deviceStatusCache');
 const { normalizeSsid } = require('../utils/hostWifiDiagnostics');
 const {
     publishWifiConfigPersistence,
@@ -30,6 +30,41 @@ function wantsLiveRefresh(req) {
 
 function resolveRequestDeviceId(req) {
     return resolveDeviceId(req, DEFAULT_DEVICE_ID);
+}
+
+function firstFiniteNumber(...values) {
+    for (const value of values) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return null;
+}
+
+function runtimeFromCachedStatus(cached) {
+    if (!cached || typeof cached !== 'object') return null;
+    const runtime = {
+        heapTotal: firstFiniteNumber(cached.heap_total_bytes),
+        heapUsed: firstFiniteNumber(cached.heap_used_bytes),
+        heapFree: firstFiniteNumber(cached.heap_free_bytes, cached.free_heap_bytes),
+        heapLargestFreeBlock: firstFiniteNumber(cached.heap_largest_free_block_bytes, cached.largest_free_block_bytes),
+        runtimeRamTotal: firstFiniteNumber(cached.runtime_ram_total_bytes),
+        runtimeRamUsed: firstFiniteNumber(cached.runtime_ram_used_bytes),
+        runtimeRamFree: firstFiniteNumber(cached.runtime_ram_free_bytes, cached.internal_free_heap_bytes),
+        runtimeRamLargestFreeBlock: firstFiniteNumber(cached.runtime_ram_largest_free_block_bytes, cached.internal_largest_free_block_bytes),
+        psramTotal: firstFiniteNumber(cached.psram_total_bytes),
+        psramUsed: firstFiniteNumber(cached.psram_used_bytes),
+        psramFree: firstFiniteNumber(cached.psram_free_bytes, cached.free_psram_bytes),
+        psramLargestFreeBlock: firstFiniteNumber(cached.psram_largest_free_block_bytes),
+        otherHeapTotal: firstFiniteNumber(cached.other_heap_total_bytes),
+        otherHeapUsed: firstFiniteNumber(cached.other_heap_used_bytes),
+        otherHeapFree: firstFiniteNumber(cached.other_heap_free_bytes),
+        freeHeap: firstFiniteNumber(cached.free_heap_bytes),
+        freePsram: firstFiniteNumber(cached.free_psram_bytes),
+        largestFreeBlock: firstFiniteNumber(cached.largest_free_block_bytes),
+        rebootReason: cached.reboot_reason || null,
+        degradedReason: cached.degraded_reason || null
+    };
+    return Object.values(runtime).some((value) => value !== null && value !== undefined) ? runtime : null;
 }
 
 function runQueuedDeviceOperation(deviceId, task) {
@@ -254,9 +289,17 @@ async function readStoredSimNumber(db, deviceId) {
 async function buildStatusEnvelope(req, deviceId) {
     const db = req.app.locals.db;
     await hydrateDeviceStatusFromCache(db, modemService, deviceId).catch(() => null);
+    const cachedStatus = await readFreshDeviceStatusCache(db, deviceId).catch(() => null);
     const status = modemService.getDeviceStatus(deviceId);
     const storedSimRows = await readStoredSimRows(db, deviceId).catch(() => []);
     let deviceStatus = buildDashboardDeviceStatus(status, status.online);
+    const cachedRuntime = runtimeFromCachedStatus(cachedStatus);
+    if (cachedRuntime) {
+        deviceStatus.systemRuntime = {
+            ...(deviceStatus.systemRuntime || {}),
+            ...cachedRuntime
+        };
+    }
     deviceStatus = applyStoredSimFallback(deviceStatus, storedSimRows);
 
     if (!deviceStatus.simNumber) {

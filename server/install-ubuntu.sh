@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOMAIN="${DOMAIN:-device.atebd.com}"
+DOMAIN="${DOMAIN:-your-hostname.example.com}"
 APP_DIR="${APP_DIR:-/opt/iot/dashboard}"
 SERVICE_NAME="${SERVICE_NAME:-iot-dashboard}"
 NGINX_SITE_NAME="${NGINX_SITE_NAME:-device-atebd-server}"

@@ -57,6 +57,21 @@ describe('modemService.getStatus', () => {
             type: 'device_status',
             active_path: 'wifi',
             uptime_ms: 120000,
+            heap_total_bytes: 8743411,
+            heap_used_bytes: 605904,
+            heap_free_bytes: 8137507,
+            heap_largest_free_block_bytes: 7995392,
+            runtime_ram_total_bytes: 354803,
+            runtime_ram_used_bytes: 264836,
+            runtime_ram_free_bytes: 89967,
+            runtime_ram_largest_free_block_bytes: 31744,
+            psram_total_bytes: 8388608,
+            psram_used_bytes: 341068,
+            psram_free_bytes: 8047540,
+            psram_largest_free_block_bytes: 7995392,
+            other_heap_total_bytes: 0,
+            other_heap_used_bytes: 0,
+            other_heap_free_bytes: 0,
             wifi_configured: true,
             wifi_started: true,
             wifi_connected: true,
@@ -105,7 +120,18 @@ describe('modemService.getStatus', () => {
             queueDepth: 3
         }));
         expect(status.systemRuntime).toEqual(expect.objectContaining({
-            freeHeap: null,
+            heapTotal: 8743411,
+            heapUsed: 605904,
+            freeHeap: 8137507,
+            runtimeRamTotal: 354803,
+            runtimeRamUsed: 264836,
+            runtimeRamFree: 89967,
+            psramTotal: 8388608,
+            psramUsed: 341068,
+            psramFree: 8047540,
+            otherHeapTotal: 0,
+            otherHeapUsed: 0,
+            otherHeapFree: 0,
             rebootReason: null
         }));
     });

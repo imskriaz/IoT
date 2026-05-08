@@ -152,11 +152,13 @@
             const synced = Number(payload.synced || 0);
             text.textContent = payload?.message
                 ? String(payload.message)
+                : payload?.warning
+                    ? String(payload.warning)
                 : payload?.error
                     ? `SMS sync stopped: ${String(payload.error)}`
                     : synced > 0
                 ? `Sync complete. ${synced} message${synced === 1 ? '' : 's'} copied.`
-                : 'Sync complete. Refreshing dashboard.';
+                : 'Sync complete. No new readable messages found.';
         }
         smsSyncHideTimer = setTimeout(function () {
             overlay.classList.add('d-none');
@@ -185,7 +187,9 @@
             if (!response?.success) {
                 throw new Error(response?.message || 'Failed to request message pull');
             }
-            showToast(response.message || 'Message pull requested', 'success');
+            const toastType = response.warning || response?.diagnostics?.blocker ? 'warning' : 'success';
+            setSmsSyncOverlay(false, response);
+            showToast(response.message || 'Message pull completed', toastType);
         } catch (error) {
             setSmsSyncOverlay(false, { synced: 0 });
             showToast(error.message || 'Failed to request message pull', 'danger');

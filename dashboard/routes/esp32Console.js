@@ -209,6 +209,25 @@ const COMMAND_PRESETS = [
 ];
 
 const KNOWN_CONSOLE_COMMANDS = new Set(COMMAND_PRESETS.map((preset) => preset.command));
+
+function isFailedConsoleResult(result) {
+    if (!result || typeof result !== 'object') return false;
+    const statusText = String(result.status || result.result || '').trim().toLowerCase();
+    return result.success === false
+        || ['failed', 'rejected', 'timeout', 'error'].includes(statusText)
+        || String(result.detail || '').trim().toLowerCase().endsWith('_failed');
+}
+
+function consoleResultMessage(result) {
+    return String(
+        result?.message
+        || result?.error
+        || result?.detail
+        || result?.payload?.error
+        || 'Device rejected or failed the command'
+    ).trim();
+}
+
 function chainWithPrelude(title, steps) {
     return [`# ${title}`, 'AT', 'wait 500', ...steps];
 }
@@ -1067,8 +1086,10 @@ router.post('/command', async (req, res) => {
             }
         );
 
-        res.json({
-            success: true,
+        const commandFailed = isFailedConsoleResult(result);
+        res.status(commandFailed ? 502 : 200).json({
+            success: !commandFailed,
+            message: commandFailed ? consoleResultMessage(result) : undefined,
             deviceId,
             command,
             rawLine: rawLine || undefined,

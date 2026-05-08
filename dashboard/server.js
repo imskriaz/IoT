@@ -37,6 +37,7 @@ const mqttRoutes = require('./routes/mqtt');
 const usersRoute = require('./routes/users');
 const onboardingRoute = require('./routes/onboarding');
 const androidBridgeAdapterRoute = require('./routes/androidBridgeAdapter');
+const httpSmsAdapterRoute = require('./routes/httpSmsAdapter');
 const deviceGroupsRoute = require('./routes/deviceGroups');
 const apiKeysRoute = require('./routes/apiKeys');
 const webhooksRoute = require('./routes/webhooks');
@@ -858,6 +859,7 @@ try {
     app.use('/api/webhooks', authMiddleware, webhooksRoute);
     app.use('/api/automation', authMiddleware, automationRoute);
     app.use('/v1/android/bridge', authMiddleware, androidBridgeAdapterRoute);
+    app.use('/v1', authMiddleware, httpSmsAdapterRoute);
     app.use('/', authMiddleware, onboardingRoute);
     app.use('/', authMiddleware, indexRoutes);
 } catch (error) {

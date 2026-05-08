@@ -74,6 +74,22 @@ function normalizeMqttContractPayload(payload = {}) {
     return normalized;
 }
 
+function isFailedCommandResponse(response) {
+    if (!response || typeof response !== 'object') return false;
+    if (response.success === false) return true;
+
+    const result = String(response.result || '').trim().toLowerCase();
+    if (['failed', 'timeout', 'rejected', 'error'].includes(result)) return true;
+
+    const status = String(response.status || '').trim().toLowerCase();
+    return ['failed', 'timeout', 'rejected', 'error'].includes(status);
+}
+
+function commandResponseErrorMessage(response, fallback = 'Command failed') {
+    if (!response || typeof response !== 'object') return fallback;
+    return response.error || response.message || response.detail || response.reason || fallback;
+}
+
 function buildOptionsFromEnvironment(fallback = {}, overrides = {}) {
     const username = overrides.username ?? (hasEnv('MQTT_USER') ? process.env.MQTT_USER : fallback.username);
     const password = overrides.password ?? (hasEnv('MQTT_PASSWORD') ? process.env.MQTT_PASSWORD : fallback.password);
@@ -1721,6 +1737,12 @@ class MQTTService extends EventEmitter {
         if (!this._canDbRun(db)) return;
 
         const canReadRows = this._hasDbMethods(db, ['all']);
+        const completedFailureRows = canReadRows ? await db.all(
+            `SELECT *
+             FROM device_command_queue
+             WHERE status = 'completed'
+               AND response_payload IS NOT NULL`
+        ) : [];
         const replaySafeRows = canReadRows ? await db.all(
             `SELECT *
              FROM device_command_queue
@@ -1733,6 +1755,31 @@ class MQTTService extends EventEmitter {
              WHERE status IN ('dispatching', 'waiting_response')
                AND replay_safe = 0`
         ) : [];
+
+        const correctedFailureDevices = new Set();
+        for (const row of Array.isArray(completedFailureRows) ? completedFailureRows : []) {
+            let response = null;
+            try {
+                response = JSON.parse(row.response_payload);
+            } catch (_) {
+                response = null;
+            }
+            if (!isFailedCommandResponse(response)) continue;
+
+            const detail = commandResponseErrorMessage(response, `Command ${row.command} failed`);
+            await this._updatePersistentQueueRow(row.id, {
+                status: 'failed',
+                last_error: detail,
+                completed_at: row.completed_at || this._sqlTimestamp(),
+                next_attempt_at: null
+            });
+            await this._syncSmsStatusFromQueueRow({
+                ...row,
+                status: 'failed',
+                last_error: detail
+            }, 'failed', detail);
+            correctedFailureDevices.add(row.device_id);
+        }
 
         await this._dbRun(db,
             `UPDATE device_command_queue
@@ -1769,6 +1816,9 @@ class MQTTService extends EventEmitter {
         }
         await this._reconcileSmsRowsFromQueueState();
         await this._markStaleSmsWithoutQueue();
+        for (const deviceId of correctedFailureDevices) {
+            await this._emitDeviceQueueState(deviceId);
+        }
 
         this._persistentQueueRecovered = true;
     }
@@ -1990,7 +2040,7 @@ class MQTTService extends EventEmitter {
             [limit]
         );
 
-        for (const row of rows) {
+        for (const row of Array.isArray(rows) ? rows : []) {
             await this._syncSmsStatusFromQueueRow(row);
         }
     }
@@ -2022,7 +2072,7 @@ class MQTTService extends EventEmitter {
         );
 
         const touchedDevices = new Set();
-        for (const row of rows) {
+        for (const row of Array.isArray(rows) ? rows : []) {
             await this._dbRun(db,
                 `UPDATE sms
                  SET status = 'ambiguous',
@@ -2079,7 +2129,12 @@ class MQTTService extends EventEmitter {
                 messageId: row.message_id
             });
         } else {
-            waiter.reject(new Error(row.last_error || `Command ${row.command} ${row.status}`));
+            const error = new Error(row.last_error || payload?.error || payload?.message || payload?.detail || `Command ${row.command} ${row.status}`);
+            error.response = payload;
+            error.queueId = row.id;
+            error.messageId = row.message_id;
+            error.status = row.status;
+            waiter.reject(error);
         }
     }
 
@@ -2448,6 +2503,29 @@ class MQTTService extends EventEmitter {
                     }
                 );
                 if (usesAsyncResult) {
+                    return;
+                }
+                if (isFailedCommandResponse(response)) {
+                    const detail = commandResponseErrorMessage(response, `Command ${row.command} failed`);
+                    await this._updatePersistentQueueRow(row.id, {
+                        status: 'failed',
+                        response_payload: JSON.stringify(response),
+                        completed_at: this._sqlTimestamp(),
+                        last_error: detail,
+                        next_attempt_at: null
+                    });
+                    await this._syncSmsStatusFromQueueRow({
+                        ...row,
+                        status: 'failed',
+                        last_error: detail
+                    }, 'failed', detail);
+                    const failed = this._hasDbMethods(db, ['get'])
+                        ? await db.get(`SELECT * FROM device_command_queue WHERE id = ?`, [row.id])
+                        : null;
+                    if (failed) {
+                        await this._resolvePersistentQueueWaiter(failed);
+                    }
+                    await this._emitDeviceQueueState(row.device_id);
                     return;
                 }
                 await this._markPersistentQueueCompleted(row, response);

@@ -32,6 +32,7 @@ const SERVER_ROUTE_MOUNTS = [
     { file: 'webhooks.js', basePath: '/api/webhooks', tag: 'Webhooks' },
     { file: 'automation.js', basePath: '/api/automation', tag: 'Automation' },
     { file: 'androidBridgeAdapter.js', basePath: '/v1/android/bridge', tag: 'Android Bridge' },
+    { file: 'httpSmsAdapter.js', basePath: '/v1', tag: 'httpSMS Adapter' },
     { file: 'auth.js', basePath: '/auth', tag: 'Auth' },
     { file: 'users.js', basePath: '/admin', tag: 'Admin' },
     { file: 'onboarding.js', basePath: '', tag: 'Onboarding' },

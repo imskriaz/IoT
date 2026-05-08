@@ -14,6 +14,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 const { DEFAULT_DEVICE_ID } = require('../config/device');
+const { resolveDeviceId } = require('../utils/deviceResolver');
 const { admin: adminMiddleware } = require('../middleware/auth');
 
 const FIRMWARE_DIR = path.join(__dirname, '../data/firmware');
@@ -69,10 +70,26 @@ function isLoopbackHost(hostname) {
     return ['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'].includes(normalized);
 }
 
+function configuredUrlIsReachableFromDevice(value) {
+    try {
+        const parsed = new URL(String(value || '').trim());
+        return !isLoopbackHost(parsed.hostname);
+    } catch (_) {
+        return false;
+    }
+}
+
 function getOtaBaseUrl(req) {
-    const configured = (process.env.OTA_BASE_URL || process.env.PUBLIC_BASE_URL || '').trim();
-    if (configured) {
-        return configured.replace(/\/+$/, '');
+    const otaBaseUrl = String(process.env.OTA_BASE_URL || '').trim();
+    if (otaBaseUrl) {
+        return configuredUrlIsReachableFromDevice(otaBaseUrl)
+            ? otaBaseUrl.replace(/\/+$/, '')
+            : null;
+    }
+
+    const publicBaseUrl = String(process.env.PUBLIC_BASE_URL || '').trim();
+    if (publicBaseUrl && configuredUrlIsReachableFromDevice(publicBaseUrl)) {
+        return publicBaseUrl.replace(/\/+$/, '');
     }
 
     const host = req.get('host');
@@ -94,6 +111,32 @@ function buildSignedFirmwareUrl(req, filename) {
     const expires = Date.now() + (15 * 60 * 1000);
     const sig = createDownloadSignature(filename, expires);
     return `${baseUrl}/api/ota/download/${encodeURIComponent(filename)}?expires=${expires}&sig=${sig}`;
+}
+
+function isFailedOtaResponse(response) {
+    if (!response || typeof response !== 'object') return false;
+    if (response.success === false) return true;
+    const result = String(response.result || response.status || '').trim().toLowerCase();
+    return ['failed', 'timeout', 'rejected', 'error'].includes(result);
+}
+
+function otaFailureMessage(response, fallback = 'OTA update failed on device') {
+    if (!response || typeof response !== 'object') return fallback;
+    return response.error || response.message || response.detail || response.reason || fallback;
+}
+
+function emitOtaFailure(deviceId, filename, firmwareUrl, response) {
+    if (global.io) {
+        const payload = {
+            deviceId,
+            filename,
+            firmwareUrl,
+            message: otaFailureMessage(response),
+            response
+        };
+        global.io.to('device:' + deviceId).emit('ota:error', payload);
+        global.io.to('device:' + deviceId).emit('ota:failed', payload);
+    }
 }
 
 router.get('/download/:filename', async (req, res) => {
@@ -121,9 +164,24 @@ router.get('/download/:filename', async (req, res) => {
             return res.status(404).json({ success: false, message: 'Firmware file not found' });
         }
 
+        const stat = fs.statSync(filePath);
+        logger.info('OTA firmware download requested', {
+            filename,
+            size: stat.size,
+            ip: req.ip,
+            userAgent: req.get('user-agent') || null
+        });
         res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Length', stat.size);
+        res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Cache-Control', 'private, max-age=300');
-        res.sendFile(filePath);
+        res.sendFile(filePath, (error) => {
+            if (!error) return;
+            logger.error('OTA download send error:', error);
+            if (!res.headersSent) {
+                res.status(500).json({ success: false, message: 'Failed to download firmware' });
+            }
+        });
     } catch (error) {
         logger.error('OTA download error:', error);
         res.status(500).json({ success: false, message: 'Failed to download firmware' });
@@ -304,13 +362,23 @@ router.post('/flash', adminMiddleware, async (req, res) => {
             });
         }
 
-        await global.mqttService.publishCommand(
+        const commandResponse = await global.mqttService.publishCommand(
             deviceId,
             'ota-update',
             { url: firmwareUrl, timeout: OTA_COMMAND_TIMEOUT_MS },
-            false,
-            OTA_COMMAND_TIMEOUT_MS
+            true,
+            OTA_COMMAND_TIMEOUT_MS,
+            { source: 'dashboard', domain: 'system' }
         );
+
+        if (isFailedOtaResponse(commandResponse)) {
+            emitOtaFailure(deviceId, filename, firmwareUrl, commandResponse);
+            return res.status(502).json({
+                success: false,
+                message: otaFailureMessage(commandResponse),
+                data: { deviceId, firmwareUrl, response: commandResponse }
+            });
+        }
 
         // Record in history and keep only last 10 per device
         const db = req.app.locals.db;
@@ -330,15 +398,36 @@ router.post('/flash', adminMiddleware, async (req, res) => {
             );
         }
 
-        // Notify all browser clients that OTA has started
+        // Notify all browser clients that OTA was accepted by the device.
         if (global.io) {
-            global.io.to('device:' + deviceId).emit('ota:started', { deviceId, filename, firmwareUrl });
+            global.io.to('device:' + deviceId).emit('ota:complete', {
+                deviceId,
+                filename,
+                firmwareUrl,
+                response: commandResponse
+            });
         }
 
         logger.info(`OTA flash triggered on ${deviceId} — url: ${firmwareUrl}`);
-        res.json({ success: true, message: 'OTA update triggered', data: { deviceId, firmwareUrl } });
+        res.json({ success: true, message: 'OTA update applied', data: { deviceId, firmwareUrl, response: commandResponse } });
     } catch (error) {
         logger.error('OTA flash error:', error);
+        if (error?.response) {
+            const { filename } = req.body || {};
+            const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+            emitOtaFailure(deviceId, filename, null, error.response);
+            return res.status(502).json({
+                success: false,
+                message: error.message || otaFailureMessage(error.response),
+                data: {
+                    deviceId,
+                    response: error.response,
+                    queueId: error.queueId,
+                    messageId: error.messageId,
+                    status: error.status
+                }
+            });
+        }
         res.status(500).json({ success: false, message: 'Failed to trigger OTA update' });
     }
 });
@@ -394,13 +483,23 @@ router.post('/rollback', adminMiddleware, async (req, res) => {
             });
         }
 
-        await global.mqttService.publishCommand(
+        const commandResponse = await global.mqttService.publishCommand(
             deviceId,
             'ota-update',
             { url: firmwareUrl, timeout: OTA_COMMAND_TIMEOUT_MS },
-            false,
-            OTA_COMMAND_TIMEOUT_MS
+            true,
+            OTA_COMMAND_TIMEOUT_MS,
+            { source: 'dashboard', domain: 'system' }
         );
+
+        if (isFailedOtaResponse(commandResponse)) {
+            emitOtaFailure(deviceId, filename, firmwareUrl, commandResponse);
+            return res.status(502).json({
+                success: false,
+                message: otaFailureMessage(commandResponse),
+                data: { deviceId, filename, firmwareUrl, response: commandResponse }
+            });
+        }
 
         // Record rollback in history and prune
         await db.run(
@@ -415,13 +514,33 @@ router.post('/rollback', adminMiddleware, async (req, res) => {
         );
 
         if (global.io) {
-            global.io.to('device:' + deviceId).emit('ota:started', { deviceId, filename, firmwareUrl });
+            global.io.to('device:' + deviceId).emit('ota:complete', {
+                deviceId,
+                filename,
+                firmwareUrl,
+                response: commandResponse
+            });
         }
 
         logger.info(`OTA rollback triggered on ${deviceId} — filename: ${filename}`);
-        res.json({ success: true, message: 'Rollback triggered', data: { deviceId, filename, firmwareUrl } });
+        res.json({ success: true, message: 'Rollback applied', data: { deviceId, filename, firmwareUrl, response: commandResponse } });
     } catch (error) {
         logger.error('OTA rollback error:', error);
+        if (error?.response) {
+            const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+            emitOtaFailure(deviceId, null, null, error.response);
+            return res.status(502).json({
+                success: false,
+                message: error.message || otaFailureMessage(error.response),
+                data: {
+                    deviceId,
+                    response: error.response,
+                    queueId: error.queueId,
+                    messageId: error.messageId,
+                    status: error.status
+                }
+            });
+        }
         res.status(500).json({ success: false, message: 'Failed to trigger rollback' });
     }
 });

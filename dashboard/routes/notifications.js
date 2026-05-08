@@ -29,43 +29,70 @@ function parseIdList(value) {
         .filter(Number.isFinite);
 }
 
-function parseMetadata(row) {
-    if (!row || !row.metadata) return row;
-    try {
-        return { ...row, metadata: JSON.parse(row.metadata) };
-    } catch (_) {
-        return { ...row, metadata: null };
-    }
+function requestDeviceId(req) {
+    return String(req.body?.deviceId || req.body?.device || req.query.deviceId || req.query.device || '').trim();
 }
 
-function buildWhere(req) {
+function parseMetadata(row) {
+    if (!row) return row;
+    let metadata = null;
+    if (!row.metadata) {
+        metadata = null;
+    } else {
+        try {
+            metadata = JSON.parse(row.metadata);
+        } catch (_) {
+            metadata = null;
+        }
+    }
+    const parsed = { ...row, metadata };
+    const actionUrl = notificationService.buildNotificationActionUrl?.({
+        ...parsed,
+        metadata,
+        actionUrl: parsed.action_url,
+        deviceId: parsed.device_id
+    });
+    if (actionUrl) {
+        parsed.action_url = actionUrl;
+    }
+    return parsed;
+}
+
+function buildWhere(req, options = {}) {
+    const alias = String(options.alias || '').trim();
+    const prefix = alias ? `${alias}.` : '';
     const user = currentUser(req);
     const params = [];
-    const where = ['(user_id IS NULL OR user_id = ?)'];
+    const where = [`(${prefix}user_id IS NULL OR ${prefix}user_id = ?)`];
     params.push(user?.id || 0);
 
     const read = VALID_READ_FILTERS.has(String(req.query.read || '').toLowerCase())
         ? String(req.query.read).toLowerCase()
         : 'all';
-    if (read === 'read') where.push('read = 1');
-    if (read === 'unread') where.push('COALESCE(read, 0) = 0');
+    if (read === 'read') where.push(`${prefix}read = 1`);
+    if (read === 'unread') where.push(`COALESCE(${prefix}read, 0) = 0`);
 
     const category = String(req.query.category || 'all').trim().toLowerCase();
     if (VALID_CATEGORIES.has(category) && category !== 'all') {
-        where.push('category = ?');
+        where.push(`${prefix}category = ?`);
         params.push(category);
     }
 
     const deviceId = String(req.query.deviceId || req.query.device || '').trim();
     if (deviceId) {
-        where.push('(device_id = ? OR device_id IS NULL)');
+        where.push(`${prefix}device_id = ?`);
         params.push(deviceId);
     }
 
     const search = String(req.query.q || '').trim();
     if (search) {
-        where.push('(title LIKE ? OR message LIKE ? OR device_id LIKE ?)');
-        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+        if (options.includeDeviceLabelSearch) {
+            where.push(`(${prefix}title LIKE ? OR ${prefix}message LIKE ? OR ${prefix}device_id LIKE ? OR d.name LIKE ?)`);
+            params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+        } else {
+            where.push(`(${prefix}title LIKE ? OR ${prefix}message LIKE ? OR ${prefix}device_id LIKE ?)`);
+            params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+        }
     }
 
     return { where, params };
@@ -76,30 +103,33 @@ router.get('/', async (req, res) => {
         const db = req.app.locals.db;
         const limit = parseLimit(req.query.limit);
         const offset = parseOffset(req.query.offset);
-        const { where, params } = buildWhere(req);
+        const { where, params } = buildWhere(req, { alias: 'n', includeDeviceLabelSearch: true });
 
         const rows = await db.all(
-            `SELECT *
-             FROM notifications
+            `SELECT n.*, COALESCE(NULLIF(TRIM(d.name), ''), n.device_id) AS device_label
+             FROM notifications n
+             LEFT JOIN devices d ON d.id = n.device_id
              WHERE ${where.join(' AND ')}
-               AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
-             ORDER BY datetime(created_at) DESC, id DESC
+               AND (n.expires_at IS NULL OR datetime(n.expires_at) > datetime('now'))
+             ORDER BY datetime(n.created_at) DESC, n.id DESC
              LIMIT ? OFFSET ?`,
             [...params, limit, offset]
         );
         const unread = await db.get(
             `SELECT COUNT(*) AS count
-             FROM notifications
+             FROM notifications n
+             LEFT JOIN devices d ON d.id = n.device_id
              WHERE ${where.join(' AND ')}
-               AND COALESCE(read, 0) = 0
-               AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))`,
+               AND COALESCE(n.read, 0) = 0
+               AND (n.expires_at IS NULL OR datetime(n.expires_at) > datetime('now'))`,
             params
         );
         const total = await db.get(
             `SELECT COUNT(*) AS count
-             FROM notifications
+             FROM notifications n
+             LEFT JOIN devices d ON d.id = n.device_id
              WHERE ${where.join(' AND ')}
-               AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))`,
+               AND (n.expires_at IS NULL OR datetime(n.expires_at) > datetime('now'))`,
             params
         );
 
@@ -166,11 +196,13 @@ router.post('/read', async (req, res) => {
             return res.status(400).json({ success: false, message: 'No notifications selected' });
         }
         const placeholders = ids.map(() => '?').join(',');
+        const deviceId = requestDeviceId(req);
+        const deviceWhere = deviceId ? ' AND device_id = ?' : '';
         await db.run(
             `UPDATE notifications
              SET read = 1, read_at = CURRENT_TIMESTAMP
-             WHERE id IN (${placeholders})`,
-            ids
+             WHERE id IN (${placeholders})${deviceWhere}`,
+            deviceId ? [...ids, deviceId] : ids
         );
         res.json({ success: true, updated: ids.length });
     } catch (error) {
@@ -187,11 +219,13 @@ router.post('/unread', async (req, res) => {
             return res.status(400).json({ success: false, message: 'No notifications selected' });
         }
         const placeholders = ids.map(() => '?').join(',');
+        const deviceId = requestDeviceId(req);
+        const deviceWhere = deviceId ? ' AND device_id = ?' : '';
         await db.run(
             `UPDATE notifications
              SET read = 0, read_at = NULL
-             WHERE id IN (${placeholders})`,
-            ids
+             WHERE id IN (${placeholders})${deviceWhere}`,
+            deviceId ? [...ids, deviceId] : ids
         );
         res.json({ success: true, updated: ids.length });
     } catch (error) {
@@ -225,10 +259,12 @@ router.post('/delete', async (req, res) => {
             return res.status(400).json({ success: false, message: 'No notifications selected' });
         }
         const placeholders = ids.map(() => '?').join(',');
+        const deviceId = requestDeviceId(req);
+        const deviceWhere = deviceId ? ' AND device_id = ?' : '';
         await db.run(
             `DELETE FROM notifications
-             WHERE id IN (${placeholders})`,
-            ids
+             WHERE id IN (${placeholders})${deviceWhere}`,
+            deviceId ? [...ids, deviceId] : ids
         );
         res.json({ success: true, deleted: ids.length });
     } catch (error) {

@@ -316,6 +316,60 @@ function getSmsThreadKey(number) {
     return String(lookup.last10 || lookup.digits || raw).toLowerCase();
 }
 
+function getLiveDeviceSmsStorage(deviceId) {
+    const status = global.modemService?.getDeviceStatus?.(deviceId) || null;
+    if (!status || typeof status !== 'object') {
+        return null;
+    }
+    const storage = status?.hardware?.smsStorage || status?.sim?.smsStorage || {
+        name: status?.modem_sms_storage_name || status?.sms_storage_name,
+        used: status?.modem_sms_storage_used ?? status?.sms_storage_used,
+        total: status?.modem_sms_storage_total ?? status?.sms_storage_total,
+        read: {
+            name: status?.modem_sms_read_storage_name || status?.sms_read_storage_name,
+            used: status?.modem_sms_read_storage_used ?? status?.sms_read_storage_used,
+            total: status?.modem_sms_read_storage_total ?? status?.sms_read_storage_total
+        },
+        write: {
+            name: status?.modem_sms_write_storage_name || status?.sms_write_storage_name,
+            used: status?.modem_sms_write_storage_used ?? status?.sms_write_storage_used,
+            total: status?.modem_sms_write_storage_total ?? status?.sms_write_storage_total
+        },
+        report: {
+            name: status?.modem_sms_report_storage_name || status?.sms_report_storage_name,
+            used: status?.modem_sms_report_storage_used ?? status?.sms_report_storage_used,
+            total: status?.modem_sms_report_storage_total ?? status?.sms_report_storage_total
+        }
+    };
+    if (!storage || typeof storage !== 'object') {
+        return null;
+    }
+
+    const used = Number(storage.used);
+    const total = Number(storage.total);
+    return {
+        name: storage.name || null,
+        used: Number.isFinite(used) ? used : null,
+        total: Number.isFinite(total) ? total : null,
+        free: Number.isFinite(used) && Number.isFinite(total) ? Math.max(0, total - used) : null,
+        read: storage.read || null,
+        write: storage.write || null,
+        report: storage.report || null
+    };
+}
+
+function getSmsSyncPayloadObject(response = {}) {
+    let payload = response?.payload || null;
+    if (typeof payload === 'string' && payload.trim()) {
+        try {
+            payload = JSON.parse(payload);
+        } catch (_) {
+            payload = null;
+        }
+    }
+    return payload && typeof payload === 'object' ? payload : {};
+}
+
 function normalizeSmsSyncTimestamp(entry = {}) {
     const raw = entry.timestamp ?? entry.timestamp_ms ?? entry.timestampMs;
     if (typeof raw === 'number' && Number.isFinite(raw)) {
@@ -340,18 +394,74 @@ function normalizeSmsSyncTimestamp(entry = {}) {
 }
 
 function getSmsSyncPayloadEntries(response = {}) {
-    let payload = response?.payload || null;
-    if (typeof payload === 'string' && payload.trim()) {
-        try {
-            payload = JSON.parse(payload);
-        } catch (_) {
-            payload = null;
-        }
-    }
+    const payload = getSmsSyncPayloadObject(response);
     if (!payload || typeof payload !== 'object' || !Array.isArray(payload.entries)) {
         return [];
     }
     return payload.entries;
+}
+
+function getSmsSyncPayloadStorage(response = {}) {
+    const payload = getSmsSyncPayloadObject(response);
+    const used = Number(payload.sms_storage_used);
+    const total = Number(payload.sms_storage_total);
+    const free = Number(payload.sms_storage_free);
+    if (!Number.isFinite(used) && !Number.isFinite(total) && !Number.isFinite(free)) {
+        return null;
+    }
+    return {
+        name: payload.sms_storage_name || null,
+        used: Number.isFinite(used) ? used : null,
+        total: Number.isFinite(total) ? total : null,
+        free: Number.isFinite(free)
+            ? free
+            : (Number.isFinite(used) && Number.isFinite(total) ? Math.max(0, total - used) : null)
+    };
+}
+
+function buildSmsSyncReport(response = {}, importResult = {}, syncEntries = [], deviceSmsStorage = null) {
+    const payload = getSmsSyncPayloadObject(response);
+    const storage = deviceSmsStorage || getSmsSyncPayloadStorage(response);
+    const payloadSynced = Number(payload.synced ?? response?.synced ?? response?.payload?.synced ?? 0);
+    const payloadCount = Number(payload.count ?? response?.count ?? response?.payload?.count ?? 0);
+    const imported = Number(importResult.imported || 0);
+    const skipped = Number(importResult.skipped || 0);
+    const synced = Number.isFinite(payloadSynced) && payloadSynced > 0 ? payloadSynced : imported;
+    const total = syncEntries.length || (Number.isFinite(payloadCount) ? payloadCount : 0) || synced || 0;
+    const storageUsed = Number(storage?.used);
+    const storageTotal = Number(storage?.total);
+    const noReadableEntries = total === 0 && imported === 0 && synced === 0;
+    const storageHasRecords = Number.isFinite(storageUsed) && storageUsed > 0;
+    const warnings = [];
+    let blocker = null;
+
+    if (storageHasRecords && noReadableEntries) {
+        blocker = 'sms_storage_has_no_readable_pull_entries';
+        warnings.push(
+            `Device SMS storage reports ${storageUsed}${Number.isFinite(storageTotal) && storageTotal > 0 ? `/${storageTotal}` : ''} records, but firmware returned no readable SMS entries. Serial AT validation is required when COM5 is available.`
+        );
+    }
+
+    return {
+        total,
+        synced: Number.isFinite(synced) ? synced : 0,
+        imported,
+        skipped,
+        deviceSmsStorage: storage,
+        diagnostics: {
+            blocker,
+            warnings,
+            requiresSerialValidation: blocker === 'sms_storage_has_no_readable_pull_entries',
+            payloadCount: Number.isFinite(payloadCount) ? payloadCount : null,
+            payloadSynced: Number.isFinite(payloadSynced) ? payloadSynced : null,
+            pullDetail: payload.pull_detail || response?.detail || null,
+            pullResultCode: Number.isFinite(Number(payload.pull_result_code)) ? Number(payload.pull_result_code) : null,
+            payloadEntries: syncEntries.length
+        },
+        message: imported > 0
+            ? `Message pull completed. ${imported} stored.`
+            : (warnings[0] || 'Message pull completed. No new readable messages found.')
+    };
 }
 
 async function importDeviceSmsSyncEntries(db, deviceId, entries = []) {
@@ -997,30 +1107,31 @@ router.post('/sync', async (req, res) => {
         const db = req.app.locals.db;
         const syncEntries = getSmsSyncPayloadEntries(response);
         const importResult = await importDeviceSmsSyncEntries(db, deviceId, syncEntries);
-        const deviceSynced = Number(response?.payload?.synced ?? 0);
-        const synced = Number.isFinite(deviceSynced) && deviceSynced > 0
-            ? deviceSynced
-            : importResult.imported;
-        const payloadCount = Number(response?.payload?.count ?? 0);
-        const total = syncEntries.length || (Number.isFinite(payloadCount) ? payloadCount : 0) || synced || 0;
+        const deviceSmsStorage = getLiveDeviceSmsStorage(deviceId);
+        const syncReport = buildSmsSyncReport(response, importResult, syncEntries, deviceSmsStorage);
         emitDeviceEvent(deviceId, 'sms:sync-completed', {
             deviceId,
             device_id: deviceId,
-            total,
-            synced: Number.isFinite(synced) ? synced : 0,
-            imported: importResult.imported,
-            skipped: importResult.skipped,
+            total: syncReport.total,
+            synced: syncReport.synced,
+            imported: syncReport.imported,
+            skipped: syncReport.skipped,
+            deviceSmsStorage: syncReport.deviceSmsStorage,
+            diagnostics: syncReport.diagnostics,
+            warning: syncReport.diagnostics.warnings[0] || null,
             requested: true,
             timestamp: new Date().toISOString()
         });
         res.json({
             success: true,
-            message: importResult.imported > 0
-                ? `Message pull completed. ${importResult.imported} stored.`
-                : 'Message pull requested',
-            imported: importResult.imported,
-            skipped: importResult.skipped,
-            total
+            message: syncReport.message,
+            warning: syncReport.diagnostics.warnings[0] || null,
+            imported: syncReport.imported,
+            skipped: syncReport.skipped,
+            total: syncReport.total,
+            synced: syncReport.synced,
+            deviceSmsStorage: syncReport.deviceSmsStorage,
+            diagnostics: syncReport.diagnostics
         });
     } catch (error) {
         logger.error('POST /api/sms/sync error:', error);

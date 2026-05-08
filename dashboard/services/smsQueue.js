@@ -5,6 +5,7 @@ const { assertSmsWithinPackageLimit } = require('./packageService');
 const { assertUserSmsWithinLimits } = require('./userAccessService');
 const { resolveSmsCommandForRecipient } = require('../utils/smsLimits');
 const { buildSmsSubmitPdus } = require('../utils/smsPdu');
+const pushNotificationService = require('./pushNotificationService');
 
 const MODEM_MQTT_UNICODE_PDU_SEGMENT_SIZE = 17;
 const MODEM_MQTT_GSM7_PDU_SEGMENT_SIZE = 153;
@@ -34,6 +35,38 @@ async function emitSmsQueued(deviceId, payload) {
     global.io.emit?.('sms:queued', payload);
 }
 
+async function notifyHttpSmsQueued(db, deviceId, payload = {}) {
+    if (!db?.all || !deviceId || !payload.messageId) {
+        return { sent: 0, failed: 0, skipped: 0, results: [] };
+    }
+
+    const rows = await db.all(
+        `SELECT push_token, platform, app_id
+         FROM device_push_tokens
+         WHERE device_id = ?
+           AND is_active = 1
+         ORDER BY last_seen_at DESC, id DESC`,
+        [deviceId]
+    );
+
+    if (!rows?.length) {
+        return { sent: 0, failed: 0, skipped: 0, results: [] };
+    }
+
+    return pushNotificationService.sendToTokens(rows, {
+        title: 'New SMS',
+        body: 'A queued SMS is ready to send.',
+        data: {
+            KEY_MESSAGE_ID: payload.messageId,
+            message_id: payload.messageId,
+            sms_id: String(payload.id || ''),
+            device_id: deviceId,
+            to: payload.to || '',
+            sim: Number.isInteger(Number(payload.simSlot)) ? `SIM${Number(payload.simSlot) + 1}` : 'DEFAULT'
+        }
+    });
+}
+
 async function resolveDeviceTransportMode(db, deviceId) {
     if (!db || !deviceId) {
         return 'mqtt';
@@ -59,9 +92,16 @@ async function resolveDeviceTransportMode(db, deviceId) {
     } catch (_) {
     }
 
-    return String(row.type || '').toLowerCase().includes('android')
-        ? 'mqtt'
-        : 'mqtt';
+    const deviceType = String(row.type || '').toLowerCase();
+    if (
+        deviceType.includes('android') ||
+        deviceType.includes('httpsms') ||
+        (deviceType.includes('http') && deviceType.includes('sms'))
+    ) {
+        return 'http';
+    }
+
+    return 'mqtt';
 }
 
 async function queueSmsForDelivery({
@@ -152,6 +192,9 @@ async function queueSmsForDelivery({
             ...payload,
             message,
             timestamp: new Date().toISOString()
+        });
+        await notifyHttpSmsQueued(db, deviceId, payload).catch((error) => {
+            logger.warn('HTTP SMS push notification skipped:', error.message || error);
         });
 
         return payload;

@@ -413,6 +413,36 @@ describe('dashboardStatus', () => {
         }));
     });
 
+    test('uses normalized system metrics as runtime reporting fallback', () => {
+        const status = buildDashboardDeviceStatus({
+            online: true,
+            activePath: 'wifi',
+            wifi: { connected: true, ssid: 'GAP-RIAZ', ipAddress: '192.168.137.5' },
+            system: {
+                runtimeRamTotal: 327680,
+                runtimeRamUsed: 98304,
+                runtimeRamFree: 229376,
+                runtimeRamLargestFreeBlock: 196608,
+                psramTotal: 8388608,
+                psramUsed: 341068,
+                psramFree: 8047540,
+                otherHeapTotal: 0,
+                otherHeapUsed: 0,
+                otherHeapFree: 0,
+                freeHeap: 8137615
+            }
+        }, true);
+
+        expect(status.systemRuntime).toEqual(expect.objectContaining({
+            runtimeRamTotal: 327680,
+            runtimeRamFree: 229376,
+            psramTotal: 8388608,
+            psramFree: 8047540,
+            otherHeapTotal: 0,
+            freeHeap: 8137615
+        }));
+    });
+
     test('treats mqtt command acceptance as subscribed when the command path is already live', () => {
         const status = buildDashboardDeviceStatus({
             online: true,

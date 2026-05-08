@@ -1,5 +1,5 @@
 [Unit]
-Description=IoT Dashboard for device.atebd.com/server
+Description=IoT Dashboard
 After=network.target
 
 [Service]

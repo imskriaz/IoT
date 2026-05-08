@@ -19,6 +19,7 @@ dashboard/tmp-dashboard*.cookies.txt
 
 # VPS/server local secrets
 server/tunnel.config.json
+server/cloudflare.config.json
 server/*.local.json
 server/*.pem
 server/*.key
@@ -81,6 +82,7 @@ temp/
 .playwright-cli/
 .codex/environments/
 .toolchain/downloads/
+.toolchain/cloudflared/
 .toolchain/esp-idf-v5.3.1/
 .toolchain/espressif/
 .toolchain/Python311/

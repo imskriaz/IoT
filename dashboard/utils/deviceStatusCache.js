@@ -88,7 +88,7 @@ async function hydrateDeviceStatusFromCache(db, modemService, deviceId, options 
     const current = typeof modemService.getDeviceStatus === 'function'
         ? modemService.getDeviceStatus(normalizedDeviceId)
         : null;
-    if (current?.online === true) {
+    if (current?.online === true && options.force !== true) {
         return current;
     }
 

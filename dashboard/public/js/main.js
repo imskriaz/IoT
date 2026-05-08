@@ -3650,9 +3650,9 @@ function renderHeaderNotificationPreview(notifications = []) {
     if (!target) return;
     const subtitle = document.getElementById('dashboardNotificationSubtitle');
     if (subtitle) {
-        const category = headerNotificationFilter.category === 'all' ? 'all devices and categories' : headerNotificationFilter.category;
+        const category = headerNotificationFilter.category === 'all' ? 'all categories' : headerNotificationFilter.category;
         const readLabel = headerNotificationFilter.read === 'all' ? 'all' : headerNotificationFilter.read;
-        subtitle.textContent = `${notifications.length} showing - ${readLabel} - ${category}`;
+        subtitle.textContent = `${notifications.length} showing - ${readLabel} - ${category} - all devices`;
     }
     if (!notifications.length) {
         target.innerHTML = `
@@ -3667,11 +3667,20 @@ function renderHeaderNotificationPreview(notifications = []) {
     target.innerHTML = notifications.slice(0, headerNotificationFilter.limit).map(item => {
         const unread = !Number(item.read);
         const url = item.action_url || item.actionUrl || '/dashboard';
-        const device = item.device_id ? `<span class="notification-device-chip">${escapeHtml(item.device_id)}</span>` : '';
+        const deviceId = String(item.device_id || item.deviceId || '').trim();
+        const deviceLabel = String(item.device_label || item.deviceLabel || item.device_name || item.deviceName || deviceId).trim();
+        const deviceTitle = deviceId && deviceLabel !== deviceId ? ` title="${escapeHtml(deviceId)}"` : '';
+        const device = deviceLabel ? `<span class="notification-device-chip"${deviceTitle}>${escapeHtml(deviceLabel)}</span>` : '';
         const category = item.category ? `<span class="notification-category-chip">${escapeHtml(item.category)}</span>` : '';
         const severity = String(item.severity || item.type || 'info').toLowerCase();
+        const id = Number(item.id) || 0;
         return `
-            <div class="list-group-item notification-preview-item ${unread ? 'notification-unread' : ''}">
+            <div class="list-group-item notification-preview-item cursor-pointer ${unread ? 'notification-unread' : ''}"
+                role="link"
+                tabindex="0"
+                data-notification-url="${escapeHtml(url)}"
+                onclick="window.openHeaderNotificationItem && window.openHeaderNotificationItem(event, this.dataset.notificationUrl, ${id})"
+                onkeydown="window.handleHeaderNotificationItemKey && window.handleHeaderNotificationItemKey(event, this.dataset.notificationUrl, ${id})">
                 <div class="notification-preview-icon notification-preview-icon-${escapeHtml(severity)}">
                     <i class="bi ${notificationIcon(item.category, item.severity)}"></i>
                 </div>
@@ -3688,14 +3697,14 @@ function renderHeaderNotificationPreview(notifications = []) {
                 </div>
                 <div class="notification-preview-actions">
                     ${unread ? `
-                        <button type="button" class="btn btn-sm btn-outline-secondary" title="Mark read" onclick="event.stopPropagation(); window.markHeaderNotificationItemRead && window.markHeaderNotificationItemRead(${Number(item.id) || 0})">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" title="Mark read" onclick="event.stopPropagation(); window.markHeaderNotificationItemRead && window.markHeaderNotificationItemRead(${id})">
                             <i class="bi bi-check2"></i>
                         </button>
                     ` : ''}
-                    <a class="btn btn-sm btn-outline-primary" href="${escapeHtml(url)}" title="Open">
+                    <a class="btn btn-sm btn-outline-primary" href="${escapeHtml(url)}" title="Open" onclick="event.stopPropagation()">
                         <i class="bi bi-box-arrow-up-right"></i>
                     </a>
-                    <button type="button" class="btn btn-sm btn-outline-danger" title="Remove" onclick="event.stopPropagation(); window.removeHeaderNotificationItem && window.removeHeaderNotificationItem(${Number(item.id) || 0})">
+                    <button type="button" class="btn btn-sm btn-outline-danger" title="Remove" onclick="event.stopPropagation(); window.removeHeaderNotificationItem && window.removeHeaderNotificationItem(${id})">
                         <i class="bi bi-trash3"></i>
                     </button>
                 </div>
@@ -3712,6 +3721,13 @@ function buildHeaderNotificationUrl() {
     params.set('category', headerNotificationFilter.category || 'all');
     params.set('_ts', String(Date.now()));
     return '/api/notifications?' + params.toString();
+}
+
+function buildHeaderNotificationContextParams() {
+    const params = new URLSearchParams();
+    params.set('read', headerNotificationFilter.read || 'unread');
+    params.set('category', headerNotificationFilter.category || 'all');
+    return params;
 }
 
 function setHeaderNotificationFilter(key, value) {
@@ -3807,22 +3823,47 @@ function removeHeaderNotificationItem(id) {
         .catch(() => showToast('Failed to remove notification', 'danger'));
 }
 
+function openHeaderNotificationItem(event, url, id) {
+    if (event?.target?.closest?.('button,a,input,select,textarea')) return;
+    const targetUrl = String(url || '').trim() || '/dashboard';
+    if (id) {
+        markHeaderNotificationItemRead(id).finally(() => {
+            window.location.href = targetUrl;
+        });
+        return;
+    }
+    window.location.href = targetUrl;
+}
+
+function handleHeaderNotificationItemKey(event, url, id) {
+    if (!event || !['Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    openHeaderNotificationItem(event, url, id);
+}
+
 async function confirmClearNotifications() {
+    const readLabel = headerNotificationFilter.read === 'all' ? 'shown' : 'unread';
+    const categoryLabel = headerNotificationFilter.category === 'all'
+        ? 'notifications'
+        : `${headerNotificationFilter.category} notifications`;
+    const message = `Clear ${readLabel} ${categoryLabel} across all devices in this view?`;
     if (typeof window.appConfirm === 'function') {
         return window.appConfirm({
             title: 'Clear Notifications',
-            message: 'Clear all notifications from the inbox?',
-            confirmText: 'Clear all',
+            message,
+            confirmText: 'Clear filtered',
             confirmClass: 'btn btn-danger'
         });
     }
-    return window.confirm ? window.confirm('Clear all notifications?') : true;
+    return window.confirm ? window.confirm(message) : true;
 }
 
 async function clearHeaderNotifications() {
+    updateHeaderNotificationFilterFromModal();
     const confirmed = await confirmClearNotifications();
     if (!confirmed) return Promise.resolve();
-    return fetch('/api/notifications/delete-all?read=all&category=all', {
+    const url = '/api/notifications/delete-all?' + buildHeaderNotificationContextParams().toString();
+    return fetch(url, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -3918,6 +3959,8 @@ window.markHeaderNotificationsRead = markHeaderNotificationsRead;
 window.setHeaderNotificationFilter = setHeaderNotificationFilter;
 window.markHeaderNotificationItemRead = markHeaderNotificationItemRead;
 window.removeHeaderNotificationItem = removeHeaderNotificationItem;
+window.openHeaderNotificationItem = openHeaderNotificationItem;
+window.handleHeaderNotificationItemKey = handleHeaderNotificationItemKey;
 window.clearHeaderNotifications = clearHeaderNotifications;
 window.changeHeaderNotificationPage = changeHeaderNotificationPage;
 window.notificationIcon = notificationIcon;

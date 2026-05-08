@@ -145,6 +145,94 @@ function safeMetadata(value) {
     }
 }
 
+function firstText(...values) {
+    for (const value of values) {
+        const text = String(value ?? '').trim();
+        if (text) return text;
+    }
+    return '';
+}
+
+function parseMetadataObject(value) {
+    if (!value) return {};
+    if (typeof value === 'object' && !Array.isArray(value)) return value;
+    try {
+        const parsed = JSON.parse(String(value));
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (_) {
+        return {};
+    }
+}
+
+function withDevice(url, deviceId) {
+    const normalizedUrl = String(url || '').trim() || '/dashboard';
+    const normalizedDeviceId = String(deviceId || '').trim();
+    if (!normalizedDeviceId) return normalizedUrl;
+    try {
+        const parsed = new URL(normalizedUrl, 'http://dashboard.local');
+        if (!parsed.searchParams.has('device')) {
+            parsed.searchParams.set('device', normalizedDeviceId);
+        }
+        return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    } catch (_) {
+        const separator = normalizedUrl.includes('?') ? '&' : '?';
+        return `${normalizedUrl}${separator}device=${encodeURIComponent(normalizedDeviceId)}`;
+    }
+}
+
+function buildNotificationActionUrl(options = {}) {
+    const category = String(options.category || '').trim().toLowerCase();
+    const metadata = parseMetadataObject(options.metadata);
+    const deviceId = firstText(options.deviceId, options.device_id, metadata.deviceId, metadata.device_id);
+    const existing = firstText(options.actionUrl, options.action_url);
+
+    if (category === 'sms') {
+        const base = existing && existing !== '/sms' ? existing : '/sms';
+        const conversationId = firstText(metadata.conversationId, metadata.conversation_id);
+        const thread = firstText(
+            metadata.thread,
+            metadata.thread_number,
+            metadata.from,
+            metadata.from_number,
+            metadata.to,
+            metadata.to_number,
+            metadata.number,
+            metadata.recipient
+        );
+        try {
+            const parsed = new URL(base, 'http://dashboard.local');
+            if (deviceId && !parsed.searchParams.has('device')) parsed.searchParams.set('device', deviceId);
+            if (conversationId && !parsed.searchParams.has('conversation')) parsed.searchParams.set('conversation', conversationId);
+            if (thread && !parsed.searchParams.has('thread') && !parsed.searchParams.has('to')) parsed.searchParams.set('thread', thread);
+            return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+        } catch (_) {
+            return withDevice('/sms', deviceId);
+        }
+    }
+
+    if (category === 'call') {
+        const base = existing && existing !== '/calls' ? existing : '/calls';
+        const number = firstText(metadata.number, metadata.from, metadata.phone_number, metadata.phone);
+        try {
+            const parsed = new URL(base, 'http://dashboard.local');
+            if (deviceId && !parsed.searchParams.has('device')) parsed.searchParams.set('device', deviceId);
+            if (number && !parsed.searchParams.has('to')) parsed.searchParams.set('to', number);
+            return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+        } catch (_) {
+            return withDevice('/calls', deviceId);
+        }
+    }
+
+    if (existing) return withDevice(existing, deviceId);
+
+    if (category === 'automation') return '/automation';
+    if (category === 'queue') return withDevice('/devices/queue', deviceId);
+    if (category === 'device' || category === 'network' || category === 'security') return withDevice('/devices/about', deviceId);
+    if (category === 'location') return withDevice('/location', deviceId);
+    if (category === 'ussd') return withDevice('/ussd', deviceId);
+    return '';
+}
+
 async function capture(options = {}) {
     try {
         const db = global.app && global.app.locals.db;
@@ -186,7 +274,7 @@ async function capture(options = {}) {
                 source,
                 title,
                 options.message == null ? null : String(options.message),
-                options.actionUrl || options.action_url || null,
+                buildNotificationActionUrl({ ...options, category, deviceId }) || null,
                 options.actionText || options.action_text || null,
                 safeMetadata(options.metadata),
                 eventKey
@@ -212,7 +300,7 @@ async function notifySms(from, message, options = {}) {
         source: 'device',
         title: 'New SMS received',
         message: `From: ${from}\nMessage: ${message}`,
-        actionUrl: options.actionUrl || '/sms',
+        actionUrl: options.actionUrl || null,
         metadata: { from, message },
         eventKey: options.eventKey
     });
@@ -231,7 +319,7 @@ async function notifyMissedCall(number, options = {}) {
         source: 'device',
         title: 'Missed call',
         message: `You missed a call from ${number || 'Unknown number'}`,
-        actionUrl: options.actionUrl || '/calls',
+        actionUrl: options.actionUrl || null,
         metadata: { number },
         eventKey: options.eventKey
     });
@@ -260,4 +348,4 @@ async function notifyLowBattery(level, options = {}) {
     );
 }
 
-module.exports = { notify, capture, notifySms, notifyMissedCall, notifyLowBattery };
+module.exports = { notify, capture, notifySms, notifyMissedCall, notifyLowBattery, buildNotificationActionUrl };

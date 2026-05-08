@@ -110,6 +110,12 @@ function isAndroidBridge(body) {
     return clean(body.bridge_type) === 'android' || clean(body.model) === 'android-sms-bridge';
 }
 
+function isHttpSmsBridge(body) {
+    const bridgeType = clean(body.bridge_type).toLowerCase();
+    const model = clean(body.model).toLowerCase();
+    return bridgeType === 'httpsms' || model === 'httpsms-bridge';
+}
+
 async function buildAndroidProvisioning(req, db, userId, body) {
     const transportMode = 'auto';
     const serverUrl = normalizePublicBaseUrl(req);
@@ -166,6 +172,47 @@ async function buildAndroidProvisioning(req, db, userId, body) {
             server_url: serverUrl,
             mqtt_configured: Boolean(payload.mqtt.host),
             api_key_name: apiKeyName
+        }
+    };
+}
+
+async function buildHttpSmsProvisioning(req, db, userId, body) {
+    const serverUrl = normalizePublicBaseUrl(req);
+    const apiBaseUrl = `${serverUrl}/v1`;
+    let apiKey = '';
+    let apiKeyName = '';
+
+    if (userId) {
+        apiKeyName = clean(body.name || body.device_id || 'httpSMS');
+        const provisionedKey = await createDeviceProvisioningApiKey(db, {
+            userId,
+            name: apiKeyName,
+            deviceId: clean(body.device_id),
+            scopes: 'write',
+            rateLimitRpm: 120
+        });
+        apiKey = provisionedKey.key;
+    }
+
+    return {
+        type: 'httpsms',
+        qr_data_url: apiKey ? await QRCode.toDataURL(apiKey, {
+            errorCorrectionLevel: 'M',
+            margin: 1,
+            width: 320
+        }) : '',
+        setup: {
+            base_url: apiBaseUrl,
+            api_key: apiKey,
+            device_id: clean(body.device_id)
+        },
+        summary: {
+            transport_mode: 'http',
+            device_id: clean(body.device_id),
+            server_url: apiBaseUrl,
+            api_key_name: apiKeyName,
+            requires_https: true,
+            server_url_https: apiBaseUrl.toLowerCase().startsWith('https://')
         }
     };
 }
@@ -546,9 +593,12 @@ router.post('/api/onboard/register', [
             mqtt_pass: dashboardMqttPass,
             transport_mode: 'auto'
         };
+        const userId = req.session?.user?.id || req.user?.id || null;
         const provisioning = isAndroidBridge(bodyForProvisioning)
-            ? await buildAndroidProvisioning(req, db, req.session?.user?.id || req.user?.id || null, bodyForProvisioning)
-            : null;
+            ? await buildAndroidProvisioning(req, db, userId, bodyForProvisioning)
+            : (isHttpSmsBridge(bodyForProvisioning)
+                ? await buildHttpSmsProvisioning(req, db, userId, bodyForProvisioning)
+                : null);
 
         logger.info(`Device registered via onboarding wizard: ${device_id} (${name})`);
         res.json({ success: true, device_id, provisioning });

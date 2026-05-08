@@ -58,6 +58,13 @@
                         <span class="onboard-device-label">Native Device Bridge app with automatic dashboard connection</span>
                     </span>
                 </button>
+                <button type="button" class="onboard-device-type" id="typeHttpSms" onclick="chooseDeviceType('httpsms')">
+                    <span class="onboard-device-icon"><i class="bi bi-chat-dots"></i></span>
+                    <span class="onboard-device-copy">
+                        <span class="onboard-device-title">httpSMS</span>
+                        <span class="onboard-device-label">Use the public httpSMS Android app through dashboard-compatible API endpoints</span>
+                    </span>
+                </button>
             </div>
 
             <div id="esp32ConnectionFlow" style="display:none;">
@@ -221,7 +228,7 @@
                                 <span class="visually-hidden">Check availability</span>
                             </button>
                         </div>
-                        <div class="form-text" id="deviceIdFeedback">Use a unique lowercase ID. ESP devices use esp-, Android devices use android-.</div>
+                        <div class="form-text" id="deviceIdFeedback">Use a unique lowercase ID. ESP devices use esp-, Android devices use android-, httpSMS devices use httpsms-.</div>
                         <div class="invalid-feedback">Only letters, numbers, hyphens and underscores allowed.</div>
                     </div>
 
@@ -462,7 +469,7 @@
 #deviceIdFeedback.text-success { font-weight: 600; }
 .onboard-device-types {
     display: grid;
-    grid-template-columns: repeat(2, minmax(260px, 1fr));
+    grid-template-columns: repeat(3, minmax(220px, 1fr));
     gap: 1rem;
     max-width: 820px;
 }
@@ -576,7 +583,7 @@
 <script>
 // ==================== Wizard state ====================
 const wizardState = {
-    deviceType: null,       // 'esp32-s3' | 'android'
+    deviceType: null,       // 'esp32-s3' | 'android' | 'httpsms'
     connectionType: null,   // 'serial' | 'ble' | 'wifi' | null
     port: null,             // Web Serial port
     reader: null,
@@ -608,7 +615,8 @@ const BLE_TX_UUID      = '6e400002-b5b4-f393-e0a9-e50e24dcca9e'; // write
 const BLE_RX_UUID      = '6e400003-b5b4-f393-e0a9-e50e24dcca9e'; // notify
 const DEVICE_TYPE_MODELS = Object.freeze({
     'esp32-s3': 'esp32-s3-a7670e',
-    android: 'android-sms-bridge'
+    android: 'android-sms-bridge',
+    httpsms: 'httpsms-bridge'
 });
 
 const STEP_LABELS = [
@@ -625,13 +633,19 @@ const ANDROID_STEP_META = {
     3: { label: 'Step 2 of 3 - App Details', percent: '66' },
     5: { label: 'Step 3 of 3 - App Setup', percent: '100' }
 };
+const BRIDGE_LABELS = Object.freeze({
+    android: 'Android',
+    httpsms: 'httpSMS'
+});
 
 function chooseDeviceType(type) {
     wizardState.deviceType = type;
     document.querySelectorAll('.onboard-device-type').forEach(card => card.classList.remove('selected'));
     const selectedCard = type === 'android'
         ? document.getElementById('typeAndroid')
-        : document.getElementById('typeEsp32');
+        : type === 'httpsms'
+            ? document.getElementById('typeHttpSms')
+            : document.getElementById('typeEsp32');
     selectedCard?.classList.add('selected');
 
     if (type === 'esp32-s3') {
@@ -643,7 +657,9 @@ function chooseDeviceType(type) {
 
     document.getElementById('esp32ConnectionFlow').style.display = 'none';
     wizardState.connectionType = null;
-    wizardState.deviceInfo = { bridge: 'android', sms: true, mqtt: true, app: 'Android Bridge' };
+    wizardState.deviceInfo = type === 'httpsms'
+        ? { bridge: 'httpsms', sms: true, http: true, app: 'httpSMS' }
+        : { bridge: 'android', sms: true, mqtt: true, http: true, app: 'Android Bridge' };
     goToStep(3);
 }
 
@@ -958,6 +974,9 @@ function generateDeviceIdValue() {
     if (wizardState.deviceType === 'android') {
         return `android-${randomToken(8)}`;
     }
+    if (wizardState.deviceType === 'httpsms') {
+        return `httpsms-${randomToken(8)}`;
+    }
     return `esp-${randomToken(5)}-${randomToken(6)}-${randomToken(6)}`;
 }
 
@@ -967,6 +986,7 @@ function selectedDeviceModel() {
 
 function selectedDeviceTypeLabel() {
     if (wizardState.deviceType === 'android') return 'Android';
+    if (wizardState.deviceType === 'httpsms') return 'httpSMS';
     return 'ESP32 S3';
 }
 
@@ -984,19 +1004,19 @@ function chooseAndroidTransport(mode) {
     if (select) select.value = 'auto';
     renderAndroidTransportChoice();
     applyStep3FieldVisibility();
-    if (wizardState.deviceType === 'android') {
+    if (isBridgeDeviceType()) {
         prefillStep3();
     }
 }
 
 function isBridgeDeviceType() {
-    return wizardState.deviceType === 'android';
+    return wizardState.deviceType === 'android' || wizardState.deviceType === 'httpsms';
 }
 
 function applyStep3FieldVisibility() {
     const bridgeDevice = isBridgeDeviceType();
     const modelInput = document.getElementById('fModel');
-    if (bridgeDevice || !modelInput.value || modelInput.value === DEVICE_TYPE_MODELS.android) {
+    if (bridgeDevice || !modelInput.value || modelInput.value === DEVICE_TYPE_MODELS.android || modelInput.value === DEVICE_TYPE_MODELS.httpsms) {
         modelInput.value = selectedDeviceModel();
     }
     document.querySelectorAll('[data-onboard-scope]').forEach(el => {
@@ -1112,13 +1132,19 @@ function prefillStep3() {
     note.style.display = 'none';
     note.innerHTML = '';
 
-    if (wizardState.deviceType === 'android') {
-        if (!fId.value || !fId.value.startsWith('android-')) fId.value = generateDeviceIdValue();
-        if (!nameInput.value) nameInput.value = 'Android Bridge';
-        modelSel.value = 'android-sms-bridge';
+    if (isBridgeDeviceType()) {
+        const expectedPrefix = wizardState.deviceType === 'httpsms' ? 'httpsms-' : 'android-';
+        if (!fId.value || !fId.value.startsWith(expectedPrefix)) fId.value = generateDeviceIdValue();
+        if (!nameInput.value) nameInput.value = wizardState.deviceType === 'httpsms' ? 'httpSMS' : 'Android Bridge';
+        modelSel.value = selectedDeviceModel();
         document.getElementById('fAndroidTransport').value = 'auto';
         note.style.display = '';
-        note.innerHTML = `
+        note.innerHTML = wizardState.deviceType === 'httpsms' ? `
+            <div class="d-flex align-items-start gap-2">
+                <i class="bi bi-chat-dots mt-1"></i>
+                <span>Register this lane, then use the generated base URL and API key inside the httpSMS app.</span>
+            </div>
+        ` : `
             <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2">
                 <span><i class="bi bi-phone me-1"></i>Install the app, register this bridge, then scan the generated QR in the phone app.</span>
                 ${androidAppDownloadMenu('btn-sm flex-shrink-0')}
@@ -1138,7 +1164,7 @@ function prefillStep3() {
                        : 'esp32-s3-a7670e';
         modelSel.value = modelVal;
     }
-    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase ID. ESP devices use esp-, Android devices use android-.';
+    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase ID. ESP devices use esp-, Android devices use android-, httpSMS devices use httpsms-.';
     document.getElementById('deviceIdFeedback').className = 'form-text';
 }
 
@@ -1258,9 +1284,9 @@ function buildRegistrationPayload(fd) {
         capabilities: {
             ...wizardState.deviceInfo,
             bridge_type: fd.bridge_type || wizardState.deviceType || 'esp32-s3',
-            transport_mode: fd.transport_mode || 'auto',
-            mqtt: true,
-            http: wizardState.deviceType === 'android' ? true : Boolean(wizardState.deviceInfo.http)
+            transport_mode: isBridgeDeviceType() ? 'http' : (fd.transport_mode || 'auto'),
+            mqtt: wizardState.deviceType === 'httpsms' ? false : true,
+            http: isBridgeDeviceType() ? true : Boolean(wizardState.deviceInfo.http)
         }
     };
 }
@@ -1290,6 +1316,7 @@ async function registerDashboardDevice() {
 async function registerAndroidBridge() {
     const button = document.getElementById('btnStep3Continue');
     const note = document.getElementById('bridgeSetupNote');
+    const label = BRIDGE_LABELS[wizardState.deviceType] || 'app';
     const previousHtml = button?.innerHTML || '';
     if (button) {
         button.disabled = true;
@@ -1298,7 +1325,7 @@ async function registerAndroidBridge() {
     if (note) {
         note.className = 'alert alert-info py-2 small mb-0';
         note.style.display = '';
-        note.innerHTML = '<i class="bi bi-phone me-1"></i>Registering the Android bridge and generating the app setup code...';
+        note.innerHTML = '<i class="bi bi-phone me-1"></i>Registering the ' + escHtml(label) + ' lane and generating setup details...';
     }
 
     try {
@@ -1458,6 +1485,8 @@ function showDone() {
     const capabilities = [];
     if (wizardState.deviceType === 'android') capabilities.push({ label: 'Android', cls: 'bg-success' });
     if (wizardState.deviceType === 'android') capabilities.push({ label: 'Smart Link', cls: 'bg-info text-dark' });
+    if (wizardState.deviceType === 'httpsms') capabilities.push({ label: 'httpSMS', cls: 'bg-success' });
+    if (wizardState.deviceType === 'httpsms') capabilities.push({ label: 'HTTP API', cls: 'bg-info text-dark' });
     if (info.modem || info.a7670e || fd.model?.includes('a7670')) capabilities.push({ label: 'Modem / 4G', cls: 'bg-primary' });
     if (info.sms || fd.model?.includes('sms')) capabilities.push({ label: 'SMS', cls: 'bg-primary' });
     if (info.gps) capabilities.push({ label: 'GPS', cls: 'bg-success' });
@@ -1537,6 +1566,47 @@ function renderProvisioningPanel() {
         return;
     }
 
+    if (provisioning.type === 'httpsms') {
+        const summary = provisioning.summary || {};
+        const setup = provisioning.setup || {};
+        content.innerHTML = `
+            <div class="row g-4 align-items-start">
+                <div class="col-lg-5">
+                    <h5 class="mb-2">httpSMS App Setup</h5>
+                    <div class="alert alert-primary small mb-0">
+                        <div class="fw-semibold mb-1"><i class="bi bi-chat-dots me-1"></i>Phone-side order</div>
+                        <ol class="mb-0 ps-3">
+                            <li>Install and open the httpSMS app.</li>
+                            <li>Set the server/API base URL to the dashboard URL shown here.</li>
+                            <li>Use the API key shown here for Authorization or X-API-Key.</li>
+                            <li>Keep the app allowed for SMS permissions and background activity.</li>
+                        </ol>
+                    </div>
+                </div>
+                <div class="col-lg-7">
+                    <h6 class="mb-2">Connection details</h6>
+                    <table class="table table-sm align-middle mb-3">
+                        <tbody>
+                            <tr><td class="text-muted">Device ID</td><td><code>${escHtml(summary.device_id || setup.device_id || '')}</code></td></tr>
+                            <tr><td class="text-muted">Base URL</td><td><code>${escHtml(summary.server_url || setup.base_url || '')}</code></td></tr>
+                            <tr><td class="text-muted">API key</td><td><textarea class="form-control font-monospace" id="httpSmsApiKey" rows="3" readonly>${escHtml(setup.api_key || '')}</textarea></td></tr>
+                        </tbody>
+                    </table>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyHttpSmsApiKey()">
+                            <i class="bi bi-clipboard me-1"></i>Copy API key
+                        </button>
+                        <a class="btn btn-sm btn-outline-secondary" href="/devices/settings?device=${encodeURIComponent(summary.device_id || setup.device_id || '')}">
+                            <i class="bi bi-gear me-1"></i>Open device settings
+                        </a>
+                    </div>
+                </div>
+            </div>
+        `;
+        panel.style.display = '';
+        return;
+    }
+
     panel.style.display = 'none';
     content.innerHTML = '';
 }
@@ -1598,6 +1668,22 @@ function copyAndroidSetupCode() {
         });
 }
 
+function copyHttpSmsApiKey() {
+    const token = document.getElementById('httpSmsApiKey')?.value || '';
+    if (!token) {
+        showToast('No API key is available yet.', 'warning');
+        return;
+    }
+    navigator.clipboard.writeText(token)
+        .then(() => showToast('API key copied.', 'success'))
+        .catch(() => {
+            const field = document.getElementById('httpSmsApiKey');
+            field?.focus();
+            field?.select();
+            showToast('Select and copy the API key manually.', 'warning');
+        });
+}
+
 function activateDoneDevice(event) {
     const deviceId = wizardState.formData?.device_id || '';
     if (!deviceId) return;
@@ -1653,7 +1739,7 @@ function resetWizard() {
     document.getElementById('fFirmwareFile').value = '';
     document.getElementById('fFirmwareUpload').value = '';
     document.getElementById('fDeviceId').value = generateDeviceIdValue();
-    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase ID. ESP devices use esp-, Android devices use android-.';
+    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase ID. ESP devices use esp-, Android devices use android-, httpSMS devices use httpsms-.';
     document.getElementById('firmwareHelp').textContent = 'Upload or select a firmware `.bin` so it is ready for OTA after the device comes online.';
     applyStep3FieldVisibility();
     loadFirmwareOptions();

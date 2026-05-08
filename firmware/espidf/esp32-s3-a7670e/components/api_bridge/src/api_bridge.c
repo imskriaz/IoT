@@ -267,6 +267,59 @@ static esp_err_t api_bridge_write_response_payload(
     return ESP_OK;
 }
 
+static esp_err_t api_bridge_annotate_sms_history_payload(
+    char *payload,
+    size_t payload_len,
+    uint32_t synced_count,
+    const unified_action_response_t *pull_response
+) {
+    modem_a7670_status_t modem = {0};
+    char escaped_detail[sizeof(pull_response->detail) * 2U] = {0};
+    char prefix[256] = {0};
+    size_t existing_len = 0U;
+    size_t prefix_len = 0U;
+    uint16_t storage_used = 0U;
+    uint16_t storage_total = 0U;
+    uint16_t storage_free = 0U;
+    int written = 0;
+
+    if (api_bridge_payload_missing(payload, payload_len) || !pull_response || payload[0] != '{') {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    modem_a7670_get_status(&modem);
+    storage_used = modem.sms_storage_used;
+    storage_total = modem.sms_storage_total;
+    storage_free = storage_total > storage_used ? (uint16_t)(storage_total - storage_used) : 0U;
+    api_bridge_escape_json(pull_response->detail, escaped_detail, sizeof(escaped_detail));
+
+    written = snprintf(
+        prefix,
+        sizeof(prefix),
+        "\"synced\":%" PRIu32 ",\"pull_detail\":\"%s\",\"pull_result_code\":%" PRId32
+        ",\"sms_storage_used\":%u,\"sms_storage_total\":%u,\"sms_storage_free\":%u,",
+        synced_count,
+        escaped_detail,
+        pull_response->result_code,
+        (unsigned)storage_used,
+        (unsigned)storage_total,
+        (unsigned)storage_free
+    );
+    if (written < 0 || (size_t)written >= sizeof(prefix)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    existing_len = strlen(payload);
+    prefix_len = (size_t)written;
+    if (existing_len + prefix_len >= payload_len) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    memmove(payload + 1U + prefix_len, payload + 1U, existing_len);
+    memcpy(payload + 1U, prefix, prefix_len);
+    return ESP_OK;
+}
+
 static unified_action_response_t api_bridge_finish_modem_response(
     const unified_action_envelope_t *action,
     esp_err_t err,
@@ -943,6 +996,17 @@ static unified_action_response_t api_bridge_execute_get_sms_history(
             err,
             UNIFIED_FEATURE_REASON_NONE,
             "sms_history_payload_failed"
+        );
+    }
+    err = api_bridge_annotate_sms_history_payload(payload, payload_len, synced_count, &pull_response);
+    if (err != ESP_OK) {
+        payload[0] = '\0';
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            err,
+            UNIFIED_FEATURE_REASON_NONE,
+            "sms_history_diagnostic_payload_failed"
         );
     }
 
@@ -1923,9 +1987,11 @@ static unified_action_response_t api_bridge_execute_ota_update(
         if (api_bridge_format_payload(
                 payload,
                 payload_len,
-                "{\"url\":\"%s\",\"restart\":%s}",
+                "{\"url\":\"%s\",\"restart\":%s,\"result_code\":%d,\"error\":\"%s\"}",
                 escaped_url,
-                err == ESP_OK ? "true" : "false") != ESP_OK) {
+                err == ESP_OK ? "true" : "false",
+                (int)err,
+                err == ESP_OK ? "" : esp_err_to_name(err)) != ESP_OK) {
             payload[0] = '\0';
         }
     }

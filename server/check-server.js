@@ -6,15 +6,15 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const DEFAULT_URL = 'https://device.atebd.com/server';
+const DEFAULT_URL = process.env.PUBLIC_BASE_URL || process.env.ANDROID_BRIDGE_PUBLIC_URL || '';
 
 function printUsage() {
   console.log(`Usage:
-  node server/check-server.js --url https://device.atebd.com/server [options]
+  node server/check-server.js --url https://your-tunnel.trycloudflare.com [options]
 
 Options:
   --config server/tunnel.config.json
-  --url https://device.atebd.com/server
+  --url https://your-tunnel.trycloudflare.com
   --timeout 5000
   --follow-redirects
   --max-redirects 5
@@ -22,7 +22,7 @@ Options:
   --json
 
 Examples:
-  npm run server:check -- --url https://device.atebd.com/server
+  npm run server:check -- --url https://your-tunnel.trycloudflare.com
   npm run server:check -- --config server/tunnel.config.json
   npm --prefix server run check -- --url http://127.0.0.1:3000/server
 `);
@@ -122,6 +122,9 @@ function validateOptions(options) {
 }
 
 function normalizeBaseUrl(value) {
+  if (!value) {
+    throw new Error('--url is required unless PUBLIC_BASE_URL or ANDROID_BRIDGE_PUBLIC_URL is set.');
+  }
   const parsed = new URL(value || DEFAULT_URL);
   parsed.hash = '';
   parsed.search = '';
@@ -235,7 +238,7 @@ function redirectDetail(response) {
 
 function wordpressHint(value) {
   return /wp-signup\.php/i.test(String(value || ''))
-    ? ' (WordPress catch-all; IoT Nginx vhost is not serving this domain)'
+    ? ' (WordPress catch-all; Cloudflare public hostname is not routing to the dashboard tunnel)'
     : '';
 }
 

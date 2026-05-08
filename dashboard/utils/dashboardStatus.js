@@ -917,7 +917,8 @@ function buildDashboardDeviceStatus(status, online) {
         source?.status?.modem?.dataModeEnabled,
         source?.status?.modem?.dataSession
     );
-    const systemRuntime = source?.systemRuntime ? { ...source.systemRuntime } : null;
+    const rawSystemRuntime = source?.systemRuntime || source?.system || null;
+    const systemRuntime = rawSystemRuntime ? { ...rawSystemRuntime } : null;
     const hardware = source?.hardware ? { ...source.hardware } : null;
     const transport = source?.transport ? { ...source.transport } : null;
     const sync = source?.sync || source?.status?.sync || null;

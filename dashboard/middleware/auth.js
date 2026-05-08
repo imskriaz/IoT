@@ -107,6 +107,7 @@ const authMiddleware = async (req, res, next) => {
     if (
         publicPaths.includes(requestPath) ||
         requestPath.startsWith('/auth/') ||
+        requestPath.startsWith('/api/ota/download/') ||
         requestPath.startsWith('/ota/download/')
     ) {
         return next();

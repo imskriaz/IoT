@@ -56,6 +56,7 @@ describe('sms route queue-first delivery', () => {
         else process.env.PHONE_COUNTRY_CODE = originalPhoneCountryCode;
         delete global.io;
         delete global.mqttService;
+        delete global.modemService;
     });
 
     test('queues outgoing SMS instead of failing when broker is offline', async () => {
@@ -240,6 +241,62 @@ describe('sms route queue-first delivery', () => {
             synced: 1,
             imported: 1,
             skipped: 0
+        }));
+    });
+
+    test('pull messages warns when SIM storage has records but firmware returns no readable entries', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+        global.modemService = {
+            getDeviceStatus: jest.fn(() => ({
+                hardware: {
+                    smsStorage: {
+                        name: 'ME',
+                        used: 111,
+                        total: 180
+                    }
+                }
+            }))
+        };
+        global.mqttService.publishCommand.mockResolvedValueOnce({
+            success: true,
+            detail: 'sms_pull_empty',
+            payload: {
+                count: 0,
+                synced: 0,
+                entries: []
+            }
+        });
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/sync')
+            .send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            imported: 0,
+            total: 0,
+            warning: expect.stringContaining('111/180')
+        }));
+        expect(res.body.diagnostics).toEqual(expect.objectContaining({
+            blocker: 'sms_storage_has_no_readable_pull_entries',
+            requiresSerialValidation: true,
+            pullDetail: 'sms_pull_empty'
+        }));
+        expectDeviceEvent('device-1', 'sms:sync-completed', expect.objectContaining({
+            deviceId: 'device-1',
+            total: 0,
+            synced: 0,
+            imported: 0,
+            deviceSmsStorage: expect.objectContaining({ used: 111, total: 180 }),
+            warning: expect.stringContaining('firmware returned no readable SMS entries')
         }));
     });
 

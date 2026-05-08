@@ -45,6 +45,7 @@ typedef struct {
 } modem_a7670_sms_runtime_state_t;
 
 static modem_a7670_sms_runtime_state_t s_sms_runtime_state;
+static uint16_t s_sms_storage_scan_next_index = 0U;
 
 static bool modem_a7670_sms_decode_ucs2_hex(const char *input, char *output, size_t output_len);
 static bool modem_a7670_sms_next_utf8_char(const char *text, size_t *out_len);
@@ -932,13 +933,115 @@ static bool modem_a7670_parse_sms_list_index(const char *response, int *out_inde
     return true;
 }
 
-static bool modem_a7670_sms_list_no_unread_response(const char *response) {
+static bool modem_a7670_sms_list_no_message_response(const char *response) {
     if (!response || strstr(response, "+CMGL:") != NULL) {
         return false;
     }
 
     return strstr(response, "+CMS ERROR: unknown error") != NULL ||
            strstr(response, "+CMS ERROR: 500") != NULL;
+}
+
+static bool modem_a7670_sms_read_no_message_response(const char *response) {
+    if (!response || strstr(response, "+CMGR:") != NULL) {
+        return false;
+    }
+
+    return strstr(response, "+CMS ERROR:") != NULL ||
+           strstr(response, "\r\nOK") != NULL ||
+           strcmp(response, "OK") == 0;
+}
+
+static esp_err_t modem_a7670_consume_sms_by_stat_locked(
+    const char *stat,
+    unified_sms_payload_t *out_payload,
+    char *response,
+    size_t response_len,
+    int64_t deadline_us
+) {
+    char command[40] = {0};
+    int sms_index = -1;
+    int written = 0;
+    uint32_t remaining_timeout_ms = 0U;
+    esp_err_t err = ESP_OK;
+
+    if (!stat || !out_payload || !response || response_len == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    written = snprintf(command, sizeof(command), "AT+CMGL=\"%s\"", stat);
+    if (written <= 0 || (size_t)written >= sizeof(command)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    response[0] = '\0';
+    remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+    if (remaining_timeout_ms == 0U) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    err = modem_a7670_send_command_locked(command, response, response_len, remaining_timeout_ms, false);
+    if (err != ESP_OK && modem_a7670_sms_list_no_message_response(response)) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (err == ESP_OK && modem_a7670_parse_sms_list_index(response, &sms_index)) {
+        remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            return ESP_ERR_TIMEOUT;
+        }
+        return modem_a7670_read_sms_locked(sms_index, out_payload, response, response_len, deadline_us, true);
+    }
+    if (err == ESP_OK) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    return err;
+}
+
+static esp_err_t modem_a7670_consume_sms_by_index_scan_locked(
+    unified_sms_payload_t *out_payload,
+    char *response,
+    size_t response_len,
+    int64_t deadline_us
+) {
+    const uint16_t total = s_status.sms_read_storage_total > 0U
+        ? s_status.sms_read_storage_total
+        : (s_status.sms_storage_total > 0U ? s_status.sms_storage_total : 180U);
+    const uint16_t safe_total = total > 512U ? 512U : total;
+    uint16_t attempts = 0U;
+    uint16_t index = s_sms_storage_scan_next_index;
+    esp_err_t last_err = ESP_ERR_NOT_FOUND;
+
+    if (!out_payload || !response || response_len == 0U || safe_total == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (index >= safe_total) {
+        index = 0U;
+    }
+
+    while (attempts < safe_total) {
+        uint32_t remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+        if (remaining_timeout_ms == 0U) {
+            return ESP_ERR_TIMEOUT;
+        }
+
+        response[0] = '\0';
+        last_err = modem_a7670_read_sms_locked((int)index, out_payload, response, response_len, deadline_us, true);
+        s_sms_storage_scan_next_index = (uint16_t)((index + 1U) % safe_total);
+        if (last_err == ESP_OK) {
+            return ESP_OK;
+        }
+        if (!modem_a7670_sms_read_no_message_response(response) &&
+            last_err != ESP_FAIL &&
+            last_err != ESP_ERR_NOT_FOUND) {
+            return last_err;
+        }
+
+        index = s_sms_storage_scan_next_index;
+        attempts++;
+    }
+
+    return ESP_ERR_NOT_FOUND;
 }
 
 static bool modem_a7670_parse_concat_indexes(
@@ -1862,7 +1965,6 @@ esp_err_t modem_a7670_delete_sms_by_flag(uint8_t delete_flag, uint32_t timeout_m
 esp_err_t modem_a7670_consume_pending_sms(unified_sms_payload_t *out_payload, uint32_t timeout_ms) {
     char response[MODEM_A7670_SMS_READ_RESPONSE_LEN] = {0};
     esp_err_t err = ESP_FAIL;
-    int sms_index = -1;
     int queued_sms_index = -1;
 
     if (!out_payload) {
@@ -1907,25 +2009,30 @@ esp_err_t modem_a7670_consume_pending_sms(unified_sms_payload_t *out_payload, ui
             err = modem_a7670_consume_concat_sms_locked(out_payload, response, sizeof(response), deadline_us);
         }
         if (err == ESP_ERR_NOT_FOUND) {
-            response[0] = '\0';
-            remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
-            if (remaining_timeout_ms == 0U) {
-                err = ESP_ERR_TIMEOUT;
-            } else {
-                err = modem_a7670_send_command_locked("AT+CMGL=\"REC UNREAD\"", response, sizeof(response), remaining_timeout_ms, false);
-            }
-            if (err != ESP_OK && modem_a7670_sms_list_no_unread_response(response)) {
-                err = ESP_ERR_NOT_FOUND;
-            } else if (err == ESP_OK && modem_a7670_parse_sms_list_index(response, &sms_index)) {
-                remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
-                if (remaining_timeout_ms == 0U) {
-                    err = ESP_ERR_TIMEOUT;
-                } else {
-                    err = modem_a7670_read_sms_locked(sms_index, out_payload, response, sizeof(response), deadline_us, true);
-                }
-            } else if (err == ESP_OK) {
-                err = ESP_ERR_NOT_FOUND;
-            }
+            err = modem_a7670_consume_sms_by_stat_locked(
+                "REC UNREAD",
+                out_payload,
+                response,
+                sizeof(response),
+                deadline_us
+            );
+        }
+        if (err == ESP_ERR_NOT_FOUND) {
+            err = modem_a7670_consume_sms_by_stat_locked(
+                "REC READ",
+                out_payload,
+                response,
+                sizeof(response),
+                deadline_us
+            );
+        }
+        if (err == ESP_ERR_NOT_FOUND) {
+            err = modem_a7670_consume_sms_by_index_scan_locked(
+                out_payload,
+                response,
+                sizeof(response),
+                deadline_us
+            );
         }
     }
 

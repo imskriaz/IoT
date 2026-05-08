@@ -67,6 +67,26 @@ describe('auth middleware', () => {
         expect(res.body).toBeNull();
     });
 
+    test('allows signed API OTA downloads through without authentication', async () => {
+        const req = {
+            originalUrl: '/api/ota/download/firmware.bin?expires=1778230671676&sig=test',
+            path: '/ota/download/firmware.bin',
+            url: '/ota/download/firmware.bin?expires=1778230671676&sig=test',
+            baseUrl: '/api',
+            headers: {},
+            session: {},
+            app: { locals: { db: null } }
+        };
+        const res = createResponse();
+        const next = jest.fn();
+
+        await authMiddleware(req, res, next);
+
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(res.redirectTarget).toBeNull();
+        expect(res.body).toBeNull();
+    });
+
     test('requires login for the onboarding page', async () => {
         const req = {
             originalUrl: '/onboard',

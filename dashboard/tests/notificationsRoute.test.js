@@ -3,9 +3,13 @@
 const express = require('express');
 const request = require('supertest');
 
-jest.mock('../services/notificationService', () => ({
-    capture: jest.fn()
-}));
+jest.mock('../services/notificationService', () => {
+    const actual = jest.requireActual('../services/notificationService');
+    return {
+        ...actual,
+        capture: jest.fn()
+    };
+});
 
 function buildApp(db) {
     const app = express();
@@ -24,7 +28,7 @@ describe('notifications route', () => {
     test('lists notifications with read, category, device, and search filters', async () => {
         const db = {
             all: jest.fn().mockResolvedValue([
-                { id: 1, title: 'Low battery', metadata: '{"level":15}', read: 0 }
+                { id: 1, title: 'Low battery', category: 'device', metadata: '{"level":15}', read: 0, device_id: 'esp32-1', device_label: 'Warehouse ESP32' }
             ]),
             get: jest.fn().mockResolvedValue({ count: 1 }),
             run: jest.fn()
@@ -38,16 +42,45 @@ describe('notifications route', () => {
         expect(res.body.success).toBe(true);
         expect(res.body.unreadCount).toBe(1);
         expect(res.body.notifications[0].metadata).toEqual({ level: 15 });
+        expect(res.body.notifications[0].device_label).toBe('Warehouse ESP32');
+        expect(res.body.notifications[0].action_url).toBe('/devices/about?device=esp32-1');
         const sql = db.all.mock.calls[0][0];
         const params = db.all.mock.calls[0][1];
-        expect(sql).toContain('COALESCE(read, 0) = 0');
-        expect(sql).toContain('category = ?');
-        expect(sql).toContain('(device_id = ? OR device_id IS NULL)');
-        expect(sql).toContain('(title LIKE ? OR message LIKE ? OR device_id LIKE ?)');
-        expect(params).toEqual([7, 'device', 'esp32-1', '%battery%', '%battery%', '%battery%', 25, 50]);
+        expect(sql).toContain('COALESCE(NULLIF(TRIM(d.name), \'\'), n.device_id) AS device_label');
+        expect(sql).toContain('LEFT JOIN devices d ON d.id = n.device_id');
+        expect(sql).toContain('COALESCE(n.read, 0) = 0');
+        expect(sql).toContain('n.category = ?');
+        expect(sql).toContain('n.device_id = ?');
+        expect(sql).toContain('(n.title LIKE ? OR n.message LIKE ? OR n.device_id LIKE ? OR d.name LIKE ?)');
+        expect(params).toEqual([7, 'device', 'esp32-1', '%battery%', '%battery%', '%battery%', '%battery%', 25, 50]);
         expect(res.body.totalCount).toBe(1);
         expect(res.body.limit).toBe(25);
         expect(res.body.offset).toBe(50);
+    });
+
+    test('derives specific links for linkable notification categories', async () => {
+        const db = {
+            all: jest.fn().mockResolvedValue([
+                {
+                    id: 2,
+                    title: 'New SMS received',
+                    category: 'sms',
+                    device_id: 'android-1',
+                    action_url: '/sms',
+                    metadata: '{"from":"+15551234567","message":"Hello"}',
+                    read: 0
+                }
+            ]),
+            get: jest.fn().mockResolvedValue({ count: 1 }),
+            run: jest.fn()
+        };
+        const app = buildApp(db);
+
+        const res = await request(app)
+            .get('/api/notifications?read=unread&category=sms')
+            .expect(200);
+
+        expect(res.body.notifications[0].action_url).toBe('/sms?device=android-1&thread=%2B15551234567');
     });
 
     test('can mark selected notifications read and unread', async () => {
@@ -92,14 +125,15 @@ describe('notifications route', () => {
         expect(db.run.mock.calls[0][1]).toEqual([4, 5]);
 
         await request(app)
-            .post('/api/notifications/delete-all?read=unread&category=sms')
+            .post('/api/notifications/delete-all?read=unread&category=sms&deviceId=android-1')
             .send({})
             .expect(200);
 
         expect(db.run.mock.calls[1][0]).toContain('DELETE FROM notifications');
         expect(db.run.mock.calls[1][0]).toContain('COALESCE(read, 0) = 0');
         expect(db.run.mock.calls[1][0]).toContain('category = ?');
-        expect(db.run.mock.calls[1][1]).toEqual([7, 'sms']);
+        expect(db.run.mock.calls[1][0]).toContain('device_id = ?');
+        expect(db.run.mock.calls[1][1]).toEqual([7, 'sms', 'android-1']);
     });
 
     test('delete-all without filters clears every visible notification for the user', async () => {

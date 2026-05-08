@@ -8,16 +8,16 @@ const net = require('net');
 const os = require('os');
 const { spawnSync } = require('child_process');
 
-const DEFAULT_DOMAIN = 'device.atebd.com';
-const DEFAULT_URL = 'https://device.atebd.com/server';
+const DEFAULT_DOMAIN = '';
+const DEFAULT_URL = process.env.PUBLIC_BASE_URL || process.env.ANDROID_BRIDGE_PUBLIC_URL || '';
 
 function printUsage() {
   console.log(`Usage:
   node server/diagnose-vps.js [options]
 
 Options:
-  --domain device.atebd.com
-  --url https://device.atebd.com/server
+  --domain your-hostname.example.com
+  --url https://your-tunnel.trycloudflare.com
   --origin-ip YOUR_VPS_IP
   --app-port 3000
   --service iot-dashboard
@@ -28,7 +28,7 @@ Options:
 
 Examples:
   npm --prefix /opt/iot/server run diagnose
-  npm run server:diagnose -- --url https://device.atebd.com/server --skip-local
+  npm run server:diagnose -- --url https://your-tunnel.trycloudflare.com --skip-local
 `);
 }
 
@@ -274,7 +274,7 @@ function responseDetail(response) {
 
 function wordpressHint(value) {
   return /wp-signup\.php/i.test(String(value || ''))
-    ? ' (WordPress catch-all; check DNS/Cloudflare origin and Nginx server_name)'
+    ? ' (WordPress catch-all; check Cloudflare public hostname or DNS origin)'
     : '';
 }
 

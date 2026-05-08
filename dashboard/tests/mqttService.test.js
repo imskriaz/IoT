@@ -759,6 +759,7 @@ describe('mqttService firmware compatibility', () => {
         global.app.locals.db = {
             all: jest.fn()
                 .mockResolvedValueOnce([])
+                .mockResolvedValueOnce([])
                 .mockResolvedValueOnce([interruptedRow])
                 .mockResolvedValueOnce([ambiguousRow])
                 .mockResolvedValueOnce([{
@@ -779,6 +780,40 @@ describe('mqttService firmware compatibility', () => {
         expect(global.app.locals.db.run).toHaveBeenCalledWith(
             expect.stringContaining('SMS command status was not confirmed before queue tracking ended'),
             [56]
+        );
+        expect(svc._emitDeviceQueueState).toHaveBeenCalledWith('device-1');
+    });
+
+    test('startup recovery corrects completed queue rows that contain failed device responses', async () => {
+        const failedCompletedRow = {
+            id: 'q-ota-1',
+            device_id: 'device-1',
+            command: 'ota-update',
+            message_id: 'ota_update_1',
+            status: 'completed',
+            completed_at: '2026-05-08 08:28:10',
+            response_payload: JSON.stringify({
+                success: false,
+                result: 'failed',
+                detail: 'ota_update_failed'
+            })
+        };
+        global.app.locals.db = {
+            all: jest.fn()
+                .mockResolvedValueOnce([failedCompletedRow])
+                .mockResolvedValueOnce([])
+                .mockResolvedValueOnce([])
+                .mockResolvedValueOnce([])
+                .mockResolvedValueOnce([]),
+            run: jest.fn().mockResolvedValue({ changes: 1 })
+        };
+        svc._emitDeviceQueueState = jest.fn().mockResolvedValue();
+
+        await svc._recoverPersistentQueue();
+
+        expect(global.app.locals.db.run).toHaveBeenCalledWith(
+            expect.stringContaining('UPDATE device_command_queue'),
+            expect.arrayContaining(['failed', 'ota_update_failed', 'q-ota-1'])
         );
         expect(svc._emitDeviceQueueState).toHaveBeenCalledWith('device-1');
     });

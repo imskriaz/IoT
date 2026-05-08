@@ -26,6 +26,22 @@ firmware, or device contracts.
 - When dashboard behavior depends on firmware support or vendor constraints, verify the
   capability in firmware and docs before exposing or assuming the action.
 
+## Completion Standard
+
+- Treat every task as end-to-end unless the user explicitly limits scope. Do all
+  known follow-up work in the same session: dashboard, backend, firmware,
+  device contract, persistence, reporting, tests, and live validation where
+  hardware access allows it.
+- Before calling a task complete, sweep the likely edge cases: offline and stale
+  devices, reconnects, retries, duplicate events, partial payloads, missing
+  fields, failed hardware commands, storage-full or queue-full states, reboot
+  recovery, and dashboard refresh/restart behavior.
+- A command is not successful just because the dashboard queued or published it.
+  Success must mean the execution tier accepted and completed it, or the report
+  must clearly say what remains blocked and why.
+- If live hardware validation is blocked, report the exact blocker, keep the code
+  and automated tests complete, and leave the next hardware command ready to run.
+
 ## ESP32 Firmware Command Workflow
 
 - When working on ESP32 firmware commands, first validate the command from the

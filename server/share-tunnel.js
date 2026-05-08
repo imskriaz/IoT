@@ -7,7 +7,7 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const DEFAULT_FORWARD = '3000:3001';
-const DEFAULT_PUBLIC_URL = 'https://device.atebd.com/server';
+const DEFAULT_PUBLIC_URL = '';
 const FORWARD_PRESETS = {
   dashboard: DEFAULT_FORWARD,
   deployed: '3000:3000',
@@ -24,7 +24,7 @@ Options:
   --config server/tunnel.config.json
   --preset dashboard|deployed|chat|live|all
   --forward 3000:3001,3010:3010  One or more remote:local mappings
-  --public-url https://device.atebd.com/server
+  --public-url https://your-public-url.example.com
   --key /path/to/id_rsa
   --remote-bind 127.0.0.1
   --local-bind 127.0.0.1

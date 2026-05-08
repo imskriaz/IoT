@@ -422,6 +422,34 @@ describe('ESP32 MQTT console route', () => {
         );
     });
 
+    test('reports device-level command rejection as a failed console command', async () => {
+        const publishCommand = jest.fn().mockResolvedValue({
+            success: false,
+            result: 'rejected',
+            detail: 'modem_at_requires_serial',
+            result_code: 262
+        });
+        global.mqttService = { publishCommand };
+        const app = buildApp();
+
+        const res = await request(app)
+            .post('/api/esp32-console/command')
+            .send({ command: 'AT+CPMS?', payload: {} });
+
+        expect(res.status).toBe(502);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: false,
+            message: 'modem_at_requires_serial',
+            command: 'modem-at',
+            rawLine: 'AT+CPMS?'
+        }));
+        expect(res.body.result).toEqual(expect.objectContaining({
+            success: false,
+            result: 'rejected',
+            result_code: 262
+        }));
+    });
+
     test('rejects invalid command names', async () => {
         global.mqttService = { publishCommand: jest.fn() };
         const app = buildApp();
