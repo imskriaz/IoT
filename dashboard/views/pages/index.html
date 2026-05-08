@@ -196,9 +196,20 @@
     const homeHardwarePsram = formatHomeBytes(homeHardware.psramSizeBytes, '8.0 MB');
     const homeHardwareFlash = formatHomeBytes(homeHardware.flashSizeBytes, '16.0 MB');
     const homeSmsStorage = homeHardware.smsStorage || deviceStatus.status?.modem?.smsStorage || null;
-    const homeSmsStorageLabel = homeSmsStorage && Number(homeSmsStorage.total) > 0
-        ? `${homeSmsStorage.name || 'ME'} SMS store ${Number(homeSmsStorage.used || 0)}/${Number(homeSmsStorage.total || 0)}`
-        : 'SMS store not reported';
+    const formatHomeSmsStorage = (store) => store && Number(store.total) > 0
+        ? `${store.name || 'ME'} ${Number(store.used || 0)}/${Number(store.total || 0)}`
+        : null;
+    const homeSmsReadStorage = formatHomeSmsStorage(homeSmsStorage?.read || homeSmsStorage);
+    const homeSmsWriteStorage = formatHomeSmsStorage(homeSmsStorage?.write || homeSmsStorage);
+    const homeSmsReportStorage = formatHomeSmsStorage(homeSmsStorage?.report || homeSmsStorage);
+    const homeSmsStorageSame = homeSmsReadStorage &&
+        homeSmsReadStorage === homeSmsWriteStorage &&
+        homeSmsReadStorage === homeSmsReportStorage;
+    const homeSmsStorageLabel = homeSmsStorageSame
+        ? `${homeSmsReadStorage} SMS read/write/report`
+        : (homeSmsReadStorage
+            ? `SMS read ${homeSmsReadStorage}, write ${homeSmsWriteStorage || '-'}, report ${homeSmsReportStorage || '-'}`
+            : 'SMS store not reported');
     const homeQueueState = queueState || {};
     const homeDashboardQueue = homeQueueState.dashboard || {};
     const homeDashboardSummary = homeDashboardQueue.summary || {};

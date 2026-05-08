@@ -137,6 +137,7 @@ function normalizeIncomingEventTimestamp(value, fallbackIso) {
 const DURABLE_COMMANDS = new Set([
     'send-sms',
     'send-sms-multipart',
+    'delete-sms',
     'restart',
     'restart-modem',
     'ota-update',
@@ -166,6 +167,7 @@ const DURABLE_COMMANDS = new Set([
 const ACK_REQUIRED_DURABLE_COMMANDS = new Set([
     'send-sms',
     'send-sms-multipart',
+    'delete-sms',
     'restart',
     'restart-modem',
     'ota-update',
@@ -197,12 +199,14 @@ const ACK_REQUIRED_DURABLE_COMMANDS = new Set([
 // synchronous path because the phone bridge has its own OS-level SMS behavior.
 const ESP32_ASYNC_RESULT_DURABLE_COMMANDS = new Set([
     'send-sms',
-    'send-sms-multipart'
+    'send-sms-multipart',
+    'delete-sms'
 ]);
 
 const NON_REPLAY_SAFE_COMMANDS = new Set([
     'send-sms',
     'send-sms-multipart',
+    'delete-sms',
     'send-ussd',
     'cancel-ussd',
     'make-call',

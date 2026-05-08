@@ -128,7 +128,7 @@ static bool sms_service_telephony_unavailable(const modem_a7670_status_t *modem_
 }
 
 static bool sms_service_no_pending_sms(esp_err_t err) {
-    return err == ESP_ERR_NOT_FOUND;
+    return err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_STATE || err == ESP_ERR_TIMEOUT;
 }
 
 static void sms_service_set_health_locked(bool ready, const char *detail) {
@@ -652,7 +652,7 @@ esp_err_t sms_service_init(void) {
     task_ok = xTaskCreatePinnedToCore(
         sms_service_task,
         "sms_task",
-        CONFIG_UNIFIED_TASK_STACK_MEDIUM,
+        CONFIG_UNIFIED_TASK_STACK_XLARGE,
         NULL,
         4,
         NULL,

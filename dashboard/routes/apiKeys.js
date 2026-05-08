@@ -38,6 +38,65 @@ function hashKey(key) {
     return crypto.createHash('sha256').update(key).digest('hex');
 }
 
+function parseDeviceIds(value) {
+    try {
+        const parsed = JSON.parse(value || '[]');
+        return Array.isArray(parsed)
+            ? parsed.map(item => String(item || '').trim()).filter(Boolean)
+            : [];
+    } catch (_) {
+        return String(value || '')
+            .split(',')
+            .map(item => item.trim())
+            .filter(Boolean);
+    }
+}
+
+async function reconcileApiKeyDeviceScopes(db, userId) {
+    const scopedKeys = await db.all(
+        `SELECT id, device_ids
+         FROM api_keys
+         WHERE user_id = ?
+           AND is_active = 1
+           AND device_ids IS NOT NULL
+           AND TRIM(device_ids) <> ''`,
+        [userId]
+    );
+    if (!scopedKeys.length) {
+        return { deleted: 0, updated: 0 };
+    }
+
+    const deviceRows = await db.all(`SELECT id FROM devices`);
+    const existingDevices = new Set(deviceRows.map(row => String(row.id || '').trim()).filter(Boolean));
+    let deleted = 0;
+    let updated = 0;
+
+    for (const key of scopedKeys) {
+        const scopedDevices = Array.from(new Set(parseDeviceIds(key.device_ids)));
+        if (!scopedDevices.length) {
+            continue;
+        }
+
+        const validDevices = scopedDevices.filter(deviceId => existingDevices.has(deviceId));
+        if (validDevices.length === scopedDevices.length) {
+            continue;
+        }
+
+        if (!validDevices.length) {
+            await db.run(`DELETE FROM api_keys WHERE id = ? AND user_id = ?`, [key.id, userId]);
+            deleted += 1;
+        } else {
+            await db.run(
+                `UPDATE api_keys SET device_ids = ? WHERE id = ? AND user_id = ?`,
+                [JSON.stringify(validDevices), key.id, userId]
+            );
+            updated += 1;
+        }
+    }
+
+    return { deleted, updated };
+}
+
 /**
  * @swagger
  * tags:
@@ -71,12 +130,21 @@ function hashKey(key) {
 router.get('/', async (req, res) => {
     try {
         const db = req.app.locals.db;
+        const includeInactive = ['1', 'true', 'yes'].includes(
+            String(req.query.include_inactive || '').trim().toLowerCase()
+        );
+        const reconciled = includeInactive
+            ? { deleted: 0, updated: 0 }
+            : await reconcileApiKeyDeviceScopes(db, req.session.user.id);
         const keys = await db.all(
             `SELECT id, name, key_prefix, scopes, device_ids, last_used, expires_at, is_active, created_at, rate_limit_rpm
-             FROM api_keys WHERE user_id = ? ORDER BY created_at DESC`,
+             FROM api_keys
+             WHERE user_id = ?
+               ${includeInactive ? '' : 'AND is_active = 1'}
+             ORDER BY created_at DESC`,
             [req.session.user.id]
         );
-        res.json({ success: true, keys });
+        res.json({ success: true, keys, reconciled });
     } catch (error) {
         logger.error('GET /api/keys error:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch API keys' });
@@ -181,12 +249,12 @@ router.delete('/:id', [param('id').isInt({ min: 1 })], async (req, res) => {
     try {
         const db = req.app.locals.db;
         const result = await db.run(
-            `UPDATE api_keys SET is_active = 0 WHERE id = ? AND user_id = ?`,
+            `UPDATE api_keys SET is_active = 0 WHERE id = ? AND user_id = ? AND is_active = 1`,
             [req.params.id, req.session.user.id]
         );
-        if (!result.changes) return res.status(404).json({ success: false, message: 'Key not found' });
+        if (!result.changes) return res.status(404).json({ success: false, message: 'Key not found or already revoked' });
         logger.info(`API key revoked: id=${req.params.id} by user ${req.session.user.id}`);
-        res.json({ success: true });
+        res.json({ success: true, message: 'API key revoked' });
     } catch (error) {
         logger.error('DELETE /api/keys/:id error:', error);
         res.status(500).json({ success: false, message: 'Failed to revoke key' });

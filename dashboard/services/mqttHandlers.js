@@ -285,6 +285,18 @@ function smsExternalId(data = {}) {
     return raw || null;
 }
 
+function normalizeSmsStorageIndex(data = {}) {
+    const value = data.storage_index ?? data.sms_storage_index ?? data.modem_storage_index ?? data.index;
+    const numeric = Number(value);
+    return Number.isInteger(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function normalizeFirmwareSmsStorageId(data = {}) {
+    const value = data.storage_id ?? data.sms_storage_id ?? data.firmware_storage_id;
+    const numeric = Number(value);
+    return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
 function normalizeEventTimestamp(value) {
     if (typeof value === 'number' && Number.isFinite(value)) {
         const millis = value > 100000000000 ? value : value * 1000;
@@ -1474,11 +1486,13 @@ class MQTTHandlers {
                         simSlot: simScope.simSlot
                     });
                     const storageTimestamp = normalizeMultipartTimestamp(smsTimestamp, multipart);
+                    const modemStorageIndex = normalizeSmsStorageIndex(data);
+                    const firmwareStorageId = normalizeFirmwareSmsStorageId(data);
                     const result = await db.run(`
                         INSERT OR IGNORE INTO sms
                             (from_number, to_number, message, type, status, device_id, timestamp, read, source, sim_slot, external_id,
-                             multipart_ref, multipart_part_index, multipart_part_count, multipart_group_key)
-                        VALUES (?, ?, ?, ?, ?, COALESCE(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             modem_storage_index, firmware_storage_id, multipart_ref, multipart_part_index, multipart_part_count, multipart_group_key)
+                        VALUES (?, ?, ?, ?, ?, COALESCE(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     `, [
                         isOutgoing ? null : decodedFrom,
                         isOutgoing ? decodedTo : (decodedTo || null),
@@ -1491,6 +1505,8 @@ class MQTTHandlers {
                         syncPayload ? 'android-mqtt-sync' : 'android-mqtt',
                         simScope.simSlot,
                         externalId,
+                        modemStorageIndex,
+                        firmwareStorageId,
                         multipart.multipart_ref,
                         multipart.multipart_part_index,
                         multipart.multipart_part_count,
@@ -1548,6 +1564,8 @@ class MQTTHandlers {
                         status: isOutgoing ? 'sent' : 'received',
                         read,
                         external_id: externalId,
+                        modem_storage_index: modemStorageIndex,
+                        firmware_storage_id: firmwareStorageId,
                         multipart_ref: multipart.multipart_ref,
                         multipart_part_index: multipart.multipart_part_index,
                         multipart_part_count: multipart.multipart_part_count,

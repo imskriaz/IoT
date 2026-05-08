@@ -42,6 +42,15 @@ typedef struct {
     char sms_storage_name[8];
     uint16_t sms_storage_used;
     uint16_t sms_storage_total;
+    char sms_read_storage_name[8];
+    uint16_t sms_read_storage_used;
+    uint16_t sms_read_storage_total;
+    char sms_write_storage_name[8];
+    uint16_t sms_write_storage_used;
+    uint16_t sms_write_storage_total;
+    char sms_report_storage_name[8];
+    uint16_t sms_report_storage_used;
+    uint16_t sms_report_storage_total;
     char last_response[UNIFIED_TEXT_MEDIUM_LEN];
 } modem_a7670_status_t;
 
@@ -136,3 +145,5 @@ esp_err_t modem_a7670_acknowledge_new_message(uint32_t timeout_ms);
 esp_err_t modem_a7670_consume_pending_sms(unified_sms_payload_t *out_payload, uint32_t timeout_ms);
 esp_err_t modem_a7670_consume_sms_index(int storage_index, unified_sms_payload_t *out_payload, uint32_t timeout_ms);
 esp_err_t modem_a7670_read_sms(int storage_index, unified_sms_payload_t *out_payload, uint32_t timeout_ms);
+esp_err_t modem_a7670_delete_sms(int storage_index, uint32_t timeout_ms);
+esp_err_t modem_a7670_delete_sms_by_flag(uint8_t delete_flag, uint32_t timeout_ms);

@@ -517,9 +517,20 @@
         const runtimeMemory = live.systemRuntime || {};
         const liveHardware = live.hardware || {};
         const smsStorage = liveHardware.smsStorage || live.status?.modem?.smsStorage || null;
-        const smsStorageLabel = smsStorage && Number(smsStorage.total) > 0
-            ? `${smsStorage.name || 'ME'} ${Number(smsStorage.used || 0)}/${Number(smsStorage.total || 0)} slots`
-            : '-';
+        const formatSmsStorageEntry = (store) => store && Number(store.total) > 0
+            ? `${store.name || 'ME'} ${Number(store.used || 0)}/${Number(store.total || 0)}`
+            : null;
+        const smsReadStorage = formatSmsStorageEntry(smsStorage?.read || smsStorage);
+        const smsWriteStorage = formatSmsStorageEntry(smsStorage?.write || smsStorage);
+        const smsReportStorage = formatSmsStorageEntry(smsStorage?.report || smsStorage);
+        const smsStorageSame = smsReadStorage &&
+            smsReadStorage === smsWriteStorage &&
+            smsReadStorage === smsReportStorage;
+        const smsStorageLabel = smsStorageSame
+            ? `${smsReadStorage} read/write/report slots`
+            : (smsReadStorage
+                ? `Read ${smsReadStorage}, write ${smsWriteStorage || '-'}, report ${smsReportStorage || '-'}`
+                : '-');
 
         renderSummary(snapshot);
 

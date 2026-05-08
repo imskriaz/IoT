@@ -1705,7 +1705,8 @@ esp_err_t mqtt_mgr_publish_sms_incoming(const unified_sms_payload_t *payload) {
         err = mqtt_mgr_format_json(
             scratch->json,
             sizeof(scratch->json),
-            "{\"type\":\"sms_incoming\",\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp\":%" PRIu32 ",\"multipart_ref\":\"%s\",\"multipart_part_index\":%u,\"multipart_part_count\":%u}",
+            "{\"type\":\"sms_incoming\",\"storage_id\":%" PRIu32 ",\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp\":%" PRIu32 ",\"multipart_ref\":\"%s\",\"multipart_part_index\":%u,\"multipart_part_count\":%u}",
+            storage_mgr_sms_storage_id(payload),
             scratch->from,
             scratch->text,
             scratch->detail,
@@ -1719,7 +1720,8 @@ esp_err_t mqtt_mgr_publish_sms_incoming(const unified_sms_payload_t *payload) {
         err = mqtt_mgr_format_json(
             scratch->json,
             sizeof(scratch->json),
-            "{\"type\":\"sms_incoming\",\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp\":%" PRIu32 "}",
+            "{\"type\":\"sms_incoming\",\"storage_id\":%" PRIu32 ",\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp\":%" PRIu32 "}",
+            storage_mgr_sms_storage_id(payload),
             scratch->from,
             scratch->text,
             scratch->detail,

@@ -59,6 +59,80 @@ function emitDeviceEvent(deviceId, event, payload) {
     }
 }
 
+function normalizeSmsStorageIndex(value) {
+    const numeric = Number(value);
+    return Number.isInteger(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function normalizeFirmwareSmsStorageId(value) {
+    const numeric = Number(value);
+    return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
+async function queueDeviceSmsDelete(deviceId, payload, reason) {
+    const normalizedDeviceId = String(deviceId || '').trim();
+    if (!normalizedDeviceId || !global.mqttService?.publishCommand) {
+        return { queued: false, reason: 'device_command_service_unavailable' };
+    }
+
+    try {
+        const response = await global.mqttService.publishCommand(
+            normalizedDeviceId,
+            'delete-sms',
+            payload,
+            false,
+            30000,
+            {
+                source: reason || 'dashboard-sms-delete',
+                domain: 'telephony',
+                persistent: true,
+                replaySafe: true,
+                maxAttempts: 3
+            }
+        );
+        return {
+            queued: true,
+            queueId: response?.queueId || null,
+            messageId: response?.messageId || null,
+            mode: payload.mode || null,
+            storageIndex: payload.storage_index ?? null
+        };
+    } catch (error) {
+        logger.warn(`Device SMS delete queue failed for ${normalizedDeviceId}: ${error.message}`);
+        return { queued: false, reason: error.message || 'device_delete_queue_failed' };
+    }
+}
+
+async function queueDeviceSmsDeletesForRows(deviceId, rows = [], reason) {
+    const seen = new Set();
+    const queued = [];
+    const skipped = [];
+
+    for (const row of rows) {
+        const storageIndex = normalizeSmsStorageIndex(row?.modem_storage_index);
+        const storageId = normalizeFirmwareSmsStorageId(row?.firmware_storage_id);
+        if (storageIndex === null && storageId === null) {
+            skipped.push({ id: row?.id || null, reason: 'missing_device_storage_target' });
+            continue;
+        }
+        const dedupeKey = `${storageIndex ?? ''}:${storageId ?? ''}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        queued.push(await queueDeviceSmsDelete(deviceId, {
+            ...(storageIndex !== null ? { storage_index: storageIndex } : {}),
+            ...(storageId !== null ? { storage_id: storageId } : {})
+        }, reason));
+    }
+
+    return {
+        requested: rows.length,
+        queued: queued.filter((entry) => entry.queued).length,
+        skipped: skipped.length,
+        results: queued,
+        skippedRows: skipped
+    };
+}
+
 function splitRecipientInput(value) {
     if (Array.isArray(value)) {
         return value.flatMap((item) => splitRecipientInput(item));
@@ -1006,6 +1080,14 @@ router.delete('/clear', async (req, res) => {
         const conditions = ['device_id = ?', condition];
         const params = [deviceId];
         appendSimScopeCondition(conditions, params, simScope);
+        let deviceDelete = { queued: false, reason: 'dashboard_only' };
+        if (type === 'incoming') {
+            deviceDelete = await queueDeviceSmsDelete(
+                deviceId,
+                { mode: 'incoming', delete_read: true },
+                'dashboard-sms-clear-incoming'
+            );
+        }
         const result = await db.run(
             `DELETE FROM sms WHERE ${conditions.join(' AND ')}`,
             params
@@ -1018,9 +1100,17 @@ router.delete('/clear', async (req, res) => {
         emitDeviceEvent(deviceId, 'sms:bulk-deleted', {
             deviceId,
             count: result.changes,
-            unreadCount
+            unreadCount,
+            deviceDelete
         });
-        res.json({ success: true, deviceId, message: `Cleared ${result.changes} messages`, deleted: result.changes });
+        res.json({
+            success: true,
+            deviceId,
+            message: `Cleared ${result.changes} messages`,
+            deleted: result.changes,
+            deviceDeleteQueued: deviceDelete.queued,
+            deviceDelete
+        });
     } catch (error) {
         logger.error('API SMS clear error:', error);
         res.status(500).json({ success: false, message: 'Failed to clear messages' });
@@ -1047,7 +1137,22 @@ router.delete('/:id(\\d+)', async (req, res) => {
         appendSimScopeCondition(conditions, params, simScope);
         const whereSql = conditions.join(' AND ');
 
-        const existing = await db.get(`SELECT conversation_id FROM sms WHERE ${whereSql}`, params);
+        const existing = await db.get(`SELECT id, conversation_id, type, modem_storage_index, firmware_storage_id FROM sms WHERE ${whereSql}`, params);
+        let deviceDelete = { queued: false, reason: 'missing_device_storage_target' };
+        if (existing) {
+            const storageIndex = normalizeSmsStorageIndex(existing.modem_storage_index);
+            const storageId = normalizeFirmwareSmsStorageId(existing.firmware_storage_id);
+            if (storageIndex !== null || storageId !== null) {
+                deviceDelete = await queueDeviceSmsDelete(
+                    deviceId,
+                    {
+                        ...(storageIndex !== null ? { storage_index: storageIndex } : {}),
+                        ...(storageId !== null ? { storage_id: storageId } : {})
+                    },
+                    'dashboard-sms-delete'
+                );
+            }
+        }
         const result = await db.run(`DELETE FROM sms WHERE ${whereSql}`, params);
 
         if (result.changes === 0) {
@@ -1067,7 +1172,7 @@ router.delete('/:id(\\d+)', async (req, res) => {
             if (global.io) {
                 smsCache.set(null, deviceId);
                 const unreadCount = await getUnreadCountForDevice(db, deviceId, simScope);
-                emitDeviceEvent(deviceId, 'sms:deleted', { id, deviceId, unreadCount });
+                emitDeviceEvent(deviceId, 'sms:deleted', { id, deviceId, unreadCount, deviceDelete });
             }
         } catch (socketError) {
             logger.error('Error emitting socket event:', socketError);
@@ -1075,7 +1180,9 @@ router.delete('/:id(\\d+)', async (req, res) => {
 
         res.json({
             success: true,
-            message: 'SMS deleted successfully'
+            message: 'SMS deleted successfully',
+            deviceDeleteQueued: deviceDelete.queued,
+            deviceDelete
         });
     } catch (error) {
         logger.error('API delete SMS error:', error);
@@ -1292,6 +1399,15 @@ router.post('/bulk-delete', async (req, res) => {
         const conditions = [`device_id = ?`, `id IN (${placeholders})`];
         const params = [deviceId, ...ids];
         appendSimScopeCondition(conditions, params, simScope);
+        const rowsForDeviceDelete = await db.all(
+            `SELECT id, modem_storage_index, firmware_storage_id FROM sms WHERE ${conditions.join(' AND ')}`,
+            params
+        );
+        const deviceDelete = await queueDeviceSmsDeletesForRows(
+            deviceId,
+            rowsForDeviceDelete,
+            'dashboard-sms-bulk-delete'
+        );
 
         const result = await db.run(
             `DELETE FROM sms WHERE ${conditions.join(' AND ')}`,
@@ -1306,7 +1422,7 @@ router.post('/bulk-delete', async (req, res) => {
             if (global.io) {
                 smsCache.set(null, deviceId);
                 const unreadCount = await getUnreadCountForDevice(db, deviceId, simScope);
-                emitDeviceEvent(deviceId, 'sms:bulk-deleted', { deviceId, count: result.changes, unreadCount });
+                emitDeviceEvent(deviceId, 'sms:bulk-deleted', { deviceId, count: result.changes, unreadCount, deviceDelete });
             }
         } catch (socketError) {
             logger.error('Error emitting socket event:', socketError);
@@ -1315,7 +1431,9 @@ router.post('/bulk-delete', async (req, res) => {
         res.json({
             success: true,
             message: `Successfully deleted ${result.changes} messages`,
-            deleted: result.changes
+            deleted: result.changes,
+            deviceDeleteQueued: deviceDelete.queued > 0,
+            deviceDelete
         });
     } catch (error) {
         logger.error('API bulk delete error:', error);

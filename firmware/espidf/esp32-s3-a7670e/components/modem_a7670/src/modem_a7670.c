@@ -1263,9 +1263,16 @@ static void modem_a7670_parse_imei_response_locked(const char *response) {
 
 static void modem_a7670_parse_sms_storage_response_locked(const char *response) {
     const char *line = NULL;
-    char store[sizeof(s_status.sms_storage_name)] = {0};
-    int used = 0;
-    int total = 0;
+    char read_store[sizeof(s_status.sms_read_storage_name)] = {0};
+    char write_store[sizeof(s_status.sms_write_storage_name)] = {0};
+    char report_store[sizeof(s_status.sms_report_storage_name)] = {0};
+    int read_used = 0;
+    int read_total = 0;
+    int write_used = 0;
+    int write_total = 0;
+    int report_used = 0;
+    int report_total = 0;
+    int matched = 0;
 
     if (!response) {
         return;
@@ -1276,17 +1283,52 @@ static void modem_a7670_parse_sms_storage_response_locked(const char *response) 
         return;
     }
 
-    if (sscanf(line, "+CPMS: \"%7[^\"]\",%d,%d", store, &used, &total) != 3 ||
-        used < 0 ||
-        used > UINT16_MAX ||
-        total < 0 ||
-        total > UINT16_MAX) {
+    matched = sscanf(
+        line,
+        "+CPMS: \"%7[^\"]\",%d,%d,\"%7[^\"]\",%d,%d,\"%7[^\"]\",%d,%d",
+        read_store,
+        &read_used,
+        &read_total,
+        write_store,
+        &write_used,
+        &write_total,
+        report_store,
+        &report_used,
+        &report_total
+    );
+    if (matched < 3 ||
+        read_used < 0 ||
+        read_used > UINT16_MAX ||
+        read_total < 0 ||
+        read_total > UINT16_MAX) {
         return;
     }
 
-    snprintf(s_status.sms_storage_name, sizeof(s_status.sms_storage_name), "%s", store);
-    s_status.sms_storage_used = (uint16_t)used;
-    s_status.sms_storage_total = (uint16_t)total;
+    snprintf(s_status.sms_storage_name, sizeof(s_status.sms_storage_name), "%s", read_store);
+    s_status.sms_storage_used = (uint16_t)read_used;
+    s_status.sms_storage_total = (uint16_t)read_total;
+    snprintf(s_status.sms_read_storage_name, sizeof(s_status.sms_read_storage_name), "%s", read_store);
+    s_status.sms_read_storage_used = (uint16_t)read_used;
+    s_status.sms_read_storage_total = (uint16_t)read_total;
+
+    if (matched >= 6 &&
+        write_used >= 0 &&
+        write_used <= UINT16_MAX &&
+        write_total >= 0 &&
+        write_total <= UINT16_MAX) {
+        snprintf(s_status.sms_write_storage_name, sizeof(s_status.sms_write_storage_name), "%s", write_store);
+        s_status.sms_write_storage_used = (uint16_t)write_used;
+        s_status.sms_write_storage_total = (uint16_t)write_total;
+    }
+    if (matched >= 9 &&
+        report_used >= 0 &&
+        report_used <= UINT16_MAX &&
+        report_total >= 0 &&
+        report_total <= UINT16_MAX) {
+        snprintf(s_status.sms_report_storage_name, sizeof(s_status.sms_report_storage_name), "%s", report_store);
+        s_status.sms_report_storage_used = (uint16_t)report_used;
+        s_status.sms_report_storage_total = (uint16_t)report_total;
+    }
 }
 
 static void modem_a7670_parse_line_locked(const char *line) {

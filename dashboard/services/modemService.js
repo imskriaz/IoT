@@ -71,6 +71,32 @@ function normalizeOptionalNumber(value) {
     return Number.isFinite(numeric) ? numeric : null;
 }
 
+function normalizeSmsStorageTuple(data, prefix) {
+    if (!data || data[`${prefix}_total`] === undefined) {
+        return null;
+    }
+
+    return {
+        name: data[`${prefix}_name`] || null,
+        used: Number(data[`${prefix}_used`] || 0),
+        total: Number(data[`${prefix}_total`] || 0)
+    };
+}
+
+function normalizeSmsStorageSummary(data) {
+    const primary = normalizeSmsStorageTuple(data, 'modem_sms_storage');
+    if (!primary) {
+        return null;
+    }
+
+    return {
+        ...primary,
+        read: normalizeSmsStorageTuple(data, 'modem_sms_read_storage') || primary,
+        write: normalizeSmsStorageTuple(data, 'modem_sms_write_storage') || primary,
+        report: normalizeSmsStorageTuple(data, 'modem_sms_report_storage') || primary
+    };
+}
+
 function normalizeChargingState(charging, battery, voltageMv) {
     if (typeof charging !== 'boolean') {
         return null;
@@ -922,13 +948,7 @@ class ModemService {
                         flashSizeBytes: data.flash_size_bytes ?? null,
                         psramSizeBytes: data.psram_size_bytes ?? null,
                         psramAvailable: typeof data.psram_available === 'boolean' ? data.psram_available : null,
-                        smsStorage: data.modem_sms_storage_total !== undefined
-                            ? {
-                                name: data.modem_sms_storage_name || null,
-                                used: Number(data.modem_sms_storage_used || 0),
-                                total: Number(data.modem_sms_storage_total || 0)
-                            }
-                            : null
+                        smsStorage: normalizeSmsStorageSummary(data)
                     }
                 };
             }
@@ -1005,13 +1025,7 @@ class ModemService {
                             ipBearer: !!data.modem_ip_bearer_ready,
                             dataIp: data.modem_data_ip || data.modem_ip_address || null,
                             subscriberNumber: data.modem_subscriber_number || null,
-                            smsStorage: data.modem_sms_storage_total !== undefined
-                                ? {
-                                    name: data.modem_sms_storage_name || null,
-                                    used: Number(data.modem_sms_storage_used || 0),
-                                    total: Number(data.modem_sms_storage_total || 0)
-                                }
-                                : null
+                            smsStorage: normalizeSmsStorageSummary(data)
                         }
                     }
                 };

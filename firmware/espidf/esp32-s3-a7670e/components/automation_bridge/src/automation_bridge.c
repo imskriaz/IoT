@@ -118,6 +118,7 @@ static uint16_t automation_bridge_command_priority(unified_action_command_t comm
     switch (command) {
         case UNIFIED_ACTION_CMD_SEND_SMS:
         case UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART:
+        case UNIFIED_ACTION_CMD_DELETE_SMS:
         case UNIFIED_ACTION_CMD_SEND_USSD:
         case UNIFIED_ACTION_CMD_CANCEL_USSD:
         case UNIFIED_ACTION_CMD_DIAL_NUMBER:
@@ -400,6 +401,8 @@ static const automation_bridge_command_alias_t s_command_aliases[] = {
     {"raw_at", UNIFIED_ACTION_CMD_MODEM_AT},
     {"send_sms", UNIFIED_ACTION_CMD_SEND_SMS},
     {"send_sms_multipart", UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART},
+    {"delete_sms", UNIFIED_ACTION_CMD_DELETE_SMS},
+    {"sms_delete", UNIFIED_ACTION_CMD_DELETE_SMS},
     {"send_ussd", UNIFIED_ACTION_CMD_SEND_USSD},
     {"cancel_ussd", UNIFIED_ACTION_CMD_CANCEL_USSD},
     {"dial_number", UNIFIED_ACTION_CMD_DIAL_NUMBER},
@@ -694,6 +697,56 @@ static esp_err_t automation_bridge_parse_item(
         out_request->sms_multipart_present = true;
         out_request->sms_multipart = cJSON_IsTrue(node);
     }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "storage_index");
+    if (!node) {
+        node = cJSON_GetObjectItemCaseSensitive(payload, "sms_storage_index");
+    }
+    if (!node) {
+        node = cJSON_GetObjectItemCaseSensitive(payload, "index");
+    }
+    if (cJSON_IsNumber(node) && node->valuedouble >= 0 && node->valuedouble <= UINT16_MAX) {
+        out_request->sms_storage_index_present = true;
+        out_request->sms_storage_index = (uint16_t)node->valuedouble;
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "storage_id");
+    if (!node) {
+        node = cJSON_GetObjectItemCaseSensitive(payload, "sms_storage_id");
+    }
+    if (!node) {
+        node = cJSON_GetObjectItemCaseSensitive(payload, "firmware_storage_id");
+    }
+    if (cJSON_IsNumber(node) && node->valuedouble > 0 && node->valuedouble <= UINT32_MAX) {
+        out_request->sms_storage_id_present = true;
+        out_request->sms_storage_id = (uint32_t)node->valuedouble;
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "delete_flag");
+    if (!node) {
+        node = cJSON_GetObjectItemCaseSensitive(payload, "delflag");
+    }
+    if (cJSON_IsNumber(node) && node->valuedouble >= 0 && node->valuedouble <= 4) {
+        out_request->sms_delete_flag_present = true;
+        out_request->sms_delete_flag = (uint8_t)node->valuedouble;
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "delete_read");
+    if (cJSON_IsBool(node)) {
+        out_request->sms_delete_read = cJSON_IsTrue(node);
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "delete_all");
+    if (cJSON_IsBool(node)) {
+        out_request->sms_delete_all = cJSON_IsTrue(node);
+    }
+    node = cJSON_GetObjectItemCaseSensitive(payload, "mode");
+    if (!cJSON_IsString(node) || !node->valuestring) {
+        node = cJSON_GetObjectItemCaseSensitive(payload, "scope");
+    }
+    if (cJSON_IsString(node) && node->valuestring) {
+        if (strcmp(node->valuestring, "all") == 0 || strcmp(node->valuestring, "ALL") == 0) {
+            out_request->sms_delete_all = true;
+        } else if (strcmp(node->valuestring, "read") == 0 || strcmp(node->valuestring, "READ") == 0 ||
+                   strcmp(node->valuestring, "incoming") == 0 || strcmp(node->valuestring, "INCOMING") == 0) {
+            out_request->sms_delete_read = true;
+        }
+    }
     node = cJSON_GetObjectItemCaseSensitive(payload, "ttl_ms");
     if (!node) {
         node = cJSON_GetObjectItemCaseSensitive(payload, "ttlMs");
@@ -980,29 +1033,15 @@ esp_err_t automation_bridge_init(void) {
         return ESP_ERR_NO_MEM;
     }
 
-    #if CONFIG_SPIRAM && CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
-    task_ok = xTaskCreatePinnedToCoreWithCaps(
+    task_ok = xTaskCreatePinnedToCore(
         automation_bridge_task,
         "automation_bridge_task",
         CONFIG_UNIFIED_TASK_STACK_MEDIUM,
         NULL,
         4,
         &s_task_handle,
-        1,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+        1
     );
-    #endif
-    if (task_ok != pdPASS) {
-        task_ok = xTaskCreatePinnedToCore(
-            automation_bridge_task,
-            "automation_bridge_task",
-            CONFIG_UNIFIED_TASK_STACK_MEDIUM,
-            NULL,
-            4,
-            &s_task_handle,
-            1
-        );
-    }
     if (task_ok != pdPASS) {
         automation_bridge_free_allocated();
         vSemaphoreDelete(s_lock);

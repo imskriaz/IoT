@@ -12,7 +12,7 @@ function printUsage() {
 
 Options:
   --forward 3000:3001,3010:3010  One or more remote:local mappings
-  --public-url https://device.atebd.com
+  --public-url https://device.atebd.com/server
   --key /path/to/id_rsa
   --remote-bind 127.0.0.1
   --local-bind 127.0.0.1

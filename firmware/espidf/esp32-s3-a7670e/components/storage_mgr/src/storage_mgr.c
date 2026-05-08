@@ -60,6 +60,8 @@
 #define STORAGE_SD_CALL_FILE   "logs/calls.ndj"
 #define STORAGE_SD_PATH_LEN    128U
 #define STORAGE_RECORD_LINE_MAX_LEN  512U
+#define STORAGE_SMS_HASH_OFFSET      2166136261U
+#define STORAGE_SMS_HASH_PRIME       16777619U
 
 static const char *TAG = "storage_mgr";
 
@@ -118,6 +120,7 @@ static esp_err_t storage_mgr_record_to_line(const storage_mgr_record_t *record, 
 static esp_err_t storage_mgr_build_pending_record(const storage_mgr_record_t *record, storage_mgr_pending_record_t *out_record);
 static esp_err_t storage_mgr_queue_pending_record_locked(const storage_mgr_pending_record_t *record);
 static bool storage_mgr_pop_pending_record_locked(storage_mgr_pending_record_t *out_record);
+static esp_err_t storage_mgr_rewrite_sms_log_from_blob(const storage_blob_t *blob);
 static esp_err_t storage_mgr_normalize_relative_path(const char *input, char *output, size_t output_len);
 static esp_err_t storage_mgr_build_sd_path(const char *relative_path, char *full_path, size_t full_path_len);
 static esp_err_t storage_mgr_build_path_for_mount(
@@ -164,6 +167,46 @@ static void *storage_mgr_alloc_zeroed(size_t size) {
     }
 
     return buffer;
+}
+
+static uint32_t storage_mgr_hash_bytes(uint32_t hash, const void *data, size_t len) {
+    const uint8_t *bytes = (const uint8_t *)data;
+
+    for (size_t index = 0U; index < len; ++index) {
+        hash ^= bytes[index];
+        hash *= STORAGE_SMS_HASH_PRIME;
+    }
+
+    return hash;
+}
+
+static uint32_t storage_mgr_hash_cstr(uint32_t hash, const char *text) {
+    const char *cursor = text ? text : "";
+
+    while (*cursor != '\0') {
+        const uint8_t byte = (uint8_t)*cursor++;
+        hash = storage_mgr_hash_bytes(hash, &byte, 1U);
+    }
+
+    return hash;
+}
+
+uint32_t storage_mgr_sms_storage_id(const unified_sms_payload_t *payload) {
+    uint32_t hash = STORAGE_SMS_HASH_OFFSET;
+
+    if (!payload) {
+        return 0U;
+    }
+
+    hash = storage_mgr_hash_cstr(hash, payload->from);
+    hash = storage_mgr_hash_cstr(hash, payload->text);
+    hash = storage_mgr_hash_cstr(hash, payload->detail);
+    hash = storage_mgr_hash_bytes(hash, &payload->timestamp_ms, sizeof(payload->timestamp_ms));
+    hash = storage_mgr_hash_bytes(hash, &payload->multipart_part_index, sizeof(payload->multipart_part_index));
+    hash = storage_mgr_hash_bytes(hash, &payload->multipart_part_count, sizeof(payload->multipart_part_count));
+    hash = storage_mgr_hash_bytes(hash, &payload->sim_slot, sizeof(payload->sim_slot));
+    hash = storage_mgr_hash_bytes(hash, &payload->outgoing, sizeof(payload->outgoing));
+    return hash == 0U ? 1U : hash;
 }
 
 static void storage_mgr_notify_task(void) {
@@ -539,7 +582,8 @@ static esp_err_t storage_mgr_record_to_line(const storage_mgr_record_t *record, 
             written = snprintf(
                 line,
                 line_len,
-                "{\"type\":\"sms\",\"timestamp\":%" PRIu32 ",\"peer\":\"%s\",\"direction\":\"%s\",\"detail\":\"%s\",\"text\":\"%s\"}\n",
+                "{\"type\":\"sms\",\"storage_id\":%" PRIu32 ",\"timestamp\":%" PRIu32 ",\"peer\":\"%s\",\"direction\":\"%s\",\"detail\":\"%s\",\"text\":\"%s\"}\n",
+                storage_mgr_sms_storage_id(&record->payload.sms),
                 record->timestamp_ms,
                 field_a,
                 record->payload.sms.outgoing ? "outgoing" : "incoming",
@@ -1156,6 +1200,117 @@ esp_err_t storage_mgr_append_call(const unified_call_payload_t *payload) {
     return storage_mgr_append_record(&record);
 }
 
+static esp_err_t storage_mgr_delete_sms_locked(
+    uint32_t storage_id,
+    bool match_id,
+    bool include_incoming,
+    bool include_outgoing,
+    uint32_t *out_deleted,
+    storage_blob_t *replacement
+) {
+    uint32_t deleted = 0U;
+
+    if (!replacement || !s_blob) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(replacement, 0, sizeof(*replacement));
+    replacement->version = STORAGE_BLOB_VERSION;
+
+    for (size_t index = 0U; index < s_blob->count; ++index) {
+        const storage_mgr_record_t *record = &s_blob->records[(s_blob->head + index) % CONFIG_UNIFIED_STORAGE_RECORD_CAPACITY];
+        bool delete_record = false;
+
+        if (record->type == STORAGE_MGR_RECORD_SMS) {
+            const uint32_t record_storage_id = storage_mgr_sms_storage_id(&record->payload.sms);
+            delete_record = match_id
+                ? record_storage_id == storage_id
+                : ((include_incoming && !record->payload.sms.outgoing) || (include_outgoing && record->payload.sms.outgoing));
+        }
+
+        if (delete_record) {
+            deleted++;
+            continue;
+        }
+        if (replacement->count >= CONFIG_UNIFIED_STORAGE_RECORD_CAPACITY) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        replacement->records[replacement->count] = *record;
+        replacement->count++;
+    }
+
+    if (deleted == 0U) {
+        if (out_deleted) {
+            *out_deleted = 0U;
+        }
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    *s_blob = *replacement;
+    s_status.record_count = s_blob->count;
+    s_persist_dirty = true;
+    if (out_deleted) {
+        *out_deleted = deleted;
+    }
+    return storage_mgr_flush_persist_locked(unified_tick_now_ms());
+}
+
+static esp_err_t storage_mgr_delete_sms(
+    uint32_t storage_id,
+    bool match_id,
+    bool include_incoming,
+    bool include_outgoing,
+    uint32_t *out_deleted
+) {
+    storage_blob_t *replacement = NULL;
+    bool rewrite_sd = false;
+    esp_err_t err = ESP_OK;
+
+    if (!s_lock || !s_blob || (!match_id && !include_incoming && !include_outgoing)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    replacement = storage_mgr_alloc_zeroed(sizeof(*replacement));
+    if (!replacement) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(250)) != pdTRUE) {
+        heap_caps_free(replacement);
+        return ESP_ERR_TIMEOUT;
+    }
+    err = storage_mgr_delete_sms_locked(storage_id, match_id, include_incoming, include_outgoing, out_deleted, replacement);
+    rewrite_sd = err == ESP_OK && s_status.media_available && !s_status.buffered_only;
+    storage_mgr_set_health_locked();
+    xSemaphoreGive(s_lock);
+
+    if (rewrite_sd) {
+        esp_err_t sd_err = storage_mgr_rewrite_sms_log_from_blob(replacement);
+        if (sd_err != ESP_OK && err == ESP_OK) {
+            if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+                s_status.sd_write_failures++;
+                storage_mgr_set_health_locked();
+                xSemaphoreGive(s_lock);
+            }
+            err = sd_err;
+        }
+    }
+
+    heap_caps_free(replacement);
+    return err;
+}
+
+esp_err_t storage_mgr_delete_sms_by_id(uint32_t storage_id, uint32_t *out_deleted) {
+    if (storage_id == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return storage_mgr_delete_sms(storage_id, true, false, false, out_deleted);
+}
+
+esp_err_t storage_mgr_delete_sms_by_scope(bool include_incoming, bool include_outgoing, uint32_t *out_deleted) {
+    return storage_mgr_delete_sms(0U, false, include_incoming, include_outgoing, out_deleted);
+}
+
 esp_err_t storage_mgr_build_sms_history_json(char *buffer, size_t buffer_len, uint16_t max_entries) {
     size_t record_count = 0U;
     size_t sms_count = 0U;
@@ -1214,8 +1369,9 @@ esp_err_t storage_mgr_build_sms_history_json(char *buffer, size_t buffer_len, ui
         append_result = snprintf(
             buffer + written,
             buffer_len - written,
-            "%s{\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp_ms\":%" PRIu32 ",\"outgoing\":%s}",
+            "%s{\"storage_id\":%" PRIu32 ",\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp_ms\":%" PRIu32 ",\"outgoing\":%s}",
             included > 0U ? "," : "",
+            storage_mgr_sms_storage_id(&record->payload.sms),
             from,
             text,
             detail,
@@ -1242,6 +1398,47 @@ esp_err_t storage_mgr_build_sms_history_json(char *buffer, size_t buffer_len, ui
     buffer[written++] = '}';
     buffer[written] = '\0';
     xSemaphoreGive(s_lock);
+    return ESP_OK;
+}
+
+static esp_err_t storage_mgr_rewrite_sms_log_from_blob(const storage_blob_t *blob) {
+    esp_err_t err = ESP_OK;
+    bool first_sms = true;
+
+    if (!blob) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = storage_mgr_write_file(STORAGE_SD_SMS_FILE, "", 0U, false);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    for (size_t index = 0U; index < blob->count; ++index) {
+        const storage_mgr_record_t *record = &blob->records[(blob->head + index) % CONFIG_UNIFIED_STORAGE_RECORD_CAPACITY];
+        storage_mgr_pending_record_t pending = {0};
+
+        if (record->type != STORAGE_MGR_RECORD_SMS) {
+            continue;
+        }
+
+        err = storage_mgr_build_pending_record(record, &pending);
+        if (err != ESP_OK) {
+            return err;
+        }
+        err = storage_mgr_write_file(STORAGE_SD_SMS_FILE, pending.line, pending.line_len, !first_sms);
+        if (err != ESP_OK) {
+            return err;
+        }
+        first_sms = false;
+    }
+
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+        s_usage_dirty = true;
+        xSemaphoreGive(s_lock);
+        storage_mgr_notify_task();
+    }
+
     return ESP_OK;
 }
 

@@ -26,6 +26,9 @@
 #define SERIAL_CONFIG_STATUS_JSON_LEN 4096
 #define SERIAL_CONFIG_TASK_STACK_LEN CONFIG_UNIFIED_TASK_STACK_SMALL
 #define SERIAL_CONFIG_READ_TIMEOUT_MS 1000U
+#define SERIAL_CONFIG_MODEM_RESPONSE_LEN 4096
+#define SERIAL_CONFIG_MODEM_RESPONSE_B64_LEN 5600
+#define SERIAL_CONFIG_SCRATCH_LINE_LEN 6144
 
 #if defined(CONFIG_MGR_MQTT_URI_LEN) && CONFIG_MGR_MQTT_URI_LEN > CONFIG_MGR_WIFI_PASS_LEN
 #define SERIAL_CONFIG_DECODED_VALUE_LEN CONFIG_MGR_MQTT_URI_LEN
@@ -44,15 +47,15 @@ typedef struct {
     char status_mqtt_username_b64[96];
 #endif
     char modem_decoded[192];
-    char modem_response[512];
-    char modem_response_b64[768];
+    char modem_response[SERIAL_CONFIG_MODEM_RESPONSE_LEN];
+    char modem_response_b64[SERIAL_CONFIG_MODEM_RESPONSE_B64_LEN];
     char set_token[256];
     char set_decoded[SERIAL_CONFIG_DECODED_VALUE_LEN];
     char set_applied[192];
     char wifi_ssid[CONFIG_MGR_WIFI_SSID_LEN];
     char wifi_password[CONFIG_MGR_WIFI_PASS_LEN];
     char wifi_ssid_b64[96];
-    char line[896];
+    char line[SERIAL_CONFIG_SCRATCH_LINE_LEN];
 } serial_config_scratch_t;
 
 static TaskHandle_t s_serial_task;

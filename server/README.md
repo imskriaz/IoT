@@ -13,6 +13,7 @@ The dashboard app itself listens on local port `3000`.
 - `nginx-device-atebd-server.conf` - Nginx reverse proxy for `/server`, Android bridge HTTP, Socket.IO, future chat, and future live updates.
 - `dashboard.env.example` - production `.env` values for the dashboard.
 - `iot-dashboard.service` - systemd service template for running `dashboard/server.js`.
+- `install-ubuntu.sh` - Ubuntu installer for Nginx, the systemd unit, and the dashboard env template.
 - `share-tunnel.js` - Node.js reverse tunnel helper for temporary localhost sharing before the dashboard is deployed on the VPS.
 
 ## Temporary Localhost Sharing
@@ -20,7 +21,7 @@ The dashboard app itself listens on local port `3000`.
 Run from this repo on your PC:
 
 ```bash
-node server/share-tunnel.js --host YOUR_VPS_IP --user root --public-url https://device.atebd.com/server --forward 3000:3001 --reconnect
+npm run server -- --host YOUR_VPS_IP --user root --public-url https://device.atebd.com/server --forward 3000:3001 --reconnect
 ```
 
 This maps:
@@ -32,19 +33,37 @@ VPS 127.0.0.1:3000 -> local PC 127.0.0.1:3001
 Add future services:
 
 ```bash
-node server/share-tunnel.js --host YOUR_VPS_IP --user root --public-url https://device.atebd.com/server --forward 3000:3001,3010:3010,3011:3011 --reconnect
+npm run server -- --host YOUR_VPS_IP --user root --public-url https://device.atebd.com/server --forward 3000:3001,3010:3010,3011:3011 --reconnect
 ```
 
 ## Ubuntu VPS Setup
 
-Install base packages:
+Upload this `server/` folder to the VPS along with the repo or copy it separately. A clean layout is:
 
-```bash
-sudo apt update
-sudo apt install -y nginx nodejs npm
+```text
+/opt/iot/server
+/opt/iot/dashboard
 ```
 
-Copy this folder to the VPS, then install the Nginx config:
+Then run the installer from `/opt/iot`:
+
+```bash
+sudo bash server/install-ubuntu.sh
+```
+
+The installer places:
+
+- Nginx site: `/etc/nginx/sites-available/device-atebd-server`
+- systemd service: `/etc/systemd/system/iot-dashboard.service`
+- dashboard env template: `/opt/iot/dashboard/.env` when missing
+
+You can override install paths when needed:
+
+```bash
+sudo APP_DIR=/opt/iot/dashboard SERVICE_NAME=iot-dashboard bash server/install-ubuntu.sh
+```
+
+Manual Nginx install, if needed:
 
 ```bash
 sudo cp server/nginx-device-atebd-server.conf /etc/nginx/sites-available/device-atebd-server
@@ -87,7 +106,9 @@ SOCKET_IO_CORS_ORIGIN=https://device.atebd.com
 Install and start the service:
 
 ```bash
-sudo cp server/iot-dashboard.service /etc/systemd/system/iot-dashboard.service
+cd /opt/iot/dashboard
+npm ci --omit=dev
+sudo cp /opt/iot/server/iot-dashboard.service /etc/systemd/system/iot-dashboard.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now iot-dashboard
 sudo systemctl status iot-dashboard
@@ -98,3 +119,5 @@ sudo systemctl status iot-dashboard
 `SOCKET_IO_CORS_ORIGIN` must be only the origin, not `/server`, because CORS origins do not include paths.
 
 The Nginx config accepts `/server/v1/android/bridge/*` and strips `/server` before proxying to the dashboard. This lets Android setup QR codes safely use `https://device.atebd.com/server` as the public base URL.
+
+The Nginx config also proxies the dashboard's current absolute page paths, APIs, assets, and Socket.IO routes. That keeps the app working now while still making `/server` the public entrypoint for Android bridge URLs and future deployment links.

@@ -50,6 +50,9 @@ typedef struct {
     char modem_ip[UNIFIED_IPV4_ADDR_LEN * 2U];
     char modem_data_ip[UNIFIED_IPV4_ADDR_LEN * 2U];
     char modem_sms_storage_name[16];
+    char modem_sms_read_storage_name[16];
+    char modem_sms_write_storage_name[16];
+    char modem_sms_report_storage_name[16];
     char imei[UNIFIED_TEXT_SHORT_LEN * 2U];
     char subscriber[UNIFIED_TEXT_SHORT_LEN * 2U];
     char sms_last_detail[UNIFIED_TEXT_MEDIUM_LEN * 2U];
@@ -413,6 +416,30 @@ esp_err_t device_status_snapshot(device_status_snapshot_t *out_snapshot) {
     );
     out_snapshot->modem_sms_storage_used = modem.sms_storage_used;
     out_snapshot->modem_sms_storage_total = modem.sms_storage_total;
+    snprintf(
+        out_snapshot->modem_sms_read_storage_name,
+        sizeof(out_snapshot->modem_sms_read_storage_name),
+        "%s",
+        modem.sms_read_storage_name
+    );
+    out_snapshot->modem_sms_read_storage_used = modem.sms_read_storage_used;
+    out_snapshot->modem_sms_read_storage_total = modem.sms_read_storage_total;
+    snprintf(
+        out_snapshot->modem_sms_write_storage_name,
+        sizeof(out_snapshot->modem_sms_write_storage_name),
+        "%s",
+        modem.sms_write_storage_name
+    );
+    out_snapshot->modem_sms_write_storage_used = modem.sms_write_storage_used;
+    out_snapshot->modem_sms_write_storage_total = modem.sms_write_storage_total;
+    snprintf(
+        out_snapshot->modem_sms_report_storage_name,
+        sizeof(out_snapshot->modem_sms_report_storage_name),
+        "%s",
+        modem.sms_report_storage_name
+    );
+    out_snapshot->modem_sms_report_storage_used = modem.sms_report_storage_used;
+    out_snapshot->modem_sms_report_storage_total = modem.sms_report_storage_total;
     out_snapshot->sms_ready = sms.ready;
     out_snapshot->sms_poll_count = sms.poll_count;
     out_snapshot->sms_sent_count = sms.sent_count;
@@ -486,6 +513,21 @@ esp_err_t device_status_build_json_from_snapshot(
         snapshot->modem_sms_storage_name,
         scratch->modem_sms_storage_name,
         sizeof(scratch->modem_sms_storage_name)
+    );
+    device_status_escape_json(
+        snapshot->modem_sms_read_storage_name,
+        scratch->modem_sms_read_storage_name,
+        sizeof(scratch->modem_sms_read_storage_name)
+    );
+    device_status_escape_json(
+        snapshot->modem_sms_write_storage_name,
+        scratch->modem_sms_write_storage_name,
+        sizeof(scratch->modem_sms_write_storage_name)
+    );
+    device_status_escape_json(
+        snapshot->modem_sms_report_storage_name,
+        scratch->modem_sms_report_storage_name,
+        sizeof(scratch->modem_sms_report_storage_name)
     );
     device_status_escape_json(snapshot->modem_imei, scratch->imei, sizeof(scratch->imei));
     device_status_escape_json(snapshot->modem_subscriber_number, scratch->subscriber, sizeof(scratch->subscriber));
@@ -698,7 +740,13 @@ esp_err_t device_status_build_json_from_snapshot(
         ",\"modem_operator\":\"%s\",\"modem_operator_name\":\"%s\",\"modem_network_type\":\"%s\",\"networkType\":\"%s\""
         ",\"modem_ip_address\":\"%s\",\"modem_data_ip\":\"%s\""
         ",\"modem_sms_storage_name\":\"%s\",\"modem_sms_storage_used\":%" PRIu32
-        ",\"modem_sms_storage_total\":%" PRIu32,
+        ",\"modem_sms_storage_total\":%" PRIu32
+        ",\"modem_sms_read_storage_name\":\"%s\",\"modem_sms_read_storage_used\":%" PRIu32
+        ",\"modem_sms_read_storage_total\":%" PRIu32
+        ",\"modem_sms_write_storage_name\":\"%s\",\"modem_sms_write_storage_used\":%" PRIu32
+        ",\"modem_sms_write_storage_total\":%" PRIu32
+        ",\"modem_sms_report_storage_name\":\"%s\",\"modem_sms_report_storage_used\":%" PRIu32
+        ",\"modem_sms_report_storage_total\":%" PRIu32,
         device_status_bool_json(snapshot->modem_registered),
         device_status_bool_json(snapshot->telephony_supported),
         device_status_bool_json(snapshot->telephony_enabled),
@@ -713,7 +761,16 @@ esp_err_t device_status_build_json_from_snapshot(
         scratch->modem_data_ip,
         scratch->modem_sms_storage_name,
         (uint32_t)snapshot->modem_sms_storage_used,
-        (uint32_t)snapshot->modem_sms_storage_total
+        (uint32_t)snapshot->modem_sms_storage_total,
+        scratch->modem_sms_read_storage_name,
+        (uint32_t)snapshot->modem_sms_read_storage_used,
+        (uint32_t)snapshot->modem_sms_read_storage_total,
+        scratch->modem_sms_write_storage_name,
+        (uint32_t)snapshot->modem_sms_write_storage_used,
+        (uint32_t)snapshot->modem_sms_write_storage_total,
+        scratch->modem_sms_report_storage_name,
+        (uint32_t)snapshot->modem_sms_report_storage_used,
+        (uint32_t)snapshot->modem_sms_report_storage_total
     );
     if (err != ESP_OK) {
         goto cleanup;

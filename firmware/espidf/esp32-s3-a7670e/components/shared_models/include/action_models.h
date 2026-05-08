@@ -47,6 +47,7 @@ typedef enum {
     UNIFIED_ACTION_CMD_STORAGE_INFO,
     UNIFIED_ACTION_CMD_GPIO_STATUS,
     UNIFIED_ACTION_CMD_RESTART_MODEM,
+    UNIFIED_ACTION_CMD_DELETE_SMS,
 } unified_action_command_t;
 
 typedef enum {

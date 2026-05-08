@@ -185,6 +185,9 @@ async function initializeDatabase() {
                 batch_id TEXT,
                 sim_slot INTEGER,
                 external_id TEXT,
+                modem_storage_index INTEGER,
+                firmware_storage_id INTEGER,
+                device_deleted_at DATETIME,
                 multipart_ref TEXT,
                 multipart_part_index INTEGER,
                 multipart_part_count INTEGER,
@@ -982,6 +985,9 @@ async function initializeDatabase() {
         try { await db.exec(`ALTER TABLE sms ADD COLUMN source TEXT DEFAULT 'device'`); } catch (e) {}
         try { await db.exec(`ALTER TABLE sms ADD COLUMN batch_id TEXT`); } catch (e) {}
         try { await db.exec(`ALTER TABLE sms ADD COLUMN external_id TEXT`); } catch (e) {}
+        try { await db.exec(`ALTER TABLE sms ADD COLUMN modem_storage_index INTEGER`); } catch (e) {}
+        try { await db.exec(`ALTER TABLE sms ADD COLUMN firmware_storage_id INTEGER`); } catch (e) {}
+        try { await db.exec(`ALTER TABLE sms ADD COLUMN device_deleted_at DATETIME`); } catch (e) {}
         try { await db.exec(`ALTER TABLE sms ADD COLUMN multipart_ref TEXT`); } catch (e) {}
         try { await db.exec(`ALTER TABLE sms ADD COLUMN multipart_part_index INTEGER`); } catch (e) {}
         try { await db.exec(`ALTER TABLE sms ADD COLUMN multipart_part_count INTEGER`); } catch (e) {}
@@ -1108,6 +1114,9 @@ async function initializeDatabase() {
                     'batch_id',
                     'sim_slot',
                     'external_id',
+                    'modem_storage_index',
+                    'firmware_storage_id',
+                    'device_deleted_at',
                     'multipart_ref',
                     'multipart_part_index',
                     'multipart_part_count',
@@ -1137,6 +1146,9 @@ async function initializeDatabase() {
                         batch_id TEXT,
                         sim_slot INTEGER,
                         external_id TEXT,
+                        modem_storage_index INTEGER,
+                        firmware_storage_id INTEGER,
+                        device_deleted_at DATETIME,
                         multipart_ref TEXT,
                         multipart_part_index INTEGER,
                         multipart_part_count INTEGER,
@@ -1310,6 +1322,9 @@ async function initializeDatabase() {
         _addCol('webcam_captures', 'device_id', 'TEXT');
         _addCol('sms', 'user_id', 'INTEGER');
         _addCol('sms', 'sim_slot', 'INTEGER');
+        _addCol('sms', 'modem_storage_index', 'INTEGER');
+        _addCol('sms', 'firmware_storage_id', 'INTEGER');
+        _addCol('sms', 'device_deleted_at', 'DATETIME');
         _addCol('calls', 'sim_slot', 'INTEGER');
         _addCol('calls', 'user_id', 'INTEGER');
         _addCol('ussd', 'sim_slot', 'INTEGER');

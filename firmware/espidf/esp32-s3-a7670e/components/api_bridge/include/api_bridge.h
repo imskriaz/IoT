@@ -78,6 +78,14 @@ typedef struct {
     uint16_t sms_pdu_length;
     bool sms_multipart_present;
     bool sms_multipart;
+    bool sms_storage_index_present;
+    uint16_t sms_storage_index;
+    bool sms_storage_id_present;
+    uint32_t sms_storage_id;
+    bool sms_delete_flag_present;
+    uint8_t sms_delete_flag;
+    bool sms_delete_all;
+    bool sms_delete_read;
     uint16_t max_entries;
     bool gpio_pin_present;
     uint8_t gpio_pin;

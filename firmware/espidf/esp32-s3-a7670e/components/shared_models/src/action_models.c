@@ -22,6 +22,7 @@ const char *unified_action_command_name(unified_action_command_t command) {
         case UNIFIED_ACTION_CMD_WIFI_TOGGLE: return "wifi_toggle";
         case UNIFIED_ACTION_CMD_SEND_SMS: return "send_sms";
         case UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART: return "send_sms_multipart";
+        case UNIFIED_ACTION_CMD_DELETE_SMS: return "delete_sms";
         case UNIFIED_ACTION_CMD_SEND_USSD: return "send_ussd";
         case UNIFIED_ACTION_CMD_CANCEL_USSD: return "cancel_ussd";
         case UNIFIED_ACTION_CMD_DIAL_NUMBER: return "dial_number";

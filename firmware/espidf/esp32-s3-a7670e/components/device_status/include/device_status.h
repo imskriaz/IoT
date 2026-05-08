@@ -114,6 +114,15 @@ typedef struct {
     char modem_sms_storage_name[8];
     uint16_t modem_sms_storage_used;
     uint16_t modem_sms_storage_total;
+    char modem_sms_read_storage_name[8];
+    uint16_t modem_sms_read_storage_used;
+    uint16_t modem_sms_read_storage_total;
+    char modem_sms_write_storage_name[8];
+    uint16_t modem_sms_write_storage_used;
+    uint16_t modem_sms_write_storage_total;
+    char modem_sms_report_storage_name[8];
+    uint16_t modem_sms_report_storage_used;
+    uint16_t modem_sms_report_storage_total;
     bool sms_ready;
     uint32_t sms_poll_count;
     uint32_t sms_sent_count;

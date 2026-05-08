@@ -50,6 +50,7 @@ static bool modem_a7670_sms_decode_ucs2_hex(const char *input, char *output, siz
 static bool modem_a7670_sms_next_utf8_char(const char *text, size_t *out_len);
 static esp_err_t modem_a7670_delete_sms_locked(
     int storage_index,
+    uint8_t delete_flag,
     char *response,
     size_t response_len,
     uint32_t timeout_ms
@@ -1119,7 +1120,7 @@ static esp_err_t modem_a7670_consume_concat_sms_indexes_locked(
             err = ESP_ERR_TIMEOUT;
             goto cleanup;
         }
-        err = modem_a7670_delete_sms_locked(indexes[i], response, response_len, remaining_timeout_ms);
+        err = modem_a7670_delete_sms_locked(indexes[i], 0U, response, response_len, remaining_timeout_ms);
         if (err != ESP_OK) {
             goto cleanup;
         }
@@ -1135,6 +1136,7 @@ cleanup:
 
 static esp_err_t modem_a7670_delete_sms_locked(
     int storage_index,
+    uint8_t delete_flag,
     char *response,
     size_t response_len,
     uint32_t timeout_ms
@@ -1142,7 +1144,11 @@ static esp_err_t modem_a7670_delete_sms_locked(
     char command[32] = {0};
     int written = 0;
 
-    written = snprintf(command, sizeof(command), "AT+CMGD=%d,0", storage_index);
+    if (storage_index < 0 || delete_flag > 4U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    written = snprintf(command, sizeof(command), "AT+CMGD=%d,%u", storage_index, (unsigned int)delete_flag);
     if (written <= 0 || (size_t)written >= sizeof(command)) {
         return ESP_ERR_INVALID_SIZE;
     }
@@ -1186,7 +1192,7 @@ static esp_err_t modem_a7670_read_sms_locked(
         if (remaining_timeout_ms == 0U) {
             err = ESP_ERR_TIMEOUT;
         } else {
-            err = modem_a7670_delete_sms_locked(storage_index, response, response_len, remaining_timeout_ms);
+            err = modem_a7670_delete_sms_locked(storage_index, 0U, response, response_len, remaining_timeout_ms);
         }
     }
 
@@ -1788,6 +1794,66 @@ esp_err_t modem_a7670_read_sms(int storage_index, unified_sms_payload_t *out_pay
             err = modem_a7670_read_sms_locked(storage_index, out_payload, response, sizeof(response), deadline_us, true);
         }
     }
+
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
+esp_err_t modem_a7670_delete_sms(int storage_index, uint32_t timeout_ms) {
+    char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
+    esp_err_t err = ESP_FAIL;
+
+    if (storage_index < 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_ready || !s_uart_control_ready || !s_lock) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (modem_a7670_uart_control_blocked_locked()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    int64_t deadline_us = modem_a7670_timeout_deadline_us(timeout_ms);
+    uint32_t remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+
+    if (remaining_timeout_ms == 0U || xSemaphoreTake(s_lock, pdMS_TO_TICKS(remaining_timeout_ms)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+    err = remaining_timeout_ms == 0U
+        ? ESP_ERR_TIMEOUT
+        : modem_a7670_delete_sms_locked(storage_index, 0U, response, sizeof(response), remaining_timeout_ms);
+
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
+esp_err_t modem_a7670_delete_sms_by_flag(uint8_t delete_flag, uint32_t timeout_ms) {
+    char response[UNIFIED_TEXT_MEDIUM_LEN] = {0};
+    esp_err_t err = ESP_FAIL;
+
+    if (delete_flag == 0U || delete_flag > 4U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_ready || !s_uart_control_ready || !s_lock) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (modem_a7670_uart_control_blocked_locked()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    int64_t deadline_us = modem_a7670_timeout_deadline_us(timeout_ms);
+    uint32_t remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+
+    if (remaining_timeout_ms == 0U || xSemaphoreTake(s_lock, pdMS_TO_TICKS(remaining_timeout_ms)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
+    err = remaining_timeout_ms == 0U
+        ? ESP_ERR_TIMEOUT
+        : modem_a7670_delete_sms_locked(1, delete_flag, response, sizeof(response), remaining_timeout_ms);
 
     xSemaphoreGive(s_lock);
     return err;

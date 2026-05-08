@@ -26,25 +26,25 @@ Open the reverse tunnel with Node.js and keep the process running:
 
 ```powershell
 cd D:\Projects\IoT
-node server/share-tunnel.js --host YOUR_VPS_IP --user root --public-url https://device.atebd.com/server --reconnect
+npm run server -- --host YOUR_VPS_IP --user root --public-url https://device.atebd.com/server --reconnect
 ```
 
 If SSH uses a key:
 
 ```powershell
-node server/share-tunnel.js --host YOUR_VPS_IP --user root --key C:\Users\skria\.ssh\id_rsa --public-url https://device.atebd.com/server --reconnect
+npm run server -- --host YOUR_VPS_IP --user root --key C:\Users\skria\.ssh\id_rsa --public-url https://device.atebd.com/server --reconnect
 ```
 
 If your local dashboard is still on `3001`, use:
 
 ```powershell
-node server/share-tunnel.js --host YOUR_VPS_IP --user root --public-url https://device.atebd.com/server --forward 3000:3001 --reconnect
+npm run server -- --host YOUR_VPS_IP --user root --public-url https://device.atebd.com/server --forward 3000:3001 --reconnect
 ```
 
 For more services later, add more `remote:local` ports to the same tunnel:
 
 ```powershell
-node server/share-tunnel.js `
+npm run server -- `
   --host YOUR_VPS_IP `
   --user root `
   --public-url https://device.atebd.com/server `

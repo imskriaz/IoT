@@ -43,8 +43,6 @@ enum {
     API_BRIDGE_GPIO_PULSE_MIN_MS = 50,
     API_BRIDGE_GPIO_PULSE_DEFAULT_MS = 500,
     API_BRIDGE_GPIO_PULSE_MAX_MS = 10000,
-    API_BRIDGE_MODEM_AT_RESPONSE_LEN = 768,
-    API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN = 160,
 };
 
 typedef struct {
@@ -65,14 +63,6 @@ typedef struct {
     char escaped_ssid[(sizeof(((wifi_mgr_scan_result_t *)0)->ssid) * 2U)];
     char escaped_auth[32];
 } api_bridge_wifi_scan_scratch_t;
-
-typedef struct {
-    char modem_response[API_BRIDGE_MODEM_AT_RESPONSE_LEN];
-    char escaped_line[UNIFIED_TEXT_LONG_LEN * 2U];
-    char escaped_response[API_BRIDGE_MODEM_AT_RESPONSE_LEN * 2U];
-    char truncated_response[API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN + 16U];
-    char escaped_truncated_response[(API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN + 16U) * 2U];
-} api_bridge_modem_at_scratch_t;
 
 static SemaphoreHandle_t s_lock;
 static SemaphoreHandle_t s_wifi_scan_lock;
@@ -312,22 +302,6 @@ static unified_action_response_t api_bridge_finish_modem_response(
     );
 }
 
-static bool api_bridge_raw_modem_line_is_valid(const char *line) {
-    if (!line || line[0] == '\0') {
-        return false;
-    }
-    if (line[0] != 'A' && line[0] != 'a') {
-        return false;
-    }
-    for (size_t index = 0U; line[index] != '\0'; ++index) {
-        const unsigned char current = (unsigned char)line[index];
-        if (current < 0x20U || current > 0x7EU) {
-            return false;
-        }
-    }
-    return true;
-}
-
 static bool api_bridge_ota_url_supported(const char *url) {
     return url &&
            (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0);
@@ -373,95 +347,17 @@ static unified_action_response_t api_bridge_execute_modem_at(
     char *payload,
     size_t payload_len
 ) {
-    api_bridge_modem_at_scratch_t *scratch = NULL;
-    unified_action_response_t response = {0};
-    esp_err_t err = ESP_OK;
-    int written = 0;
-    const uint32_t timeout_ms = action && action->timeout_ms > 0U ? action->timeout_ms : 10000U;
+    (void)request;
+    (void)payload;
+    (void)payload_len;
 
-    if (!request || !api_bridge_raw_modem_line_is_valid(request->raw_line) || !payload || payload_len == 0U) {
-        return api_bridge_build_response(
-            action,
-            UNIFIED_ACTION_RESULT_REJECTED,
-            ESP_ERR_INVALID_ARG,
-            UNIFIED_FEATURE_REASON_NONE,
-            "invalid_modem_at_line"
-        );
-    }
-
-    scratch = api_bridge_alloc_zeroed(sizeof(*scratch));
-    if (!scratch) {
-        return api_bridge_build_response(
-            action,
-            UNIFIED_ACTION_RESULT_FAILED,
-            ESP_ERR_NO_MEM,
-            UNIFIED_FEATURE_REASON_NONE,
-            "modem_at_no_memory"
-        );
-    }
-
-    err = modem_a7670_command(request->raw_line, scratch->modem_response, sizeof(scratch->modem_response), timeout_ms);
-    api_bridge_escape_json(request->raw_line, scratch->escaped_line, sizeof(scratch->escaped_line));
-    api_bridge_escape_json(scratch->modem_response, scratch->escaped_response, sizeof(scratch->escaped_response));
-    written = snprintf(
-            payload,
-            payload_len,
-            "{\"line\":\"%s\",\"response\":\"%s\"}",
-            scratch->escaped_line,
-            scratch->escaped_response
-        );
-    if (written < 0 || (size_t)written >= payload_len) {
-        size_t preview_len = 0U;
-
-        while (preview_len < API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN &&
-               scratch->modem_response[preview_len] != '\0') {
-            scratch->truncated_response[preview_len] = scratch->modem_response[preview_len];
-            ++preview_len;
-        }
-        scratch->truncated_response[preview_len] = '\0';
-        if (scratch->modem_response[preview_len] != '\0') {
-            const char *suffix = "...[truncated]";
-            strncat(
-                scratch->truncated_response,
-                suffix,
-                sizeof(scratch->truncated_response) - strlen(scratch->truncated_response) - 1U
-            );
-        }
-        api_bridge_escape_json(
-            scratch->truncated_response,
-            scratch->escaped_truncated_response,
-            sizeof(scratch->escaped_truncated_response)
-        );
-        written = snprintf(
-                payload,
-                payload_len,
-                "{\"line\":\"%s\",\"response\":\"%s\"}",
-                scratch->escaped_line,
-                scratch->escaped_truncated_response
-            );
-        if (written < 0 || (size_t)written >= payload_len) {
-            payload[0] = '\0';
-            response = api_bridge_build_response(
-                action,
-                UNIFIED_ACTION_RESULT_FAILED,
-                ESP_ERR_INVALID_SIZE,
-                UNIFIED_FEATURE_REASON_NONE,
-                "modem_at_payload_failed"
-            );
-            heap_caps_free(scratch);
-            return response;
-        }
-    }
-
-    response = api_bridge_build_response(
+    return api_bridge_build_response(
         action,
-        err == ESP_OK ? UNIFIED_ACTION_RESULT_COMPLETED : (err == ESP_ERR_TIMEOUT ? UNIFIED_ACTION_RESULT_TIMEOUT : UNIFIED_ACTION_RESULT_FAILED),
-        err,
+        UNIFIED_ACTION_RESULT_REJECTED,
+        ESP_ERR_NOT_SUPPORTED,
         UNIFIED_FEATURE_REASON_NONE,
-        err == ESP_OK ? "modem_at_completed" : (err == ESP_ERR_TIMEOUT ? "modem_at_timeout" : "modem_at_failed")
+        "modem_at_requires_serial"
     );
-    heap_caps_free(scratch);
-    return response;
 }
 
 static unified_action_response_t api_bridge_execute_storage_info(
@@ -1029,7 +925,13 @@ static unified_action_response_t api_bridge_execute_get_sms_history(
         pull_response.result == UNIFIED_ACTION_RESULT_TIMEOUT ||
         pull_response.result == UNIFIED_ACTION_RESULT_FAILED) {
         payload[0] = '\0';
-        return pull_response;
+        return api_bridge_build_response(
+            action,
+            pull_response.result,
+            pull_response.result_code,
+            pull_response.feature_reason,
+            pull_response.detail
+        );
     }
 
     err = storage_mgr_build_sms_history_json(payload, payload_len, max_entries);
@@ -2108,6 +2010,107 @@ static unified_action_response_t api_bridge_execute_send_sms(
     return response;
 }
 
+static unified_action_response_t api_bridge_execute_delete_sms(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    esp_err_t modem_err = ESP_OK;
+    esp_err_t flash_err = ESP_OK;
+    uint8_t delete_flag = 0U;
+    uint32_t flash_deleted = 0U;
+    const char *mode = "index";
+    bool modem_requested = false;
+    bool flash_requested = false;
+
+    if (!request) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_INVALID_ARG,
+            UNIFIED_FEATURE_REASON_NONE,
+            "invalid_sms_delete_request"
+        );
+    }
+
+    if (request->sms_delete_all) {
+        delete_flag = 4U;
+        mode = "all";
+    } else if (request->sms_delete_read) {
+        delete_flag = 1U;
+        mode = "read";
+    } else if (request->sms_delete_flag_present && request->sms_delete_flag > 0U) {
+        delete_flag = request->sms_delete_flag;
+        mode = "flag";
+    }
+
+    if (delete_flag > 0U) {
+        modem_requested = true;
+        modem_err = modem_a7670_delete_sms_by_flag(delete_flag, action ? action->timeout_ms : 0U);
+    } else if (request->sms_storage_index_present) {
+        modem_requested = true;
+        modem_err = modem_a7670_delete_sms((int)request->sms_storage_index, action ? action->timeout_ms : 0U);
+    }
+
+    if (request->sms_storage_id_present) {
+        flash_requested = true;
+        flash_err = storage_mgr_delete_sms_by_id(request->sms_storage_id, &flash_deleted);
+        if (flash_err == ESP_ERR_NOT_FOUND) {
+            flash_err = ESP_OK;
+        }
+    } else if (request->sms_delete_all) {
+        flash_requested = true;
+        flash_err = storage_mgr_delete_sms_by_scope(true, true, &flash_deleted);
+        if (flash_err == ESP_ERR_NOT_FOUND) {
+            flash_err = ESP_OK;
+        }
+    } else if (request->sms_delete_read) {
+        flash_requested = true;
+        flash_err = storage_mgr_delete_sms_by_scope(true, false, &flash_deleted);
+        if (flash_err == ESP_ERR_NOT_FOUND) {
+            flash_err = ESP_OK;
+        }
+    }
+
+    if (!modem_requested && !flash_requested) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_INVALID_ARG,
+            UNIFIED_FEATURE_REASON_NONE,
+            "missing_sms_delete_target"
+        );
+    }
+    err = modem_err != ESP_OK ? modem_err : flash_err;
+
+    if (payload && payload_len > 0U) {
+        if (api_bridge_format_payload(
+                payload,
+                payload_len,
+                "{\"mode\":\"%s\",\"storage_index\":%u,\"storage_id\":%" PRIu32 ",\"delete_flag\":%u,\"modem_requested\":%s,\"flash_requested\":%s,\"flash_deleted\":%" PRIu32 ",\"deleted\":%s}",
+                mode,
+                request->sms_storage_index_present ? (unsigned int)request->sms_storage_index : 0U,
+                request->sms_storage_id_present ? request->sms_storage_id : 0U,
+                (unsigned int)delete_flag,
+                modem_requested ? "true" : "false",
+                flash_requested ? "true" : "false",
+                flash_deleted,
+                err == ESP_OK ? "true" : "false") != ESP_OK) {
+            payload[0] = '\0';
+        }
+    }
+
+    return api_bridge_build_response(
+        action,
+        api_bridge_result_from_err(err),
+        err,
+        UNIFIED_FEATURE_REASON_NONE,
+        err == ESP_OK ? "sms_delete_completed" : "sms_delete_failed"
+    );
+}
+
 static unified_action_response_t api_bridge_dispatch_action(
     const unified_action_envelope_t *action,
     const api_bridge_request_t *request,
@@ -2190,6 +2193,8 @@ static unified_action_response_t api_bridge_dispatch_action(
         case UNIFIED_ACTION_CMD_SEND_SMS:
         case UNIFIED_ACTION_CMD_SEND_SMS_MULTIPART:
             return api_bridge_execute_send_sms(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_DELETE_SMS:
+            return api_bridge_execute_delete_sms(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_SEND_USSD:
             return api_bridge_execute_send_ussd(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_CANCEL_USSD:
