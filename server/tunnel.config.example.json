@@ -1,0 +1,9 @@
+{
+  "host": "YOUR_VPS_IP",
+  "user": "root",
+  "publicUrl": "https://device.atebd.com/server",
+  "preset": "all",
+  "skipMissing": true,
+  "reconnect": true,
+  "followRedirects": false
+}

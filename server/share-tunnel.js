@@ -2,40 +2,66 @@
 'use strict';
 
 const net = require('net');
+const fs = require('fs');
+const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const DEFAULT_FORWARD = '3000:3001';
+const DEFAULT_PUBLIC_URL = 'https://device.atebd.com/server';
+const FORWARD_PRESETS = {
+  dashboard: DEFAULT_FORWARD,
+  deployed: '3000:3000',
+  chat: '3010:3010',
+  live: '3011:3011',
+  all: '3000:3001,3010:3010,3011:3011'
+};
 
 function printUsage() {
   console.log(`Usage:
   node server/share-tunnel.js --host YOUR_VPS_IP --user root [options]
 
 Options:
+  --config server/tunnel.config.json
+  --preset dashboard|deployed|chat|live|all
   --forward 3000:3001,3010:3010  One or more remote:local mappings
   --public-url https://device.atebd.com/server
   --key /path/to/id_rsa
   --remote-bind 127.0.0.1
   --local-bind 127.0.0.1
+  --skip-missing                  Keep running with only reachable local ports
   --no-health-check
   --reconnect
   --dry-run
+  --list-presets
 
 Examples:
-  node server/share-tunnel.js --host YOUR_VPS_IP --user root --public-url https://device.atebd.com/server --reconnect
-  node server/share-tunnel.js --host YOUR_VPS_IP --user root --forward 3000:3001,3010:3010,3011:3011 --reconnect
+  node server/share-tunnel.js --host YOUR_VPS_IP --user root --preset dashboard --reconnect
+  node server/share-tunnel.js --host YOUR_VPS_IP --user root --preset all --skip-missing --reconnect
+  node server/share-tunnel.js --config server/tunnel.config.json
 `);
 }
 
 function parseArgs(argv) {
+  const provided = Object.create(null);
   const out = {
     forward: DEFAULT_FORWARD,
+    preset: '',
+    config: '',
     remoteBind: '127.0.0.1',
     localBind: '127.0.0.1',
-    publicUrl: '',
+    publicUrl: DEFAULT_PUBLIC_URL,
     key: '',
+    skipMissing: false,
     noHealthCheck: false,
     reconnect: false,
-    dryRun: false
+    dryRun: false,
+    forwardProvided: false,
+    provided
+  };
+
+  const setValue = (key, value) => {
+    out[key] = value;
+    provided[key] = true;
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -48,32 +74,110 @@ function parseArgs(argv) {
 
     if (arg === '--help' || arg === '-h') {
       out.help = true;
+    } else if (arg === '--list-presets') {
+      out.listPresets = true;
+    } else if (arg === '--config') {
+      setValue('config', next());
     } else if (arg === '--host' || arg === '--vps-host') {
-      out.host = next();
+      setValue('host', next());
     } else if (arg === '--user' || arg === '--vps-user') {
-      out.user = next();
+      setValue('user', next());
+    } else if (arg === '--preset') {
+      setValue('preset', next());
     } else if (arg === '--forward' || arg === '-f') {
-      out.forward = next();
+      setValue('forward', next());
+      out.forwardProvided = true;
     } else if (arg === '--public-url') {
-      out.publicUrl = next();
+      setValue('publicUrl', next());
     } else if (arg === '--key' || arg === '--ssh-key') {
-      out.key = next();
+      setValue('key', next());
     } else if (arg === '--remote-bind') {
-      out.remoteBind = next();
+      setValue('remoteBind', next());
     } else if (arg === '--local-bind') {
-      out.localBind = next();
+      setValue('localBind', next());
+    } else if (arg === '--skip-missing') {
+      setValue('skipMissing', true);
     } else if (arg === '--no-health-check') {
-      out.noHealthCheck = true;
+      setValue('noHealthCheck', true);
     } else if (arg === '--reconnect') {
-      out.reconnect = true;
+      setValue('reconnect', true);
     } else if (arg === '--dry-run') {
-      out.dryRun = true;
+      setValue('dryRun', true);
     } else {
       throw new Error(`Unknown option: ${arg}`);
     }
   }
 
   return out;
+}
+
+function loadJsonConfig(configPath) {
+  if (!configPath) return null;
+  const fullPath = path.isAbsolute(configPath) ? configPath : path.resolve(process.cwd(), configPath);
+  const raw = fs.readFileSync(fullPath, 'utf8');
+  const config = JSON.parse(raw);
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error(`Config ${fullPath} must be a JSON object.`);
+  }
+  return { config, fullPath };
+}
+
+function applyConfig(options) {
+  const loaded = loadJsonConfig(options.config);
+  if (!loaded) return options;
+
+  const aliases = {
+    public_url: 'publicUrl',
+    publicUrl: 'publicUrl',
+    remote_bind: 'remoteBind',
+    remoteBind: 'remoteBind',
+    local_bind: 'localBind',
+    localBind: 'localBind',
+    skip_missing: 'skipMissing',
+    skipMissing: 'skipMissing',
+    no_health_check: 'noHealthCheck',
+    noHealthCheck: 'noHealthCheck',
+    dry_run: 'dryRun',
+    dryRun: 'dryRun',
+    ssh_key: 'key',
+    key: 'key',
+    host: 'host',
+    user: 'user',
+    preset: 'preset',
+    forward: 'forward',
+    reconnect: 'reconnect'
+  };
+
+  for (const [rawKey, value] of Object.entries(loaded.config)) {
+    const key = aliases[rawKey];
+    if (!key || options.provided[key]) continue;
+    options[key] = Array.isArray(value) ? value.join(',') : value;
+    if (key === 'forward') {
+      options.forwardProvided = true;
+    }
+  }
+
+  options.configPath = loaded.fullPath;
+  return options;
+}
+
+function resolveForwardSpec(options) {
+  if (options.preset) {
+    if (!Object.prototype.hasOwnProperty.call(FORWARD_PRESETS, options.preset)) {
+      throw new Error(`Unknown preset '${options.preset}'. Use --list-presets to see available presets.`);
+    }
+    if (!options.forwardProvided) {
+      return FORWARD_PRESETS[options.preset];
+    }
+  }
+  return options.forward;
+}
+
+function printPresets() {
+  console.log('Available tunnel presets:');
+  for (const [name, forward] of Object.entries(FORWARD_PRESETS)) {
+    console.log(`  ${name.padEnd(10)} ${forward}`);
+  }
 }
 
 function parseForward(spec, localBind) {
@@ -132,14 +236,24 @@ function checkLocalPort(host, port) {
   });
 }
 
-async function validateLocalTargets(rules, skip) {
-  if (skip) return;
+async function validateLocalTargets(rules, options) {
+  if (options.noHealthCheck || options.dryRun) return rules;
+  const reachable = [];
   for (const rule of rules) {
     const ok = await checkLocalPort(rule.localHost, rule.localPort);
     if (!ok) {
+      if (options.skipMissing) {
+        console.warn(`Skipping ${rule.localHost}:${rule.localPort}; local service is not reachable.`);
+        continue;
+      }
       throw new Error(`Local target ${rule.localHost}:${rule.localPort} is not reachable. Start it first, or use --no-health-check.`);
     }
+    reachable.push(rule);
   }
+  if (!reachable.length) {
+    throw new Error('No reachable local targets found.');
+  }
+  return reachable;
 }
 
 function buildSshArgs(options, rules) {
@@ -230,19 +344,25 @@ function runSsh(sshArgs, reconnect) {
 }
 
 async function main() {
-  const options = parseArgs(process.argv.slice(2));
+  let options = parseArgs(process.argv.slice(2));
+  if (options.listPresets) {
+    printPresets();
+    return 0;
+  }
   if (options.help) {
     printUsage();
     return 0;
   }
+  options = applyConfig(options);
   if (!options.host || !options.user) {
     printUsage();
     throw new Error('--host and --user are required.');
   }
 
   ensureSsh();
-  const rules = splitForwardList(options.forward).map(spec => parseForward(spec, options.localBind));
-  await validateLocalTargets(rules, options.noHealthCheck || options.dryRun);
+  const forwardSpec = resolveForwardSpec(options);
+  let rules = splitForwardList(forwardSpec).map(spec => parseForward(spec, options.localBind));
+  rules = await validateLocalTargets(rules, options);
   const sshArgs = buildSshArgs(options, rules);
   printPlan(options, rules, sshArgs);
   if (options.dryRun) return 0;

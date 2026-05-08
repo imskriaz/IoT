@@ -156,6 +156,93 @@ describe('sms route queue-first delivery', () => {
         }));
     });
 
+    test('pull messages stores flash history entries from the device action payload', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                const text = String(sql);
+                if (text.includes('INSERT OR IGNORE INTO sms')) {
+                    return { lastID: 501, changes: 1 };
+                }
+                if (text.includes('INSERT INTO sms_conversations')) {
+                    return { lastID: 701, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                const text = String(sql);
+                if (text.includes('firmware_storage_id')) return null;
+                if (text.includes('FROM sms_conversations')) return null;
+                if (text.includes('COUNT(*) AS total_count')) return { total_count: 1, unread_count: 0 };
+                if (text.includes('SELECT id, message, timestamp, type, status')) {
+                    return {
+                        id: 501,
+                        message: 'Pulled from flash',
+                        timestamp: '2026-05-08T10:00:00.000Z',
+                        type: 'incoming',
+                        status: 'received'
+                    };
+                }
+                return null;
+            }),
+            all: jest.fn(async () => [])
+        };
+        global.mqttService.publishCommand.mockResolvedValueOnce({
+            success: true,
+            payload: {
+                count: 1,
+                entries: [
+                    {
+                        storage_id: 44,
+                        from: '+8801712345678',
+                        text: 'Pulled from flash',
+                        timestamp_ms: Date.parse('2026-05-08T10:00:00.000Z'),
+                        sim_slot: 0,
+                        outgoing: false
+                    }
+                ]
+            }
+        });
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/sync')
+            .send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            imported: 1,
+            skipped: 0,
+            total: 1
+        }));
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT OR IGNORE INTO sms'),
+            expect.arrayContaining([
+                'device-1',
+                '+8801712345678',
+                null,
+                'Pulled from flash',
+                '2026-05-08T10:00:00.000Z',
+                1,
+                'incoming',
+                'received',
+                'esp32-flash-sync',
+                'esp32-sms:44',
+                null,
+                44
+            ])
+        );
+        expectDeviceEvent('device-1', 'sms:sync-completed', expect.objectContaining({
+            deviceId: 'device-1',
+            total: 1,
+            synced: 1,
+            imported: 1,
+            skipped: 0
+        }));
+    });
+
     test('pull messages emits a closing sync event when device sync fails', async () => {
         const db = {
             run: jest.fn(),
@@ -1252,11 +1339,11 @@ describe('sms route queue-first delivery', () => {
             expect.stringContaining('WHERE device_id = ? AND read = 0 AND type = \'incoming\''),
             ['device-3']
         );
-        expectDeviceEvent('device-3', 'sms:bulk-deleted', {
+        expectDeviceEvent('device-3', 'sms:bulk-deleted', expect.objectContaining({
             deviceId: 'device-3',
             count: 4,
             unreadCount: 0
-        });
+        }));
     });
 
     test('deletes only a message owned by the active device', async () => {

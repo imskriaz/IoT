@@ -26,13 +26,13 @@ Open the reverse tunnel with Node.js and keep the process running:
 
 ```powershell
 cd D:\Projects\IoT
-npm run server -- --host YOUR_VPS_IP --user root --public-url https://device.atebd.com/server --reconnect
+npm run server -- --host YOUR_VPS_IP --user root --preset dashboard --reconnect
 ```
 
 If SSH uses a key:
 
 ```powershell
-npm run server -- --host YOUR_VPS_IP --user root --key C:\Users\skria\.ssh\id_rsa --public-url https://device.atebd.com/server --reconnect
+npm run server -- --host YOUR_VPS_IP --user root --key C:\Users\skria\.ssh\id_rsa --preset dashboard --reconnect
 ```
 
 If your local dashboard is still on `3001`, use:
@@ -47,10 +47,38 @@ For more services later, add more `remote:local` ports to the same tunnel:
 npm run server -- `
   --host YOUR_VPS_IP `
   --user root `
-  --public-url https://device.atebd.com/server `
-  --forward 3000:3001,3010:3010,3011:3011 `
+  --preset all `
+  --skip-missing `
   --reconnect
 ```
+
+For daily use, save the VPS details once:
+
+```powershell
+Copy-Item server\tunnel.config.example.json server\tunnel.config.json
+notepad server\tunnel.config.json
+npm run server -- --config server/tunnel.config.json
+```
+
+After the tunnel starts, check HTTP and Socket.IO from another terminal:
+
+```powershell
+npm run server:check -- --url https://device.atebd.com/server
+```
+
+If you saved `server\tunnel.config.json`, the checker can reuse it:
+
+```powershell
+npm run server:check -- --config server/tunnel.config.json
+```
+
+During HTTPS setup, redirects can be followed explicitly:
+
+```powershell
+npm run server:check -- --url http://device.atebd.com/server --follow-redirects
+```
+
+If the checker redirects to `wp-signup.php`, the domain is still hitting a WordPress catch-all. Point `device.atebd.com` to the IoT VPS/Nginx host before generating Android QR codes.
 
 Recommended port meaning:
 

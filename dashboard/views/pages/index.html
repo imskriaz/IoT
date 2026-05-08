@@ -172,44 +172,13 @@
     const homeCaps = caps || {};
     const showSmsUi = Boolean(homeCaps.sms);
     const showCallsUi = Boolean(homeCaps.calls);
-    const showHardwareCard = homeDeviceLane === 'esp32';
-    const showCallsCard = showCallsUi && !showHardwareCard;
+    const showCallsCard = showCallsUi;
     const showUssdUi = Boolean(homeCaps.ussd);
     const showModemUi = Boolean(homeCaps.modem || homeCaps.internet);
     const showQuickActions = showSmsUi || showUssdUi || showModemUi;
-    const showSecondCommunicationCard = showHardwareCard || showCallsCard;
+    const showSecondCommunicationCard = showCallsCard;
     const activityColumnClass = showSmsUi && showSecondCommunicationCard ? 'col-12 col-lg-4' : ((showSmsUi || showSecondCommunicationCard) ? 'col-12 col-lg-6' : 'col-12');
     const communicationColumnClass = showSmsUi && showSecondCommunicationCard ? 'col-12 col-lg-4' : 'col-12 col-lg-6';
-    const homeHardware = deviceStatus.hardware || {};
-    const formatHomeBytes = (value, fallback = 'Not reported') => {
-        const num = Number(value);
-        if (!Number.isFinite(num) || num < 0) return fallback;
-        if (num < 1024) return `${num} B`;
-        if (num < 1024 * 1024) return `${(num / 1024).toFixed(0)} KB`;
-        return `${(num / (1024 * 1024)).toFixed(1)} MB`;
-    };
-    const homeHardwareBoard = homeHardware.boardName || 'Waveshare ESP32-S3-A7670E-4G';
-    const homeHardwareChip = homeHardware.chip || 'ESP32-S3R8';
-    const homeHardwareCpu = 'dual-core Xtensa LX7 up to 240 MHz';
-    const homeHardwareSram = formatHomeBytes(homeHardware.staticRamBytes, '512 KB');
-    const homeHardwareRom = formatHomeBytes(homeHardware.romBytes, '384 KB');
-    const homeHardwarePsram = formatHomeBytes(homeHardware.psramSizeBytes, '8.0 MB');
-    const homeHardwareFlash = formatHomeBytes(homeHardware.flashSizeBytes, '16.0 MB');
-    const homeSmsStorage = homeHardware.smsStorage || deviceStatus.status?.modem?.smsStorage || null;
-    const formatHomeSmsStorage = (store) => store && Number(store.total) > 0
-        ? `${store.name || 'ME'} ${Number(store.used || 0)}/${Number(store.total || 0)}`
-        : null;
-    const homeSmsReadStorage = formatHomeSmsStorage(homeSmsStorage?.read || homeSmsStorage);
-    const homeSmsWriteStorage = formatHomeSmsStorage(homeSmsStorage?.write || homeSmsStorage);
-    const homeSmsReportStorage = formatHomeSmsStorage(homeSmsStorage?.report || homeSmsStorage);
-    const homeSmsStorageSame = homeSmsReadStorage &&
-        homeSmsReadStorage === homeSmsWriteStorage &&
-        homeSmsReadStorage === homeSmsReportStorage;
-    const homeSmsStorageLabel = homeSmsStorageSame
-        ? `${homeSmsReadStorage} SMS read/write/report`
-        : (homeSmsReadStorage
-            ? `SMS read ${homeSmsReadStorage}, write ${homeSmsWriteStorage || '-'}, report ${homeSmsReportStorage || '-'}`
-            : 'SMS store not reported');
     const homeQueueState = queueState || {};
     const homeDashboardQueue = homeQueueState.dashboard || {};
     const homeDashboardSummary = homeDashboardQueue.summary || {};
@@ -238,6 +207,8 @@
     const initialWifiIp = isDeviceConnected
         ? (deviceStatus.wifi?.ipAddress || (deviceStatus.activePath === 'wifi' ? deviceStatus.ip : null) || 'N/A')
         : '-';
+    const homeOfflinePlaceholder = '-';
+    const homeOfflineMeta = 'Waiting for device heartbeat';
 %>
 
 <!-- Status Cards Row -->
@@ -376,13 +347,15 @@
 
     <!-- Storage / Uptime Card -->
     <div class="col-12 col-md-6 col-xl-3 order-4">
-        <div class="card border-warning h-100">
+        <div class="card <%= isDeviceConnected ? 'border-warning' : 'border-secondary' %> h-100">
             <div class="card-body dashboard-card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
                         <div class="dashboard-kpi-label text-muted fw-semibold">Storage</div>
                         <% let sdTotal=0,sdUsed=0,sdPercent=0,sdDisplay='N/A',sdDetails='',sdStatusLabel='No media',sdQueueLabel='0',sdCapacityLabel='Not reported';
-                           if(storageInfo.sd&&storageInfo.sd.deviceBacked){
+                           if(!isDeviceConnected){
+                               sdDisplay=homeOfflinePlaceholder;sdStatusLabel='Offline';sdQueueLabel=homeOfflinePlaceholder;sdCapacityLabel=homeOfflinePlaceholder;sdDetails=homeOfflineMeta;
+                           } else if(storageInfo.sd&&storageInfo.sd.deviceBacked){
                                sdTotal=Number(storageInfo.sd.total||0);sdUsed=Number(storageInfo.sd.used||0);sdPercent=sdTotal>0?Math.round((sdUsed/sdTotal)*100):0;
                                sdDisplay=sdTotal>0?(sdPercent+'%'):(storageInfo.sd.mounted?'Ready':'Detected');
                                sdStatusLabel=storageInfo.sd.bufferedOnly?'Buffered only':(storageInfo.sd.mounted?'Mounted':'Detected');
@@ -397,15 +370,27 @@
                                sdTotal=storageInfo.sd.total;sdUsed=storageInfo.sd.used;sdPercent=Math.round((sdUsed/sdTotal)*100);sdDisplay=sdPercent+'%';sdStatusLabel='Mounted';sdQueueLabel='0';sdCapacityLabel=Math.round((storageInfo.sd.free||0)/1073741824*10)/10+'GB free / '+Math.round(sdTotal/1073741824*10)/10+'GB';sdDetails=Math.round(sdUsed/1073741824*10)/10+'GB/'+Math.round(sdTotal/1073741824*10)/10+'GB';
                            } %>
                         <div id="dashSdValue" class="dashboard-hero">
-                            <%= storageInfo.sd && storageInfo.sd.available ? sdDisplay : 'N/A' %>
+                            <%= isDeviceConnected ? (storageInfo.sd && storageInfo.sd.available ? sdDisplay : 'N/A') : homeOfflinePlaceholder %>
                         </div>
                         <div class="dashboard-subtext" id="dashSdStatus"><%= sdStatusLabel %></div>
                     </div>
-                    <div class="bg-warning bg-opacity-10 p-2 rounded-circle">
-                        <i class="bi bi-device-hdd fs-4 text-warning"></i>
+                    <div class="<%= isDeviceConnected ? 'bg-warning' : 'bg-secondary' %> bg-opacity-10 p-2 rounded-circle">
+                        <i class="bi bi-device-hdd fs-4 <%= isDeviceConnected ? 'text-warning' : 'text-secondary' %>"></i>
                     </div>
                 </div>
-                <% if(storageInfo.sd&&storageInfo.sd.available){ %>
+                <% if(!isDeviceConnected){ %>
+                    <small id="dashSdMeta" class="dashboard-kpi-meta text-muted d-block mt-2"><%= homeOfflineMeta %></small>
+                    <div class="dashboard-card-section">
+                        <div class="dashboard-meta-row">
+                            <span class="text-muted">Queue</span>
+                            <span class="fw-semibold text-end" id="dashSdQueue"><%= homeOfflinePlaceholder %></span>
+                        </div>
+                        <div class="dashboard-meta-row">
+                            <span class="text-muted">Space</span>
+                            <span class="fw-semibold text-end" id="dashSdSpace"><%= homeOfflinePlaceholder %></span>
+                        </div>
+                    </div>
+                <% } else if(storageInfo.sd&&storageInfo.sd.available){ %>
                     <% if(sdTotal>0){ %>
                     <div class="progress thin-progress">
                         <div class="progress-bar bg-warning" data-progress-width="<%= sdPercent %>"></div>
@@ -450,120 +435,80 @@
     </span>
 </div>
 
-<!-- Device Details Card - Only show when connected -->
-<% if (isDeviceConnected) { %>
-    <div class="card mb-3 dashboard-actions">
-        <div class="card-body py-2">
-            <div class="row g-2 align-items-center">
-                <div class="<%= homeDetailColumnClass %>">
-                    <div class="dashboard-detail-label text-muted">Temp</div>
-                    <div class="fw-semibold"><%= deviceStatus.temperature !== null ? (deviceStatus.temperature + ' C') : 'N/A' %></div>
-                </div>
-                <div class="<%= homeDetailColumnClass %>">
-                    <div class="dashboard-detail-label text-muted">Uptime</div>
-                    <div class="fw-semibold"><%= deviceStatus.uptime || 'Not reported' %></div>
-                </div>
-                <% if (homeShowModelDetail) { %>
-                <div class="<%= homeDetailColumnClass %>">
-                    <div class="dashboard-detail-label text-muted">Model</div>
-                    <div id="deviceModel" class="dashboard-detail-value fw-semibold text-truncate" title="<%= homeModelLabel %>"><%= homeModelLabel %></div>
-                </div>
-                <% } %>
-                <div class="<%= homeDetailColumnClass %>">
-                    <div id="deviceHardwareIdLabel" class="dashboard-detail-label text-muted"><%= deviceStatus.androidId ? 'Android ID' : (deviceStatus.imei ? 'IMEI' : 'Android ID / IMEI') %></div>
-                    <div id="deviceHardwareId" class="dashboard-detail-value fw-semibold text-truncate" title="<%= deviceStatus.androidId || deviceStatus.imei || 'Not reported by device' %>"><%= deviceStatus.androidId || deviceStatus.imei || 'Not reported by device' %></div>
-                </div>
-                <div class="<%= homeDetailColumnClass %>">
-                    <div class="dashboard-detail-label text-muted">Health</div>
-                    <div id="deviceHealth" class="fw-semibold <%= typeof healthScore === 'number' ? (healthScore >= 70 ? 'text-success' : healthScore >= 40 ? 'text-warning' : 'text-danger') : '' %>">
-                        <% if (typeof healthScore === 'number') { %>
-                        <%= healthScore %>%
-                        <i class="dashboard-heart-icon bi bi-heart-pulse ms-1"></i>
-                        <% } else { %>
-                        N/A
-                        <% } %>
-                    </div>
+<!-- Device Details Card -->
+<div class="card mb-3 dashboard-actions">
+    <div class="card-body py-2">
+        <div class="row g-2 align-items-center">
+            <div class="<%= homeDetailColumnClass %>">
+                <div class="dashboard-detail-label text-muted">Temp</div>
+                <div class="fw-semibold"><%= isDeviceConnected && deviceStatus.temperature !== null ? (deviceStatus.temperature + ' C') : homeOfflinePlaceholder %></div>
+            </div>
+            <div class="<%= homeDetailColumnClass %>">
+                <div class="dashboard-detail-label text-muted">Uptime</div>
+                <div class="fw-semibold"><%= isDeviceConnected ? (deviceStatus.uptime || 'Not reported') : homeOfflinePlaceholder %></div>
+            </div>
+            <% if (homeShowModelDetail) { %>
+            <div class="<%= homeDetailColumnClass %>">
+                <div class="dashboard-detail-label text-muted">Model</div>
+                <div id="deviceModel" class="dashboard-detail-value fw-semibold text-truncate" title="<%= isDeviceConnected ? homeModelLabel : homeOfflineMeta %>"><%= isDeviceConnected ? homeModelLabel : homeOfflinePlaceholder %></div>
+            </div>
+            <% } %>
+            <div class="<%= homeDetailColumnClass %>">
+                <div id="deviceHardwareIdLabel" class="dashboard-detail-label text-muted"><%= deviceStatus.androidId ? 'Android ID' : (deviceStatus.imei ? 'IMEI' : 'Android ID / IMEI') %></div>
+                <div id="deviceHardwareId" class="dashboard-detail-value fw-semibold text-truncate" title="<%= isDeviceConnected ? (deviceStatus.androidId || deviceStatus.imei || 'Not reported by device') : homeOfflineMeta %>"><%= isDeviceConnected ? (deviceStatus.androidId || deviceStatus.imei || 'Not reported by device') : homeOfflinePlaceholder %></div>
+            </div>
+            <div class="<%= homeDetailColumnClass %>">
+                <div class="dashboard-detail-label text-muted">Health</div>
+                <div id="deviceHealth" class="fw-semibold <%= isDeviceConnected && typeof healthScore === 'number' ? (healthScore >= 70 ? 'text-success' : healthScore >= 40 ? 'text-warning' : 'text-danger') : '' %>">
+                    <% if (isDeviceConnected && typeof healthScore === 'number') { %>
+                    <%= healthScore %>%
+                    <i class="dashboard-heart-icon bi bi-heart-pulse ms-1"></i>
+                    <% } else { %>
+                    <%= homeOfflinePlaceholder %>
+                    <% } %>
                 </div>
             </div>
         </div>
     </div>
-<% } %>
+</div>
 
-<!-- Quick Actions - Only show when connected -->
-<% if (isDeviceConnected) { %>
-    <% if (showQuickActions) { %>
-    <div class="card mb-4">
-        <div class="card-header bg-white py-3">
-            <h5 class="mb-0 fs-6 fw-semibold">
-                <i class="bi bi-lightning-charge me-2"></i>Quick Actions
-            </h5>
-        </div>
-        <div class="card-body">
-            <div class="d-flex flex-wrap gap-2">
-                <% if (showSmsUi) { %>
-                <button type="button" class="btn btn-outline-primary flex-fill" data-bs-toggle="modal"
-                    data-bs-target="#sendSmsModal" data-cap="sms">
-                    <i class="bi bi-chat-dots me-2"></i>
-                    <span class="d-none d-sm-inline">Send</span> SMS
-                </button>
-                <% } %>
-                <% if (showUssdUi) { %>
-                <button type="button" class="btn btn-outline-success flex-fill" onclick="quickBalance()" data-cap="ussd">
-                    <i class="bi bi-cash-stack me-2"></i>
-                    <span class="d-none d-sm-inline">Check</span> Balance
-                </button>
-                <button type="button" class="btn btn-outline-info flex-fill" onclick="quickSimNumber()" data-cap="ussd">
-                    <i class="bi bi-sim me-2"></i>
-                    <span class="d-none d-sm-inline">Detect</span> SIM Number
-                </button>
-                <% } %>
-                <% if (showModemUi) { %>
-                <button type="button" class="btn btn-outline-warning flex-fill" onclick="restartModem()" data-cap="modem">
-                    <i class="bi bi-arrow-repeat me-2"></i>
-                    <span class="d-none d-sm-inline">Restart</span> Modem
-                </button>
-                <% } %>
-            </div>
-        </div>
+<!-- Quick Actions -->
+<% if (showQuickActions) { %>
+<div id="dashboardQuickActionsCard" class="card mb-4 <%= isDeviceConnected ? '' : 'border-secondary' %>">
+    <div class="card-header bg-white py-3">
+        <h5 class="mb-0 fs-6 fw-semibold">
+            <i class="bi bi-lightning-charge me-2"></i>Quick Actions
+        </h5>
     </div>
-    <% } %>
-<% } else { %>
-    <!-- Offline Actions - Show reconnect options -->
-    <div class="card mb-4 border-warning">
-        <div class="card-header bg-warning bg-opacity-10 py-3">
-            <h5 class="mb-0 fs-6 fw-semibold">
-                <i class="bi bi-exclamation-triangle me-2 text-warning"></i>Troubleshooting
-            </h5>
+    <div class="card-body">
+        <div class="d-flex flex-wrap gap-2">
+            <% if (showSmsUi) { %>
+            <button type="button" class="btn btn-outline-primary flex-fill" data-bs-toggle="modal"
+                data-bs-target="#sendSmsModal" data-cap="sms" <%= isDeviceConnected ? '' : 'disabled aria-disabled="true"' %>>
+                <i class="bi bi-chat-dots me-2"></i>
+                <span class="d-none d-sm-inline">Send</span> SMS
+            </button>
+            <% } %>
+            <% if (showUssdUi) { %>
+            <button type="button" class="btn btn-outline-success flex-fill" onclick="quickBalance()" data-cap="ussd" <%= isDeviceConnected ? '' : 'disabled aria-disabled="true"' %>>
+                <i class="bi bi-cash-stack me-2"></i>
+                <span class="d-none d-sm-inline">Check</span> Balance
+            </button>
+            <button type="button" class="btn btn-outline-info flex-fill" onclick="quickSimNumber()" data-cap="ussd" <%= isDeviceConnected ? '' : 'disabled aria-disabled="true"' %>>
+                <i class="bi bi-sim me-2"></i>
+                <span class="d-none d-sm-inline">Detect</span> SIM Number
+            </button>
+            <% } %>
+            <% if (showModemUi) { %>
+            <button type="button" class="btn btn-outline-warning flex-fill" onclick="restartModem()" data-cap="modem" <%= isDeviceConnected ? '' : 'disabled aria-disabled="true"' %>>
+                <i class="bi bi-arrow-repeat me-2"></i>
+                <span class="d-none d-sm-inline">Restart</span> Modem
+            </button>
+            <% } %>
         </div>
-        <div class="card-body">
-            <div class="row g-3">
-                <div class="col-md-6">
-                    <h6 class="fw-bold">Check Device:</h6>
-                    <ul class="small">
-                        <% homeTroubleshooting.device.forEach(function(item) { %>
-                            <li><%= item %></li>
-                        <% }); %>
-                    </ul>
-                </div>
-                <div class="col-md-6">
-                    <h6 class="fw-bold">Check Server:</h6>
-                    <ul class="small">
-                        <% homeTroubleshooting.server.forEach(function(item) { %>
-                            <li><%= item %></li>
-                        <% }); %>
-                    </ul>
-                </div>
-                <div class="col-12">
-                    <button class="btn btn-warning" onclick="refreshConnectionStatus()">
-                        <i class="bi bi-arrow-repeat me-2"></i>Retry Connection
-                    </button>
-                    <a href="/settings" class="btn btn-outline-secondary ms-2">
-                        <i class="bi bi-gear me-2"></i>System Settings
-                    </a>
-                </div>
-            </div>
-        </div>
+        <div id="dashboardQuickActionsOfflineNote" class="small text-muted mt-3 <%= isDeviceConnected ? 'd-none' : '' %>"><%= homeOfflineMeta %></div>
     </div>
+</div>
 <% } %>
 
 <!-- Recent Activity Row - Always show (cached data) -->
@@ -583,7 +528,12 @@
             </div>
             <div class="card-body p-0">
                 <div id="dashboardRecentSmsBody">
-                    <% if (recentConversations && recentConversations.length > 0) { %>
+                    <% if (!isDeviceConnected) { %>
+                        <div class="text-center py-5">
+                            <i class="bi bi-inbox fs-1 text-muted"></i>
+                            <p class="text-muted mt-3 mb-0"><%= homeOfflineMeta %></p>
+                        </div>
+                    <% } else if (recentConversations && recentConversations.length > 0) { %>
                         <div class="list-group list-group-flush">
                             <% recentConversations.slice(0, 3).forEach(thread => { %>
                                 <% const threadUrl = `/sms?device=${encodeURIComponent(deviceId || '')}&thread=${encodeURIComponent(thread.primary_number || '')}&conversation=${encodeURIComponent(thread.conversation_id || '')}&title=${encodeURIComponent(thread.title || thread.primary_number || 'Conversation')}`; %>
@@ -634,45 +584,8 @@
     </div>
     <% } %>
 
-    <!-- Hardware Profile -->
-    <% if (showHardwareCard) { %>
-    <div class="<%= communicationColumnClass %>" data-cap="hardware">
-        <div class="card h-100 dashboard-list">
-            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-                <h5 class="mb-0 fs-6 fw-semibold">
-                    <i class="bi bi-motherboard me-2"></i>Hardware
-                </h5>
-                <a href="/device-about" data-device-aware-href="/device-about" class="btn btn-sm btn-primary">
-                    <span class="d-none d-sm-inline">Details</span>
-                    <i class="bi bi-arrow-right d-sm-none"></i>
-                </a>
-            </div>
-            <div class="card-body">
-                <div class="fw-semibold text-truncate" title="<%= homeHardwareBoard %>"><%= homeHardwareBoard %></div>
-                <div class="small text-muted mb-3"><%= homeHardwareChip %> - <%= homeHardwareCpu %></div>
-                <div class="row g-2 small">
-                    <div class="col-6">
-                        <div class="text-muted">SRAM</div>
-                        <div class="fw-semibold"><%= homeHardwareSram %></div>
-                    </div>
-                    <div class="col-6">
-                        <div class="text-muted">ROM</div>
-                        <div class="fw-semibold"><%= homeHardwareRom %></div>
-                    </div>
-                    <div class="col-6">
-                        <div class="text-muted">PSRAM</div>
-                        <div class="fw-semibold"><%= homeHardwarePsram %></div>
-                    </div>
-                    <div class="col-6">
-                        <div class="text-muted">Flash</div>
-                        <div class="fw-semibold"><%= homeHardwareFlash %></div>
-                    </div>
-                </div>
-                <div class="small text-muted mt-3"><%= homeSmsStorageLabel %></div>
-            </div>
-        </div>
-    </div>
-    <% } else if (showCallsCard) { %>
+    <!-- Recent Calls -->
+    <% if (showCallsCard) { %>
     <div class="<%= communicationColumnClass %>" data-cap="calls">
         <div class="card h-100 dashboard-list">
             <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
@@ -733,7 +646,13 @@
                     <i class="bi bi-activity me-2"></i>System Activity
                 </h5>
             </div>
-            <div class="card-body">
+            <div class="card-body" id="dashboardSystemActivityBody">
+                <% if (!isDeviceConnected) { %>
+                <div class="text-center py-5">
+                    <i class="bi bi-activity fs-1 text-muted"></i>
+                    <p class="text-muted mt-3 mb-0"><%= homeOfflineMeta %></p>
+                </div>
+                <% } else { %>
                 <div class="list-group list-group-flush">
                     <% if (showSmsUi) { %>
                     <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0">
@@ -823,10 +742,11 @@
                     </div>
                     <% } %>
                 </div>
+                <% } %>
             </div>
             <div class="card-footer bg-white py-2">
                 <small class="text-muted">
-                    <i class="bi bi-clock me-1"></i>Updated just now
+                    <i class="bi bi-clock me-1"></i><span id="dashboardSystemActivityFooterText"><%= isDeviceConnected ? 'Updated just now' : 'Offline' %></span>
                 </small>
             </div>
         </div>
@@ -888,6 +808,7 @@
 
 <script>
     window.__dashboardRenderedOnline = <%= isDeviceConnected ? 'true' : 'false' %>;
+    window.__dashboardLiveOnline = window.__dashboardRenderedOnline;
     window.ACTIVE_DEVICE_TYPE = window.ACTIVE_DEVICE_TYPE || '<%= homeDeviceLane %>';
 
     function refreshDashboard() {
@@ -942,7 +863,7 @@
     }
 
     function quickBalance() {
-        if (!<%= isDeviceConnected %>) {
+        if (window.__dashboardLiveOnline === false) {
             alert('Device is offline. Cannot check balance.');
             return;
         }
@@ -967,7 +888,7 @@
     }
 
     function quickSimNumber() {
-        if (!<%= isDeviceConnected %>) {
+        if (window.__dashboardLiveOnline === false) {
             alert('Device is offline. Cannot detect SIM number.');
             return;
         }
@@ -992,7 +913,7 @@
     }
 
     function restartModem() {
-        if (!<%= isDeviceConnected %>) {
+        if (window.__dashboardLiveOnline === false) {
             alert('Device is offline. Cannot restart modem.');
             return;
         }
@@ -1242,18 +1163,25 @@
                     wifiStatus: hasFreshness ? 'No recent heartbeat' : 'Waiting for live data',
                     wifiStatusLabel: 'Disconnected',
                     cellularStatus: hasFreshness ? 'No recent heartbeat' : 'Waiting for live data',
-                    ip: 'N/A',
+                    ip: '-',
                     displayName: 'Offline',
                     temperature: null,
                     uptime: null,
                     activePath: 'offline',
                     healthScore: null,
-                    batteryLabel: 'N/A',
-                    voltageLabel: 'Not reported by device',
-                    chargingLabel: 'Unknown',
-                    batteryStateLabel: 'Not reported by device',
+                    batteryLabel: '-',
+                    voltageLabel: '-',
+                    chargingLabel: '-',
+                    batteryStateLabel: 'Offline',
+                    batteryPowerSourceLabel: '-',
                     telemetryNotice: null,
-                    sdSummary: formatStorageSummary(status.storage),
+                    sdSummary: {
+                        value: '-',
+                        meta: 'Waiting for device heartbeat',
+                        status: 'Offline',
+                        queue: '-',
+                        space: '-'
+                    },
                     wifi: status.wifi
                         ? {
                             ...status.wifi,
@@ -1480,30 +1408,65 @@
             const healthEl = document.getElementById('deviceHealth');
             const telemetryNoticeEl = document.getElementById('dashboardTelemetryNotice');
             const telemetryNoticeTextEl = document.getElementById('dashboardTelemetryNoticeText');
+            const isOnline = status.online !== false;
+            const offlinePlaceholder = '-';
+            window.__dashboardLiveOnline = isOnline;
+            const quickActionsCard = document.getElementById('dashboardQuickActionsCard');
+            if (quickActionsCard) {
+                quickActionsCard.classList.toggle('border-secondary', !isOnline);
+                quickActionsCard.querySelectorAll('button').forEach((button) => {
+                    button.disabled = !isOnline;
+                    button.setAttribute('aria-disabled', isOnline ? 'false' : 'true');
+                });
+            }
+            const quickActionsOfflineNote = document.getElementById('dashboardQuickActionsOfflineNote');
+            if (quickActionsOfflineNote) quickActionsOfflineNote.classList.toggle('d-none', isOnline);
+
+            const setLiveBlockPlaceholder = (id, iconClass) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (!el.__dashboardOnlineHtml) {
+                    el.__dashboardOnlineHtml = el.innerHTML;
+                }
+                if (!isOnline) {
+                    if (el.dataset.offlineApplied === 'true') return;
+                    el.innerHTML = `<div class="text-center py-5"><i class="bi ${iconClass} fs-1 text-muted"></i><p class="text-muted mt-3 mb-0">Waiting for device heartbeat</p></div>`;
+                    el.dataset.offlineApplied = 'true';
+                    return;
+                }
+                if (el.dataset.offlineApplied === 'true') {
+                    el.innerHTML = el.__dashboardOnlineHtml;
+                    delete el.dataset.offlineApplied;
+                }
+            };
+            setLiveBlockPlaceholder('dashboardRecentSmsBody', 'bi-inbox');
+            setLiveBlockPlaceholder('dashboardSystemActivityBody', 'bi-activity');
+            const systemActivityFooterText = document.getElementById('dashboardSystemActivityFooterText');
+            if (systemActivityFooterText) systemActivityFooterText.textContent = isOnline ? 'Updated just now' : 'Offline';
 
             if (wifiPrimaryEl) wifiPrimaryEl.textContent = status.wifiRoleLabel || (status.online ? 'Primary' : 'Offline');
             if (modemActiveEl) modemActiveEl.textContent = status.modemRoleLabel || (status.online ? 'Connected' : 'Offline');
-            if (batEl) batEl.textContent = status.batteryLabel || (status.battery !== null && status.battery !== undefined ? status.battery + '%' : 'N/A');
-            if (wifiSigValueEl) wifiSigValueEl.textContent = status.wifiSignalLabel || (status.wifiSignal !== null && status.wifiSignal !== undefined ? status.wifiSignal + '%' : 'N/A');
+            if (batEl) batEl.textContent = isOnline ? (status.batteryLabel || (status.battery !== null && status.battery !== undefined ? status.battery + '%' : 'N/A')) : offlinePlaceholder;
+            if (wifiSigValueEl) wifiSigValueEl.textContent = isOnline ? (status.wifiSignalLabel || (status.wifiSignal !== null && status.wifiSignal !== undefined ? status.wifiSignal + '%' : 'N/A')) : offlinePlaceholder;
             if (wifiSigBar) wifiSigBar.style.width = (status.wifiSignal ?? 0) + '%';
-            if (cellSigValueEl) cellSigValueEl.textContent = status.cellularSignalLabel || (status.cellularSignal !== null && status.cellularSignal !== undefined ? status.cellularSignal + '%' : 'N/A');
+            if (cellSigValueEl) cellSigValueEl.textContent = isOnline ? (status.cellularSignalLabel || (status.cellularSignal !== null && status.cellularSignal !== undefined ? status.cellularSignal + '%' : 'N/A')) : offlinePlaceholder;
             if (cellSigBar) cellSigBar.style.width = (status.cellularSignal ?? 0) + '%';
             if (batBar) batBar.style.width = (status.battery ?? 0) + '%';
-            if (opEl) opEl.textContent = status.operator || 'Not reported';
-            if (simNumberEl) simNumberEl.textContent = getSimNumberDisplayValue(status);
-            if (chEl) chEl.textContent = status.chargingLabel || (status.charging !== null && status.charging !== undefined ? (status.charging ? 'Yes' : 'No') : 'Unknown');
-            if (voltageEl) voltageEl.textContent = status.voltageLabel || 'Not reported';
-            if (batteryStateEl) batteryStateEl.textContent = status.batteryStateLabel || 'Telemetry pending';
-            if (batteryPowerSourceEl) batteryPowerSourceEl.textContent = status.batteryPowerSourceLabel || 'Not reported';
-            if (wifiSsidEl) wifiSsidEl.textContent = status.wifiSsidDisplay || status.wifiSsid || 'Not reported';
+            if (opEl) opEl.textContent = isOnline ? (status.operator || 'Not reported') : offlinePlaceholder;
+            if (simNumberEl) simNumberEl.textContent = isOnline ? getSimNumberDisplayValue(status) : offlinePlaceholder;
+            if (chEl) chEl.textContent = isOnline ? (status.chargingLabel || (status.charging !== null && status.charging !== undefined ? (status.charging ? 'Yes' : 'No') : 'Unknown')) : offlinePlaceholder;
+            if (voltageEl) voltageEl.textContent = isOnline ? (status.voltageLabel || 'Not reported') : offlinePlaceholder;
+            if (batteryStateEl) batteryStateEl.textContent = isOnline ? (status.batteryStateLabel || 'Telemetry pending') : 'Offline';
+            if (batteryPowerSourceEl) batteryPowerSourceEl.textContent = isOnline ? (status.batteryPowerSourceLabel || 'Not reported') : offlinePlaceholder;
+            if (wifiSsidEl) wifiSsidEl.textContent = isOnline ? (status.wifiSsidDisplay || status.wifiSsid || 'Not reported') : offlinePlaceholder;
             if (wifiIpEl) {
-                const wifiIp = status.wifi?.ipAddress || (status.activePath === 'wifi' ? status.ip : null) || 'N/A';
+                const wifiIp = isOnline ? (status.wifi?.ipAddress || (status.activePath === 'wifi' ? status.ip : null) || 'N/A') : offlinePlaceholder;
                 wifiIpEl.textContent = wifiIp;
             }
             if (wifiSigMetaEl) wifiSigMetaEl.textContent = status.wifiStatusLabel || 'Not connected';
             if (cellSigMetaEl) cellSigMetaEl.textContent = status.cellularStatus || 'Unavailable';
-            if (currentIpEl) currentIpEl.textContent = status.ip || 'N/A';
-            maybeAutoDetectSimNumber(status);
+            if (currentIpEl) currentIpEl.textContent = isOnline ? (status.ip || 'N/A') : offlinePlaceholder;
+            if (isOnline) maybeAutoDetectSimNumber(status);
             if (hardwareIdEl) {
                 const imei = status.imei || status?.modem?.imei || status?.device?.imei || null;
                 const androidId = status.androidId
@@ -1517,8 +1480,8 @@
                     : (androidId
                         ? `Android ID • ${androidId}`
                         : (installId ? `Install ID • ${installId}` : 'Not reported by device'));
-                hardwareIdEl.textContent = hardwareLabel;
-                hardwareIdEl.setAttribute('title', hardwareLabel);
+                hardwareIdEl.textContent = isOnline ? hardwareLabel : offlinePlaceholder;
+                hardwareIdEl.setAttribute('title', isOnline ? hardwareLabel : 'Waiting for device heartbeat');
             }
             if (hardwareIdEl || hardwareIdLabelEl) {
                 const hardwareIdentity = typeof window.getDeviceHardwareIdentity === 'function'
@@ -1539,8 +1502,8 @@
                             || 'Not reported by device'
                     };
                 if (hardwareIdEl) {
-                    hardwareIdEl.textContent = hardwareIdentity.value;
-                    hardwareIdEl.setAttribute('title', hardwareIdentity.value);
+                    hardwareIdEl.textContent = isOnline ? hardwareIdentity.value : offlinePlaceholder;
+                    hardwareIdEl.setAttribute('title', isOnline ? hardwareIdentity.value : 'Waiting for device heartbeat');
                 }
                 if (hardwareIdLabelEl) {
                     hardwareIdLabelEl.textContent = hardwareIdentity.label;
@@ -1561,9 +1524,9 @@
                             : (status.activePath === 'modem' ? 'Modem' : (status.network || 'Not reported')));
                 }
                 if (currentEl) {
-                    const currentValue = status.activePath === 'wifi'
+                    const currentValue = !isOnline ? offlinePlaceholder : (status.activePath === 'wifi'
                         ? (status.wifiSsid || status.currentNetworkName || 'Not reported')
-                        : (status.operator || status.currentNetworkName || status.displayName || 'Not reported');
+                        : (status.operator || status.currentNetworkName || status.displayName || 'Not reported'));
                     currentEl.textContent = currentValue;
                     currentEl.setAttribute('title', currentValue);
                 }
@@ -1571,9 +1534,9 @@
                     const activeSignal = status.activePath === 'wifi'
                         ? status.wifiSignal
                         : (status.cellularSignal ?? status.signal);
-                    signalEl.textContent = activeSignal !== null && activeSignal !== undefined ? `${activeSignal}%` : 'N/A';
+                    signalEl.textContent = isOnline && activeSignal !== null && activeSignal !== undefined ? `${activeSignal}%` : offlinePlaceholder;
                 }
-                if (ipEl) ipEl.textContent = status.ip || 'N/A';
+                if (ipEl) ipEl.textContent = isOnline ? (status.ip || 'N/A') : offlinePlaceholder;
             }
 
             document.querySelectorAll('.dashboard-detail-label').forEach((labelEl) => {
@@ -1582,22 +1545,22 @@
                 if (!valueEl) return;
 
                 if (label === 'Uptime') {
-                    valueEl.textContent = status.uptime || 'Not reported';
+                    valueEl.textContent = isOnline ? (status.uptime || 'Not reported') : offlinePlaceholder;
                 } else if (label === 'IP Address') {
-                    valueEl.textContent = status.ip || 'N/A';
+                    valueEl.textContent = isOnline ? (status.ip || 'N/A') : offlinePlaceholder;
                 } else if (label === 'Health') {
-                    if (typeof status.healthScore === 'number') {
+                    if (isOnline && typeof status.healthScore === 'number') {
                         valueEl.classList.remove('text-success', 'text-warning', 'text-danger');
                         valueEl.classList.add(status.healthScore >= 70 ? 'text-success' : status.healthScore >= 40 ? 'text-warning' : 'text-danger');
                         valueEl.innerHTML = `${status.healthScore}% <i class="dashboard-heart-icon bi bi-heart-pulse ms-1"></i>`;
                     } else {
                         valueEl.classList.remove('text-success', 'text-warning', 'text-danger');
-                        valueEl.textContent = 'N/A';
+                        valueEl.textContent = offlinePlaceholder;
                     }
                 } else if (label === 'Temp') {
-                    valueEl.textContent = status.temperature !== null && status.temperature !== undefined
+                    valueEl.textContent = isOnline && status.temperature !== null && status.temperature !== undefined
                         ? `${status.temperature} C`
-                        : 'N/A';
+                        : offlinePlaceholder;
                 }
             });
 
@@ -1627,13 +1590,13 @@
             }
 
             if (healthEl) {
-                if (typeof status.healthScore === 'number') {
+                if (isOnline && typeof status.healthScore === 'number') {
                     healthEl.classList.remove('text-success', 'text-warning', 'text-danger');
                     healthEl.classList.add(status.healthScore >= 70 ? 'text-success' : status.healthScore >= 40 ? 'text-warning' : 'text-danger');
                     healthEl.innerHTML = `${status.healthScore}% <i class="dashboard-heart-icon bi bi-heart-pulse ms-1"></i>`;
                 } else {
                     healthEl.classList.remove('text-success', 'text-warning', 'text-danger');
-                    healthEl.textContent = 'N/A';
+                    healthEl.textContent = offlinePlaceholder;
                 }
             }
 

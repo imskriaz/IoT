@@ -17,6 +17,12 @@ dashboard/*.sqlite
 dashboard/*.sqlite3
 dashboard/tmp-dashboard*.cookies.txt
 
+# VPS/server local secrets
+server/tunnel.config.json
+server/*.local.json
+server/*.pem
+server/*.key
+
 # ESP-IDF / firmware build outputs
 firmware/espidf/**/build/
 firmware/espidf/**/build-*/

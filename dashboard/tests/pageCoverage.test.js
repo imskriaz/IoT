@@ -987,6 +987,19 @@ describe('sidebar navigation coverage', () => {
         expect(dashboardStatusJs).toContain("return (wifiConnected || activePath === 'wifi') ? 'Connected' : 'Not connected';");
     });
 
+    test('dashboard home keeps Calls in the communication card and leaves hardware details to Device About', () => {
+        const indexHtml = fs.readFileSync(indexPath, 'utf8');
+        const deviceAboutHtml = fs.readFileSync(deviceAboutPath, 'utf8');
+
+        expect(indexHtml).toContain('const showCallsCard = showCallsUi;');
+        expect(indexHtml).toContain('<i class="bi bi-telephone me-2"></i>Recent Calls');
+        expect(indexHtml).not.toContain('const showHardwareCard');
+        expect(indexHtml).not.toContain('id="dashboardHardwareBody"');
+        expect(indexHtml).not.toContain('<!-- Hardware Profile -->');
+        expect(deviceAboutHtml).toContain('<i class="bi bi-motherboard me-2"></i>Board Profile');
+        expect(deviceAboutHtml).toContain("['Modem SMS store', esc(smsStorageLabel)]");
+    });
+
     test('dashboard home shows Android ID or IMEI as a dynamic label with plain value text', () => {
         const indexHtml = fs.readFileSync(indexPath, 'utf8');
         const mainJs = fs.readFileSync(mainJsPath, 'utf8');
@@ -1127,6 +1140,11 @@ describe('sidebar navigation coverage', () => {
         expect(html).toContain('live.sim?.subscriberNumber');
         expect(html).toContain('modemData.mobile?.subscriberNumber');
         expect(html).toContain('Checking...');
+        expect(html).toContain('const smsStorage = liveHardware.smsStorage || live.status?.modem?.smsStorage || null;');
+        expect(html).toContain('const smsReadStorage = formatSmsStorageEntry(smsStorage?.read || smsStorage);');
+        expect(html).toContain('const smsWriteStorage = formatSmsStorageEntry(smsStorage?.write || smsStorage);');
+        expect(html).toContain('const smsReportStorage = formatSmsStorageEntry(smsStorage?.report || smsStorage);');
+        expect(html).toContain("`${smsReadStorage} read/write/report slots`");
     });
 
     test('sms thread loading updates both workspace and modal error surfaces', () => {

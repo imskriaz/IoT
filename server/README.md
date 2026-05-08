@@ -15,13 +15,16 @@ The dashboard app itself listens on local port `3000`.
 - `iot-dashboard.service` - systemd service template for running `dashboard/server.js`.
 - `install-ubuntu.sh` - Ubuntu installer for Nginx, the systemd unit, and the dashboard env template.
 - `share-tunnel.js` - Node.js reverse tunnel helper for temporary localhost sharing before the dashboard is deployed on the VPS.
+- `check-server.js` - HTTP and Socket.IO reachability checker for the tunnel or deployed VPS.
+- `diagnose-vps.js` - Ubuntu-side diagnostic for DNS, Nginx, systemd, port 3000, HTTP, and Socket.IO.
+- `tunnel.config.example.json` - reusable tunnel config template for dashboard, chat, and live services.
 
 ## Temporary Localhost Sharing
 
 Run from this repo on your PC:
 
 ```bash
-npm run server -- --host YOUR_VPS_IP --user root --public-url https://device.atebd.com/server --forward 3000:3001 --reconnect
+npm run server -- --host YOUR_VPS_IP --user root --preset dashboard --reconnect
 ```
 
 This maps:
@@ -33,7 +36,61 @@ VPS 127.0.0.1:3000 -> local PC 127.0.0.1:3001
 Add future services:
 
 ```bash
-npm run server -- --host YOUR_VPS_IP --user root --public-url https://device.atebd.com/server --forward 3000:3001,3010:3010,3011:3011 --reconnect
+npm run server -- --host YOUR_VPS_IP --user root --preset all --skip-missing --reconnect
+```
+
+Useful presets:
+
+```text
+dashboard  VPS 3000 -> local 3001
+deployed   VPS 3000 -> local 3000
+chat       VPS 3010 -> local 3010
+live       VPS 3011 -> local 3011
+all        dashboard + chat + live
+```
+
+`--skip-missing` lets the `all` preset start even if chat or live-update services are not running yet.
+
+For repeated use, copy the example config once:
+
+```bash
+cp server/tunnel.config.example.json server/tunnel.config.json
+```
+
+Edit `server/tunnel.config.json`, then run:
+
+```bash
+npm run server -- --config server/tunnel.config.json
+```
+
+Command-line flags override config values, so this works for quick one-off changes:
+
+```bash
+npm run server -- --config server/tunnel.config.json --preset dashboard
+```
+
+Check the public HTTP and Socket.IO path after the tunnel starts:
+
+```bash
+npm run server:check -- --url https://device.atebd.com/server
+```
+
+Or reuse the tunnel config:
+
+```bash
+npm run server:check -- --config server/tunnel.config.json
+```
+
+If you are checking an `http://` URL during HTTPS setup, allow normal redirects:
+
+```bash
+npm run server:check -- --url http://device.atebd.com/server --follow-redirects
+```
+
+From inside the uploaded `server/` folder on Ubuntu:
+
+```bash
+npm run check -- --url https://device.atebd.com/server
 ```
 
 ## Ubuntu VPS Setup
@@ -114,6 +171,24 @@ sudo systemctl enable --now iot-dashboard
 sudo systemctl status iot-dashboard
 ```
 
+Then verify from the VPS or any external machine:
+
+```bash
+npm --prefix /opt/iot/server run check -- --url https://device.atebd.com/server
+```
+
+For a fuller VPS-side diagnosis:
+
+```bash
+npm --prefix /opt/iot/server run diagnose
+```
+
+If you know the VPS public IP, include it:
+
+```bash
+npm --prefix /opt/iot/server run diagnose -- --origin-ip YOUR_VPS_IP
+```
+
 ## Notes
 
 `SOCKET_IO_CORS_ORIGIN` must be only the origin, not `/server`, because CORS origins do not include paths.
@@ -121,3 +196,20 @@ sudo systemctl status iot-dashboard
 The Nginx config accepts `/server/v1/android/bridge/*` and strips `/server` before proxying to the dashboard. This lets Android setup QR codes safely use `https://device.atebd.com/server` as the public base URL.
 
 The Nginx config also proxies the dashboard's current absolute page paths, APIs, assets, and Socket.IO routes. That keeps the app working now while still making `/server` the public entrypoint for Android bridge URLs and future deployment links.
+
+## Troubleshooting
+
+If the checker shows a redirect like:
+
+```text
+redirect to https://device.atebd.com/wp-signup.php?new=device.atebd.com
+```
+
+then `device.atebd.com` is still landing on a WordPress catch-all instead of this IoT Nginx site. Fix DNS/hosting so `device.atebd.com` points to the VPS running this config, then run:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+npm --prefix /opt/iot/server run check -- --url https://device.atebd.com/server
+npm --prefix /opt/iot/server run diagnose
+```

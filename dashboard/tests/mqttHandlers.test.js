@@ -519,6 +519,8 @@ describe('MQTTHandlers SMS storage', () => {
                 null,
                 null,
                 null,
+                null,
+                null,
                 null
             ]
         );
@@ -593,6 +595,51 @@ describe('MQTTHandlers SMS storage', () => {
         );
     });
 
+    test('treats ESP32 pull detail as sync and suppresses unread notification side effects', async () => {
+        const smsCache = require('../services/smsCache');
+        const notificationService = require('../services/notificationService');
+        const pushNotificationService = require('../services/pushNotificationService');
+        const { mqttService, db, room } = buildSmsSubject();
+        smsCache.increment.mockClear();
+        notificationService.notifySms.mockClear();
+        pushNotificationService.notifyLinkedDevices.mockClear();
+
+        mqttService.emit('sms:incoming', 'test-device-1', {
+            type: 'sms_incoming',
+            detail: 'incoming_sms_pull',
+            storage_id: 77,
+            from: '+8801555000777',
+            text: 'pulled from sim',
+            timestamp: '2026-05-08T09:00:00.000Z'
+        });
+
+        await flushAsync();
+
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT OR IGNORE INTO sms'),
+            expect.arrayContaining([
+                '2026-05-08T09:00:00.000Z',
+                1,
+                'android-mqtt-sync',
+                null,
+                null,
+                null,
+                77
+            ])
+        );
+        expect(smsCache.increment).not.toHaveBeenCalled();
+        expect(notificationService.notifySms).not.toHaveBeenCalled();
+        expect(pushNotificationService.notifyLinkedDevices).not.toHaveBeenCalled();
+        expect(room.emit).toHaveBeenCalledWith(
+            'sms:received',
+            expect.objectContaining({
+                sync: true,
+                read: 1,
+                firmware_storage_id: 77
+            })
+        );
+    });
+
     test('stores multipart metadata for incoming Android MQTT SMS', async () => {
         const { mqttService, db, room } = buildSmsSubject();
 
@@ -621,6 +668,8 @@ describe('MQTTHandlers SMS storage', () => {
                 0,
                 'android-mqtt',
                 0,
+                null,
+                null,
                 null,
                 '44',
                 2,

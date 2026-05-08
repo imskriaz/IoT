@@ -8,6 +8,8 @@
     "dev":       "cd dashboard && npx nodemon server.js",
     "test":      "cd dashboard && npm test",
     "server": "node server/share-tunnel.js",
+    "server:check": "node server/check-server.js",
+    "server:diagnose": "node server/diagnose-vps.js",
     "share:vps": "node server/share-tunnel.js",
     "android:build": "cd firmware/android && gradlew.bat :app:assembleRelease",
     "android:install": "powershell -ExecutionPolicy Bypass -File firmware/android/install-apk.ps1",

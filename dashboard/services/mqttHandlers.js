@@ -268,7 +268,13 @@ function cleanText(value) {
 }
 
 function isSyncPayload(data = {}) {
-    return data.sync === true || cleanText(data.sync).toLowerCase() === 'true';
+    const detail = cleanText(data.detail).toLowerCase();
+    const type = cleanText(data.type).toLowerCase();
+    return data.sync === true ||
+        cleanText(data.sync).toLowerCase() === 'true' ||
+        detail === 'incoming_sms_pull' ||
+        type === 'sms_sync' ||
+        type === 'sms_sync_message';
 }
 
 function boolFromPayload(value, fallback = false) {
@@ -1476,7 +1482,7 @@ class MQTTHandlers {
                     const decodedTo = decodeUcs2Hex(toNumber);
                     const simScope = extractSimScope(data);
                     const syncPayload = isSyncPayload(data);
-                    const read = isOutgoing ? 1 : (boolFromPayload(data.read ?? data.is_read, false) ? 1 : 0);
+                    const read = isOutgoing ? 1 : (boolFromPayload(data.read ?? data.is_read, syncPayload) ? 1 : 0);
                     const externalId = smsExternalId(data);
                     const multipart = normalizeMultipartMetadata(data, {
                         deviceId,
@@ -1518,7 +1524,7 @@ class MQTTHandlers {
                     const inserted = Number(result?.changes || 0) > 0;
                     if (!inserted) {
                         logger.info(`Duplicate incoming SMS ignored from ${decodedFrom}`);
-                        if (!isOutgoing && !data.sync) {
+                        if (!isOutgoing && !syncPayload) {
                             await this.reconcileOutgoingSmsFromIncoming(deviceId, {
                                 from: decodedFrom,
                                 message: decodedMessage,
@@ -1574,7 +1580,7 @@ class MQTTHandlers {
                         timestamp: storageTimestamp
                     });
 
-                    if (!isOutgoing && !data.sync) {
+                    if (!isOutgoing && !syncPayload) {
                         await this.reconcileOutgoingSmsFromIncoming(deviceId, {
                             from: decodedFrom,
                             message: decodedMessage,

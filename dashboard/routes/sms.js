@@ -316,6 +316,124 @@ function getSmsThreadKey(number) {
     return String(lookup.last10 || lookup.digits || raw).toLowerCase();
 }
 
+function normalizeSmsSyncTimestamp(entry = {}) {
+    const raw = entry.timestamp ?? entry.timestamp_ms ?? entry.timestampMs;
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+        const millis = raw > 100000000000 ? raw : (raw > 1000000000 ? raw * 1000 : NaN);
+        if (Number.isFinite(millis)) {
+            const parsed = new Date(millis);
+            if (Number.isFinite(parsed.getTime()) && parsed.getFullYear() >= 2020) {
+                return parsed.toISOString();
+            }
+        }
+    }
+
+    const text = String(raw || '').trim();
+    if (text) {
+        const parsed = new Date(text);
+        if (Number.isFinite(parsed.getTime()) && parsed.getFullYear() >= 2020) {
+            return parsed.toISOString();
+        }
+    }
+
+    return new Date().toISOString();
+}
+
+function getSmsSyncPayloadEntries(response = {}) {
+    let payload = response?.payload || null;
+    if (typeof payload === 'string' && payload.trim()) {
+        try {
+            payload = JSON.parse(payload);
+        } catch (_) {
+            payload = null;
+        }
+    }
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.entries)) {
+        return [];
+    }
+    return payload.entries;
+}
+
+async function importDeviceSmsSyncEntries(db, deviceId, entries = []) {
+    if (!db || !deviceId || !Array.isArray(entries) || entries.length === 0) {
+        return { imported: 0, skipped: 0, total: 0 };
+    }
+
+    let imported = 0;
+    let skipped = 0;
+
+    for (const entry of entries) {
+        const message = String(entry?.message ?? entry?.text ?? '').trim();
+        if (!message) {
+            skipped++;
+            continue;
+        }
+
+        const outgoing = entry?.outgoing === true || String(entry?.direction || '').trim().toLowerCase() === 'outgoing';
+        const peerNumber = String(entry?.from ?? entry?.from_number ?? entry?.number ?? '').trim();
+        const fromNumber = outgoing ? 'self' : (peerNumber || 'unknown');
+        const toNumber = outgoing ? (peerNumber || null) : (String(entry?.to ?? entry?.to_number ?? '').trim() || null);
+        const timestamp = normalizeSmsSyncTimestamp(entry);
+        const firmwareStorageId = normalizeFirmwareSmsStorageId(entry?.storage_id ?? entry?.sms_storage_id ?? entry?.firmware_storage_id);
+        const modemStorageIndex = normalizeSmsStorageIndex(entry?.storage_index ?? entry?.sms_storage_index ?? entry?.modem_storage_index ?? entry?.index);
+        const externalId = firmwareStorageId !== null
+            ? `esp32-sms:${firmwareStorageId}`
+            : (String(entry?.external_id ?? entry?.externalId ?? entry?.message_id ?? entry?.messageId ?? '').trim() || null);
+
+        if (firmwareStorageId !== null) {
+            const existing = await db.get(
+                `SELECT id FROM sms WHERE device_id = ? AND firmware_storage_id = ? LIMIT 1`,
+                [deviceId, firmwareStorageId]
+            );
+            if (existing?.id) {
+                skipped++;
+                continue;
+            }
+        }
+
+        const result = await db.run(
+            `INSERT OR IGNORE INTO sms
+                (device_id, from_number, to_number, message, timestamp, read, type, status, source, external_id,
+                 modem_storage_index, firmware_storage_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                deviceId,
+                fromNumber,
+                toNumber,
+                message,
+                timestamp,
+                1,
+                outgoing ? 'outgoing' : 'incoming',
+                outgoing ? 'sent' : 'received',
+                'esp32-flash-sync',
+                externalId,
+                modemStorageIndex,
+                firmwareStorageId
+            ]
+        );
+
+        if (Number(result?.changes || 0) > 0) {
+            imported++;
+            await attachSmsToConversation(db, {
+                id: result.lastID,
+                device_id: deviceId,
+                from_number: fromNumber,
+                to_number: toNumber,
+                type: outgoing ? 'outgoing' : 'incoming'
+            });
+        } else {
+            skipped++;
+        }
+    }
+
+    if (imported > 0) {
+        smsCache.set(null, deviceId);
+        await refreshSmsConversationsForDevice(db, deviceId);
+    }
+
+    return { imported, skipped, total: entries.length };
+}
+
 function toTimestampMs(value) {
     const parsed = value ? new Date(value).getTime() : 0;
     return Number.isFinite(parsed) ? parsed : 0;
@@ -876,16 +994,34 @@ router.post('/sync', async (req, res) => {
             { source: 'dashboard' }
         );
 
-        const synced = Number(response?.payload?.synced ?? response?.payload?.count ?? 0);
+        const db = req.app.locals.db;
+        const syncEntries = getSmsSyncPayloadEntries(response);
+        const importResult = await importDeviceSmsSyncEntries(db, deviceId, syncEntries);
+        const deviceSynced = Number(response?.payload?.synced ?? 0);
+        const synced = Number.isFinite(deviceSynced) && deviceSynced > 0
+            ? deviceSynced
+            : importResult.imported;
+        const payloadCount = Number(response?.payload?.count ?? 0);
+        const total = syncEntries.length || (Number.isFinite(payloadCount) ? payloadCount : 0) || synced || 0;
         emitDeviceEvent(deviceId, 'sms:sync-completed', {
             deviceId,
             device_id: deviceId,
-            total: Number(response?.payload?.count ?? synced ?? 0) || 0,
+            total,
             synced: Number.isFinite(synced) ? synced : 0,
+            imported: importResult.imported,
+            skipped: importResult.skipped,
             requested: true,
             timestamp: new Date().toISOString()
         });
-        res.json({ success: true, message: 'Message pull requested' });
+        res.json({
+            success: true,
+            message: importResult.imported > 0
+                ? `Message pull completed. ${importResult.imported} stored.`
+                : 'Message pull requested',
+            imported: importResult.imported,
+            skipped: importResult.skipped,
+            total
+        });
     } catch (error) {
         logger.error('POST /api/sms/sync error:', error);
         if (deviceId) {
