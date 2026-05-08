@@ -709,6 +709,7 @@ describe('POST /api/settings/clear-device-data', () => {
         expect(sql).toContain('DELETE FROM devices;');
         expect(sql).toContain('DELETE FROM device_profiles;');
         expect(sql).toContain('DELETE FROM unregistered_devices;');
+        expect(sql).toContain('DELETE FROM api_keys;');
         expect(global.modemService.resetDevices).toHaveBeenCalled();
         expect(global.mqttService.clearAllDevices).toHaveBeenCalled();
         expect(app.locals.mqttHandlers.deletedDevices.size).toBe(0);
@@ -725,6 +726,69 @@ describe('POST /api/settings/clear-device-data', () => {
 
         expect(res.status).toBe(403);
         expect(res.body.success).toBe(false);
+    });
+});
+
+describe('POST /api/settings/fresh-reset', () => {
+    afterEach(() => {
+        delete global.modemService;
+        delete global.mqttService;
+    });
+
+    test('rejects admin users because full dashboard reset is superadmin only', async () => {
+        const db = makeDbMock();
+        const router = require('../routes/settings');
+        const app = buildApp(router, '/api/settings', { id: 2, role: 'admin', username: 'manager' }, db);
+
+        const res = await request(app).post('/api/settings/fresh-reset');
+
+        expect(res.status).toBe(403);
+        expect(res.body.success).toBe(false);
+        expect(db.exec).not.toHaveBeenCalled();
+    });
+
+    test('clears every dashboard table except the current superadmin user', async () => {
+        global.modemService = {
+            resetDevices: jest.fn()
+        };
+        global.mqttService = {
+            clearAllDevices: jest.fn()
+        };
+
+        const db = makeDbMock({
+            all: jest.fn().mockResolvedValue([
+                { name: 'devices' },
+                { name: 'api_keys' },
+                { name: 'sms' },
+                { name: 'login_sessions' }
+            ]),
+            exec: jest.fn().mockResolvedValue(undefined),
+            run: jest.fn().mockResolvedValue({ changes: 1 })
+        });
+
+        const router = require('../routes/settings');
+        const app = buildApp(router, '/api/settings', { id: 7, role: 'superadmin', username: 'root' }, db);
+        app.locals.mqttHandlers = {
+            deletedDevices: new Set(['device-1']),
+            _registeredDeviceCache: new Map([['device-1', { registered: true }]]),
+            _gpsDebounce: new Map([['device-1', setTimeout(() => {}, 1000)]])
+        };
+
+        const res = await request(app).post('/api/settings/fresh-reset');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(db.exec).toHaveBeenCalledWith(expect.stringContaining('PRAGMA foreign_keys = OFF'));
+        expect(db.exec).toHaveBeenCalledWith('DELETE FROM "devices";');
+        expect(db.exec).toHaveBeenCalledWith('DELETE FROM "api_keys";');
+        expect(db.exec).toHaveBeenCalledWith('DELETE FROM "sms";');
+        expect(db.run).toHaveBeenCalledWith('DELETE FROM users WHERE id <> ?', [7]);
+        expect(db.run).toHaveBeenCalledWith(expect.stringContaining('SET role ='), [7]);
+        expect(global.modemService.resetDevices).toHaveBeenCalled();
+        expect(global.mqttService.clearAllDevices).toHaveBeenCalled();
+        expect(app.locals.mqttHandlers.deletedDevices.size).toBe(0);
+        expect(app.locals.mqttHandlers._registeredDeviceCache.size).toBe(0);
+        expect(app.locals.mqttHandlers._gpsDebounce.size).toBe(0);
     });
 });
 
@@ -3159,6 +3223,97 @@ describe('DELETE /api/devices/:id', () => {
         expect(res.status).toBe(200);
         expect(db.run).toHaveBeenCalledWith('DELETE FROM sms_conversations WHERE device_id = ?', ['device-1']);
     });
+
+    test('removes deleted devices from API key scopes', async () => {
+        const db = makeDbMock({
+            all: jest.fn((sql) => {
+                if (String(sql).includes('FROM api_keys')) {
+                    return Promise.resolve([
+                        { id: 11, device_ids: '["device-1"]' },
+                        { id: 12, device_ids: '["device-1","device-2"]' }
+                    ]);
+                }
+                return Promise.resolve([]);
+            }),
+            run: jest.fn((sql) => {
+                if (sql === 'BEGIN' || sql === 'COMMIT') {
+                    return Promise.resolve({ lastID: 0, changes: 0 });
+                }
+                if (sql.includes('DELETE FROM devices WHERE id = ?')) {
+                    return Promise.resolve({ lastID: 0, changes: 1 });
+                }
+                return Promise.resolve({ lastID: 0, changes: 1 });
+            })
+        });
+        const router = require('../routes/devices');
+        const app = buildApp(router, '/api/devices', { id: 1, role: 'admin', username: 'admin' }, db);
+        app.locals.mqttHandlers = {
+            suppressDeletedDevice: jest.fn().mockResolvedValue(undefined),
+            unsuppressDeletedDevice: jest.fn().mockResolvedValue(undefined),
+            releaseDeviceRuntime: jest.fn().mockResolvedValue(undefined)
+        };
+
+        const res = await request(app).delete('/api/devices/device-1');
+
+        expect(res.status).toBe(200);
+        expect(db.run).toHaveBeenCalledWith('DELETE FROM api_keys WHERE id = ?', [11]);
+        expect(db.run).toHaveBeenCalledWith(
+            'UPDATE api_keys SET device_ids = ? WHERE id = ?',
+            [JSON.stringify(['device-2']), 12]
+        );
+    });
+});
+
+describe('GET /api/devices/:id/provisioning-qr', () => {
+    test('prunes previous Android recovery keys before creating a new setup token key', async () => {
+        const db = makeDbMock({
+            get: jest.fn((sql) => {
+                if (String(sql).includes('FROM devices d')) {
+                    return Promise.resolve({
+                        id: 'android-bridge-01',
+                        name: 'Bridge 01',
+                        type: 'android',
+                        status: 'offline',
+                        mqtt_host: 'mqtt://broker.local:1883',
+                        mqtt_user: 'device',
+                        mqtt_pass: 'secret'
+                    });
+                }
+                return Promise.resolve(null);
+            }),
+            run: jest.fn().mockResolvedValue({ lastID: 0, changes: 1 })
+        });
+        const router = require('../routes/devices');
+        const app = buildApp(router, '/api/devices', { id: 1, role: 'admin', username: 'admin' }, db);
+
+        const res = await request(app).get('/api/devices/android-bridge-01/provisioning-qr');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.summary.api_key_name).toBe('Android Bridge 01 recovery');
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('DELETE FROM api_keys'),
+            expect.arrayContaining([
+                1,
+                JSON.stringify(['android-bridge-01']),
+                'write',
+                120,
+                'Android Bridge 01 recovery'
+            ])
+        );
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO api_keys'),
+            expect.arrayContaining([
+                1,
+                'Android Bridge 01 recovery',
+                expect.any(String),
+                expect.any(String),
+                'write',
+                JSON.stringify(['android-bridge-01']),
+                120
+            ])
+        );
+    });
 });
 
 describe('Unregistered device routes', () => {
@@ -3212,6 +3367,42 @@ describe('Unregistered device routes', () => {
         });
         expect(db.run).toHaveBeenCalledWith('DELETE FROM unregistered_device_events WHERE device_id = ?', ['ghost-1']);
         expect(db.run).toHaveBeenCalledWith('DELETE FROM unregistered_devices WHERE device_id = ?', ['ghost-1']);
+    });
+
+    test('assigns esp-prefixed A7670 devices as esp32 even when stale payload says android', async () => {
+        const db = makeDbMock({
+            get: jest.fn((sql) => {
+                if (String(sql).includes('FROM unregistered_devices')) {
+                    return Promise.resolve({
+                        device_id: 'esp-a7670e-476178',
+                        last_payload: JSON.stringify({
+                            platform: 'android',
+                            name: 'ESP32 A7670E',
+                            model: 'esp32-s3-a7670e'
+                        })
+                    });
+                }
+                return Promise.resolve(null);
+            }),
+            run: jest.fn().mockResolvedValue({ lastID: 0, changes: 1 })
+        });
+        const router = require('../routes/devices');
+        const app = buildApp(router, '/api/devices', { id: 1, role: 'admin', username: 'admin' }, db);
+
+        const res = await request(app)
+            .post('/api/devices/unregistered/esp-a7670e-476178/assign')
+            .send({ name: 'esp-a7670e-476178' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.device).toEqual(expect.objectContaining({
+            id: 'esp-a7670e-476178',
+            type: 'esp32'
+        }));
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO devices'),
+            expect.arrayContaining(['esp-a7670e-476178', 'esp-a7670e-476178', 'esp32'])
+        );
     });
 });
 

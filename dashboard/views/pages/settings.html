@@ -1,4 +1,5 @@
 <% const canEditSystem = user && (user.role === 'admin' || user.role === 'superadmin'); %>
+<% const canFreshReset = user && user.role === 'superadmin'; %>
 
 <div class="system-settings-page">
     <div class="system-settings-shell">
@@ -252,6 +253,20 @@
                                 </tbody>
                             </table>
                         </div>
+
+                        <% if (canFreshReset) { %>
+                        <div class="maintenance-block mt-4 pt-4 border-top">
+                            <div class="maintenance-copy">
+                                <h6 class="mb-1 text-danger">Fresh Dashboard Reset</h6>
+                                <p class="small text-muted mb-0">Clear devices, API keys, queues, logs, messages, calls, settings, backups, and non-superadmin users. The current superadmin account is kept.</p>
+                            </div>
+                            <div class="d-flex flex-wrap gap-2 align-items-start">
+                                <button class="btn btn-danger" type="button" onclick="freshResetDashboard(this)">
+                                    <i class="bi bi-exclamation-triangle me-2"></i>Reset Dashboard
+                                </button>
+                            </div>
+                        </div>
+                        <% } %>
                     </div>
                 </section>
             </div>

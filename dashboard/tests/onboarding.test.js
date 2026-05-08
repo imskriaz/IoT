@@ -370,6 +370,16 @@ describe('onboarding routes', () => {
         });
         expect(res.body.provisioning).not.toHaveProperty('payload');
         expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('DELETE FROM api_keys'),
+            expect.arrayContaining([
+                1,
+                JSON.stringify(['android-http-01']),
+                'write',
+                120,
+                'Android HTTP'
+            ])
+        );
+        expect(db.run).toHaveBeenCalledWith(
             expect.stringContaining('INSERT INTO api_keys'),
             expect.arrayContaining([
                 1,

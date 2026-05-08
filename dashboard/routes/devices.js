@@ -2,7 +2,6 @@
 const express = require('express');
 const router = express.Router();
 const http = require('http');
-const crypto = require('crypto');
 const QRCode = require('qrcode');
 const { body, validationResult } = require('express-validator');
 const logger = require('../utils/logger');
@@ -19,6 +18,7 @@ const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
 const { hydrateDeviceStatusFromCache } = require('../utils/deviceStatusCache');
 const { getDeviceModuleHealth } = require('../utils/moduleHealth');
 const { encodeProvisioningToken } = require('../utils/provisioningToken');
+const { createDeviceProvisioningApiKey } = require('../utils/apiKeyProvisioning');
 const packageService = require('../services/packageService');
 const paymentGatewayService = require('../services/paymentGatewayService');
 const hostHotspotService = require('../services/hostHotspotService');
@@ -121,6 +121,53 @@ function inferDeviceListType(row = {}, live = {}, caps = {}) {
     return row.type || '';
 }
 
+function resolveUnregisteredAssignmentType(deviceId, body = {}, identity = {}) {
+    const explicitType = normalizeDeviceTypeToken(body.type);
+    if (explicitType) {
+        return explicitType;
+    }
+
+    const tokens = [
+        deviceId,
+        body.name,
+        body.board,
+        identity.device_id,
+        identity.id,
+        identity.name,
+        identity.type,
+        identity.bridge_type,
+        identity.bridge,
+        identity.model,
+        identity.board,
+        identity.platform,
+        identity.app,
+        identity.active_path,
+        identity.activePath,
+        identity.wifi_ssid,
+        identity.modem_operator,
+        identity.modem_network_type
+    ].map(normalizeDeviceTypeToken).filter(Boolean);
+
+    if (tokens.some(token =>
+        token.startsWith('esp-') ||
+        token.includes('esp32') ||
+        token.includes('a7670') ||
+        token === 'firmware'
+    )) {
+        return 'esp32';
+    }
+
+    if (tokens.some(token =>
+        token.startsWith('android-') ||
+        token.includes('android') ||
+        (token.includes('http') && token.includes('sms'))
+    )) {
+        return 'android';
+    }
+
+    return 'android';
+}
+
 function sortDeviceList(devices, activeDeviceId = '') {
     const activeId = String(activeDeviceId || '').trim();
 
@@ -161,14 +208,6 @@ function classifyDeviceLane(device = {}) {
     const type = String(device.type || device.board || device.id || '').trim().toLowerCase();
     if (type.includes('android') || (type.includes('http') && type.includes('sms'))) return 'android';
     return 'esp32';
-}
-
-function generateApiKey() {
-    return `edk_${crypto.randomBytes(32).toString('hex')}`;
-}
-
-function hashApiKey(key) {
-    return crypto.createHash('sha256').update(key).digest('hex');
 }
 
 function requireAdmin(req, res) {
@@ -451,6 +490,41 @@ async function cleanupDeviceAssociations(db, deviceId) {
         } catch (error) {
             logger.debug(`Cleanup skipped for ${deviceId}: ${error.message}`);
         }
+    }
+
+    try {
+        const apiKeys = await db.all(
+            `SELECT id, device_ids FROM api_keys
+             WHERE device_ids IS NOT NULL AND TRIM(device_ids) <> ''`
+        );
+        for (const apiKey of apiKeys) {
+            let scopedDevices = [];
+            try {
+                const parsed = JSON.parse(apiKey.device_ids);
+                scopedDevices = Array.isArray(parsed) ? parsed.map(value => String(value || '').trim()).filter(Boolean) : [];
+            } catch (_) {
+                scopedDevices = String(apiKey.device_ids || '')
+                    .split(',')
+                    .map(value => value.trim())
+                    .filter(Boolean);
+            }
+
+            if (!scopedDevices.includes(deviceId)) {
+                continue;
+            }
+
+            const remainingDevices = scopedDevices.filter(id => id !== deviceId);
+            if (remainingDevices.length) {
+                await db.run(
+                    `UPDATE api_keys SET device_ids = ? WHERE id = ?`,
+                    [JSON.stringify(remainingDevices), apiKey.id]
+                );
+            } else {
+                await db.run(`DELETE FROM api_keys WHERE id = ?`, [apiKey.id]);
+            }
+        }
+    } catch (error) {
+        logger.debug(`API key cleanup skipped for ${deviceId}: ${error.message}`);
     }
 }
 
@@ -1359,13 +1433,11 @@ router.post('/unregistered/:deviceId/assign', [
             }
         }
 
-        const type = String(
-            req.body.type ||
-            identity.platform ||
-            identity.board ||
-            identity.bridge ||
-            'android'
-        ).trim().toLowerCase() || 'android';
+        const type = resolveUnregisteredAssignmentType(deviceId, req.body, identity);
+        const prefixError = validateDeviceIdPrefix(deviceId, { type });
+        if (prefixError) {
+            return res.status(400).json({ success: false, message: prefixError });
+        }
 
         const device = await registerDevice(db, {
             id: deviceId,
@@ -2765,14 +2837,15 @@ router.get('/:id/provisioning-qr', requireDeviceAccess('id'), async (req, res) =
             let apiKeyName = '';
             const userId = req.session?.user?.id || req.user?.id;
             if (userId) {
-                apiKey = generateApiKey();
-                const keyPrefix = apiKey.substring(0, 12);
                 apiKeyName = `Android ${device.name || device.id} recovery`;
-                await db.run(
-                    `INSERT INTO api_keys (user_id, name, key_hash, key_prefix, scopes, device_ids, expires_at, rate_limit_rpm)
-                     VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
-                    [userId, apiKeyName, hashApiKey(apiKey), keyPrefix, 'write', JSON.stringify([device.id]), 120]
-                );
+                const provisionedKey = await createDeviceProvisioningApiKey(db, {
+                    userId,
+                    name: apiKeyName,
+                    deviceId: device.id,
+                    scopes: 'write',
+                    rateLimitRpm: 120
+                });
+                apiKey = provisionedKey.key;
             }
             const payload = buildAndroidRecoveryProvisioning(req, device, apiKey);
             const token = encodeProvisioningToken(payload);

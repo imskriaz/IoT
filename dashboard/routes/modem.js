@@ -681,7 +681,8 @@ function getLatestDeviceStatusSnapshot(deviceId) {
             liveStatus.lastSeen ||
             liveStatus.wifi?.connected === true ||
             liveStatus.mqtt?.connected === true ||
-            String(liveStatus.activePath || '').trim() !== ''
+            liveStatus.mqtt_connected === true ||
+            String(liveStatus.activePath || liveStatus.active_path || '').trim() !== ''
         )
     ) {
         return liveStatus;

@@ -1523,6 +1523,81 @@ describe('modem route MQTT event flows', () => {
         );
     });
 
+    test('wifi retry uses device last-known credentials when dashboard has no saved password', async () => {
+        jest.resetModules();
+
+        const mqttService = new EventEmitter();
+        mqttService.connected = true;
+        mqttService.publishCommand = jest.fn().mockImplementation(async (deviceId, command) => {
+            if (command === 'wifi-reconnect') {
+                setImmediate(() => {
+                    mqttService.emit('status', deviceId, {
+                        active_path: 'wifi',
+                        wifi_connected: true,
+                        wifi_ssid: 'GAP-RIAZ',
+                        mqtt_connected: true
+                    });
+                });
+            }
+
+            return { success: true, command };
+        });
+
+        global.mqttService = mqttService;
+        global.modemService = {
+            getDeviceStatus: jest.fn(() => ({
+                active_path: 'modem',
+                wifi_connected: false,
+                wifi_ssid: 'GAP-RIAZ',
+                mqtt_connected: true
+            }))
+        };
+
+        const router = require('../routes/modem');
+        const app = buildApp(router);
+        app.locals.db = {
+            get: jest.fn()
+                .mockResolvedValueOnce({
+                    wifi_ssid: '',
+                    wifi_pass: ''
+                })
+                .mockResolvedValueOnce(null)
+                .mockResolvedValueOnce(null),
+            run: jest.fn().mockResolvedValue({ changes: 1 })
+        };
+
+        const res = await request(app)
+            .post('/api/modem/wifi/client/retry')
+            .send({ deviceId: 'device-retry-live', ssid: 'GAP-RIAZ' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.data).toEqual(expect.objectContaining({
+            selectedSsid: 'GAP-RIAZ',
+            selectedPasswordSet: true,
+            desiredSsid: 'GAP-RIAZ',
+            desiredPasswordSet: true,
+            observedWifiConnected: true
+        }));
+        expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
+            1,
+            'device-retry-live',
+            'wifi-reconnect',
+            {},
+            false,
+            10000,
+            expect.objectContaining({
+                source: 'dashboard-modem',
+                skipPersistentQueue: true,
+                domain: 'network'
+            })
+        );
+        expect(app.locals.db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO device_wifi_networks'),
+            expect.not.arrayContaining([''])
+        );
+    });
+
     test('wifi connect stores the chosen network and switches over MQTT', async () => {
         jest.resetModules();
 

@@ -7,7 +7,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const { execFile } = require('child_process');
 const os = require('os');
-const { admin: adminMiddleware } = require('../middleware/auth');
+const { admin: adminMiddleware, requireRole, withEffectiveRole } = require('../middleware/auth');
 const { DEFAULT_DEVICE_ID } = require('../config/device');
 const {
     getEffectiveSystemSettings,
@@ -157,6 +157,103 @@ function buildManagedSystemEnvUpdates(savedSystem = {}, effective = {}) {
         updates[envName] = field.format(savedSystem[field.key]);
         return updates;
     }, {});
+}
+
+function resetDashboardRuntimeState(req) {
+    try { global.modemService?.resetDevices?.(); } catch (_) {}
+    try { global.mqttService?.clearAllDevices?.(); } catch (_) {}
+    try {
+        const handlers = req.app.locals.mqttHandlers;
+        if (handlers) {
+            handlers.deletedDevices = new Set();
+            handlers._registeredDeviceCache?.clear?.();
+            handlers._gpsDebounce?.forEach?.((timer) => clearTimeout(timer));
+            handlers._gpsDebounce?.clear?.();
+        }
+    } catch (_) {}
+
+    if (req.session) {
+        req.session.deviceId = '';
+    }
+}
+
+function clearManagedDashboardDirectory(relativePath) {
+    const root = path.resolve(__dirname, '..');
+    const target = path.resolve(root, relativePath);
+    if (!target.startsWith(root + path.sep) || !fs.existsSync(target)) {
+        return 0;
+    }
+
+    let cleared = 0;
+    for (const entry of fs.readdirSync(target)) {
+        const entryPath = path.resolve(target, entry);
+        if (!entryPath.startsWith(target + path.sep)) {
+            continue;
+        }
+        fs.rmSync(entryPath, { recursive: true, force: true });
+        cleared += 1;
+    }
+    return cleared;
+}
+
+function clearManagedDashboardFiles() {
+    if (process.env.NODE_ENV === 'test') {
+        return {};
+    }
+
+    const cleared = {
+        backups: clearManagedDashboardDirectory('backups'),
+        storage: clearManagedDashboardDirectory('storage'),
+        uploads: clearManagedDashboardDirectory(path.join('public', 'uploads')),
+        temp: clearManagedDashboardDirectory('temp')
+    };
+
+    try { clearAllDashboardLogs(null); } catch (_) {}
+    return cleared;
+}
+
+async function resetDashboardToFreshState(db, userId) {
+    const currentUserId = Number.parseInt(userId, 10);
+    if (!Number.isInteger(currentUserId) || currentUserId <= 0) {
+        throw new Error('Active superadmin user is required');
+    }
+
+    const rows = await db.all(`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name NOT LIKE 'sqlite_%'
+          AND name <> 'users'
+    `);
+    const tableNames = rows
+        .map(row => String(row.name || '').trim())
+        .filter(Boolean);
+
+    await db.exec('PRAGMA foreign_keys = OFF;');
+    try {
+        for (const tableName of tableNames) {
+            await db.exec(`DELETE FROM "${tableName.replace(/"/g, '""')}";`);
+        }
+        await db.run('DELETE FROM users WHERE id <> ?', [currentUserId]);
+        await db.run(
+            `UPDATE users
+             SET role = 'superadmin',
+                 is_active = 1,
+                 preferences = NULL,
+                 last_login = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+            [currentUserId]
+        );
+
+        const resetSequences = tableNames.concat('users')
+            .map(name => `'${String(name).replace(/'/g, "''")}'`)
+            .join(',');
+        if (resetSequences) {
+            await db.exec(`DELETE FROM sqlite_sequence WHERE name IN (${resetSequences});`);
+        }
+    } finally {
+        await db.exec('PRAGMA foreign_keys = ON;');
+    }
 }
 
 // Get all settings (cleaned - only system-level settings)
@@ -1380,6 +1477,7 @@ router.post('/factory-reset', adminMiddleware, async (req, res) => {
             DELETE FROM automation_logs;
             DELETE FROM automation_data_records;
             DELETE FROM flow_execution_log;
+            DELETE FROM api_keys;
             DELETE FROM login_audit;
             DELETE FROM login_sessions;
             DELETE FROM backups;
@@ -1441,6 +1539,7 @@ router.post('/clear-device-data', adminMiddleware, async (req, res) => {
             DELETE FROM device_push_tokens;
             DELETE FROM device_group_members;
             DELETE FROM device_users;
+            DELETE FROM api_keys;
             DELETE FROM phone_device_links;
             DELETE FROM unregistered_device_events;
             DELETE FROM unregistered_devices;
@@ -1448,21 +1547,7 @@ router.post('/clear-device-data', adminMiddleware, async (req, res) => {
             DELETE FROM devices;
         `);
 
-        try { global.modemService?.resetDevices?.(); } catch (_) {}
-        try { global.mqttService?.clearAllDevices?.(); } catch (_) {}
-        try {
-            const handlers = req.app.locals.mqttHandlers;
-            if (handlers) {
-                handlers.deletedDevices = new Set();
-                handlers._registeredDeviceCache?.clear?.();
-                handlers._gpsDebounce?.forEach?.((timer) => clearTimeout(timer));
-                handlers._gpsDebounce?.clear?.();
-            }
-        } catch (_) {}
-
-        if (req.session) {
-            req.session.deviceId = '';
-        }
+        resetDashboardRuntimeState(req);
 
         logger.info('Device registry and device-linked data cleared');
 
@@ -1475,6 +1560,40 @@ router.post('/clear-device-data', adminMiddleware, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to clear device data'
+        });
+    }
+});
+
+// Full dashboard reset for superadmins. Keeps only the signed-in superadmin
+// account so the dashboard can come back up without a new bootstrap step.
+router.post('/fresh-reset', requireRole('superadmin'), async (req, res) => {
+    try {
+        const db = req.app.locals.db;
+        if (!db) {
+            throw new Error('Database not available');
+        }
+
+        const user = withEffectiveRole(req.user || req.session.user);
+        await resetDashboardToFreshState(db, user.id);
+        const clearedFiles = clearManagedDashboardFiles();
+        resetDashboardRuntimeState(req);
+
+        logger.warn(`Fresh dashboard reset completed by superadmin ${user.username || user.id}`);
+
+        res.json({
+            success: true,
+            message: 'Dashboard reset complete. Only the current superadmin account was kept.',
+            data: {
+                keptUserId: user.id,
+                clearedFiles,
+                restartPath: '/settings'
+            }
+        });
+    } catch (error) {
+        logger.error('Fresh dashboard reset error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to reset dashboard'
         });
     }
 });

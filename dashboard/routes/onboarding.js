@@ -4,12 +4,12 @@ const express = require('express');
 const router = express.Router();
 const { body, param, validationResult } = require('express-validator');
 const http = require('http');
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const QRCode = require('qrcode');
 const logger = require('../utils/logger');
 const { encodeProvisioningToken } = require('../utils/provisioningToken');
+const { createDeviceProvisioningApiKey } = require('../utils/apiKeyProvisioning');
 const { setupApIp, setupApLabel, setupApExampleLabel, bleNamePrefixes } = require('../config/onboarding');
 const { getWifiDisconnectReasonText } = require('../utils/wifiDisconnectReason');
 const { validateDeviceIdPrefix } = require('../utils/deviceIdPolicy');
@@ -54,14 +54,6 @@ function normalizePublicBaseUrl(req) {
     if (configured) return configured;
     const protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
     return normalizeServerUrl(`${protocol}://${req.get('host')}`);
-}
-
-function generateApiKey() {
-    return `edk_${crypto.randomBytes(32).toString('hex')}`;
-}
-
-function hashApiKey(key) {
-    return crypto.createHash('sha256').update(key).digest('hex');
 }
 
 function selectedMqttHost() {
@@ -126,13 +118,14 @@ async function buildAndroidProvisioning(req, db, userId, body) {
 
     if (userId) {
         apiKeyName = clean(body.name || body.device_id || 'Android Bridge');
-        apiKey = generateApiKey();
-        const keyPrefix = apiKey.substring(0, 12);
-        await db.run(
-            `INSERT INTO api_keys (user_id, name, key_hash, key_prefix, scopes, device_ids, expires_at, rate_limit_rpm)
-             VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
-            [userId, apiKeyName, hashApiKey(apiKey), keyPrefix, 'write', JSON.stringify([clean(body.device_id)]), 120]
-        );
+        const provisionedKey = await createDeviceProvisioningApiKey(db, {
+            userId,
+            name: apiKeyName,
+            deviceId: clean(body.device_id),
+            scopes: 'write',
+            rateLimitRpm: 120
+        });
+        apiKey = provisionedKey.key;
     }
 
     const payload = {

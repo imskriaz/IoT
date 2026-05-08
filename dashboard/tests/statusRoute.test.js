@@ -951,4 +951,100 @@ describe('status route live refresh', () => {
             })
         }));
     });
+
+    test('module-action wifi uses the live last-known profile without dashboard password', async () => {
+        const mqttService = new EventEmitter();
+        mqttService.connected = true;
+        mqttService.isDeviceOnline = jest.fn((deviceId) => modemService.isDeviceOnline(deviceId));
+        mqttService.isDeviceBusy = jest.fn().mockReturnValue(false);
+        mqttService.getDeviceQueueState = jest.fn().mockResolvedValue({
+            summary: {
+                pending: 0,
+                active: 0,
+                failed: 0,
+                ambiguous: 0,
+                totalOpen: 0
+            },
+            recent: []
+        });
+        mqttService.publishCommand = jest.fn().mockImplementation(async (deviceId, command, payload) => {
+            if (command === 'wifi-reconnect') {
+                process.nextTick(() => {
+                    mqttService.emit('status', deviceId, {
+                        type: 'device_status',
+                        active_path: 'wifi',
+                        wifi_configured: true,
+                        wifi_started: true,
+                        wifi_connected: true,
+                        wifi_ssid: 'GAP-RIAZ',
+                        mqtt_connected: true,
+                        mqtt_subscribed: true
+                    });
+                });
+            }
+
+            return {
+                success: true,
+                deviceId,
+                command,
+                payload
+            };
+        });
+
+        mqttService.on('status', (deviceId, data) => {
+            modemService.updateDeviceStatus(deviceId, data);
+            modemService.handleHeartbeat(deviceId);
+        });
+
+        global.mqttService = mqttService;
+        global.modemService = modemService;
+        modemService.updateDeviceStatus('device-wifi-live-action', {
+            active_path: 'modem',
+            wifi_configured: true,
+            wifi_started: true,
+            wifi_connected: false,
+            wifi_ssid: 'GAP-RIAZ',
+            mqtt_connected: true,
+            mqtt_subscribed: true
+        });
+        modemService.handleHeartbeat('device-wifi-live-action');
+
+        const router = require('../routes/status');
+        const db = {
+            get: jest.fn().mockResolvedValue({
+                wifi_ssid: '',
+                wifi_pass: ''
+            }),
+            all: jest.fn().mockResolvedValue([])
+        };
+        const app = buildApp(router, { db });
+
+        const res = await request(app)
+            .post('/api/status/module-action')
+            .send({ deviceId: 'device-wifi-live-action', moduleKey: 'wifi' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.message).toMatch(/GAP-RIAZ/);
+        expect(mqttService.publishCommand).toHaveBeenNthCalledWith(
+            1,
+            'device-wifi-live-action',
+            'wifi-reconnect',
+            {},
+            false,
+            10000,
+            expect.objectContaining({
+                source: 'dashboard-status-panel',
+                domain: 'network',
+                skipPersistentQueue: true
+            })
+        );
+        expect(res.body.envelope.data).toEqual(expect.objectContaining({
+            activePath: 'wifi',
+            wifi: expect.objectContaining({
+                connected: true,
+                ssid: 'GAP-RIAZ'
+            })
+        }));
+    });
 });

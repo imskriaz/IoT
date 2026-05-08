@@ -597,6 +597,36 @@
         });
     }
 
+    async function freshResetDashboard(button) {
+        const warning = 'This clears the dashboard database and keeps only your current superadmin account.';
+        const confirmed = await (window.appConfirm?.({
+            title: 'Reset Dashboard',
+            message: `${warning} API keys, devices, queues, messages, calls, settings, logs, and backups will be removed.`,
+            confirmText: 'Reset Dashboard',
+            confirmClass: 'btn btn-danger'
+        }) ?? Promise.resolve(confirm(`${warning}\n\nContinue?`)));
+        if (!confirmed) return;
+
+        const typed = prompt('Type RESET DASHBOARD to confirm.');
+        if (typed !== 'RESET DASHBOARD') {
+            notify('Dashboard reset cancelled', 'info');
+            return;
+        }
+
+        await withButton(button, 'Resetting', async () => {
+            const payload = await fetchJson('/api/settings/fresh-reset', {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': csrfToken() }
+            });
+            notify(payload.message || 'Dashboard reset complete', 'success');
+            try {
+                localStorage.clear();
+                sessionStorage.clear();
+            } catch (_) {}
+            window.location.assign(payload.data?.restartPath || '/settings');
+        });
+    }
+
     function toggleSystemPassword(id) {
         const input = $(id);
         if (!input) return;
@@ -612,6 +642,7 @@
     window.clearLogs = clearLogs;
     window.createBackup = createBackup;
     window.deleteBackup = deleteBackup;
+    window.freshResetDashboard = freshResetDashboard;
     window.loadBackups = loadBackups;
     window.toggleSystemPassword = toggleSystemPassword;
 
