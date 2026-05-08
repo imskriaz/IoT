@@ -56,6 +56,15 @@ function normalizeSimSlot(value) {
     return numeric > 0 && numeric <= 2 ? numeric - 1 : Math.max(0, numeric);
 }
 
+function boolFromPayload(value, fallback = false) {
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0) return false;
+    const text = clean(value).toLowerCase();
+    if (['true', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return fallback;
+}
+
 function stableUuid(...parts) {
     const hash = crypto.createHash('sha1').update(parts.map((part) => clean(part)).join('|')).digest('hex');
     return [
@@ -101,7 +110,7 @@ function toHttpSmsMessage(row = {}, owner = null) {
         contact,
         content: row.message || '',
         attachments: [],
-        encrypted: false,
+        encrypted: boolFromPayload(row.encrypted, false),
         type: httpSmsType(direction),
         status: httpSmsStatus(row.status, direction),
         sim: Number.isInteger(Number(row.sim_slot)) ? `SIM${Number(row.sim_slot) + 1}` : 'DEFAULT',
@@ -384,6 +393,7 @@ async function queueHttpSmsMessage(req, payload, index = null) {
     }
 
     const deviceId = await resolveHttpSmsDevice(db, req, payload);
+    const encrypted = boolFromPayload(payload.encrypted, false);
     const queued = await queueSmsForDelivery({
         db,
         mqttService: global.mqttService,
@@ -393,7 +403,8 @@ async function queueHttpSmsMessage(req, payload, index = null) {
         simSlot: normalizeSimSlot(payload.sim),
         userId: req.user?.id || req.session?.user?.id || null,
         source: 'httpsms',
-        batchId: index === null ? null : clean(payload.request_id) || `httpsms_bulk_${Date.now()}`
+        batchId: index === null ? null : clean(payload.request_id) || `httpsms_bulk_${Date.now()}`,
+        encrypted
     });
 
     return toHttpSmsMessage({
@@ -406,6 +417,7 @@ async function queueHttpSmsMessage(req, payload, index = null) {
         status: queued.status === 'queued' ? 'pending' : queued.status,
         timestamp: new Date().toISOString(),
         sim_slot: queued.simSlot,
+        encrypted,
         request_id: index === null ? clean(payload.request_id) : `${clean(payload.request_id) || 'bulk'}:${index}`
     }, formatPhoneNumber(payload.from) || clean(payload.from) || null);
 }
@@ -455,7 +467,7 @@ router.get('/messages/outstanding', async (req, res) => {
             params.push(messageId, Number(messageId) || -1);
         }
         const row = await db.get(
-            `SELECT id, external_id, from_number, to_number, message, timestamp, status, sim_slot
+            `SELECT id, external_id, from_number, to_number, message, timestamp, status, sim_slot, encrypted
              FROM sms
              WHERE device_id = ?
                AND type = 'outgoing'
@@ -496,11 +508,12 @@ router.post('/messages/receive', async (req, res) => {
         const timestamp = normalizeTimestamp(body.timestamp);
         const simSlot = normalizeSimSlot(body.sim);
         const externalId = clean(body.id || body.message_id || body.messageId || body.request_id) || null;
+        const encrypted = boolFromPayload(body.encrypted, false);
         const result = await db.run(
             `INSERT OR IGNORE INTO sms
-                (device_id, from_number, to_number, message, type, status, timestamp, read, source, sim_slot, external_id)
-             VALUES (?, ?, ?, ?, 'incoming', 'received', ?, 0, 'httpsms', ?, ?)`,
-            [deviceId, from, to, content, timestamp, simSlot, externalId]
+                (device_id, from_number, to_number, message, type, status, timestamp, read, source, sim_slot, external_id, encrypted)
+             VALUES (?, ?, ?, ?, 'incoming', 'received', ?, 0, 'httpsms', ?, ?, ?)`,
+            [deviceId, from, to, content, timestamp, simSlot, externalId, encrypted ? 1 : 0]
         );
 
         let smsId = result?.lastID || null;
@@ -531,6 +544,7 @@ router.post('/messages/receive', async (req, res) => {
                 status: 'received',
                 source: 'httpsms',
                 sim_slot: simSlot,
+                encrypted,
                 timestamp
             });
         }
@@ -544,7 +558,8 @@ router.post('/messages/receive', async (req, res) => {
             type: 'incoming',
             status: 'received',
             timestamp,
-            sim_slot: simSlot
+            sim_slot: simSlot,
+            encrypted
         }, to));
     } catch (error) {
         if (error.unregistered) {
@@ -584,7 +599,7 @@ router.post('/messages/:messageId/events', async (req, res) => {
             [status, status, timestamp, status, reason || 'httpSMS failed', deviceId, messageId, Number(messageId) || -1]
         );
         const row = await db.get(
-            `SELECT id, external_id, from_number, to_number, message, timestamp, status, delivered_at, error, sim_slot, conversation_id
+            `SELECT id, external_id, from_number, to_number, message, timestamp, status, delivered_at, error, sim_slot, conversation_id, encrypted
              FROM sms
              WHERE device_id = ?
                AND (external_id = ? OR id = ?)
@@ -780,7 +795,7 @@ router.get('/messages/:messageId', async (req, res) => {
         const deviceId = await resolveHttpSmsDevice(db, req, req.query);
         const messageId = clean(req.params.messageId);
         const row = await db.get(
-            `SELECT id, external_id, from_number, to_number, message, type, status, timestamp, delivered_at, error, sim_slot
+            `SELECT id, external_id, from_number, to_number, message, type, status, timestamp, delivered_at, error, sim_slot, encrypted
              FROM sms
              WHERE device_id = ?
                AND (external_id = ? OR id = ?)
@@ -852,7 +867,7 @@ router.get('/messages', async (req, res) => {
         }
         params.push(limit, skip);
         const rows = await db.all(
-            `SELECT id, external_id, from_number, to_number, message, type, status, timestamp, delivered_at, error, sim_slot
+            `SELECT id, external_id, from_number, to_number, message, type, status, timestamp, delivered_at, error, sim_slot, encrypted
              FROM sms
              WHERE ${conditions.join(' AND ')}
              ORDER BY timestamp DESC, id DESC

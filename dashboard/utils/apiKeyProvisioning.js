@@ -2,8 +2,9 @@
 
 const crypto = require('crypto');
 
-function generateApiKey() {
-    return `edk_${crypto.randomBytes(32).toString('hex')}`;
+function generateApiKey(prefix = 'edk_') {
+    const normalizedPrefix = String(prefix || 'edk_').trim() || 'edk_';
+    return `${normalizedPrefix}${crypto.randomBytes(32).toString('hex')}`;
 }
 
 function hashApiKey(key) {
@@ -16,6 +17,7 @@ async function createDeviceProvisioningApiKey(db, options = {}) {
     const name = String(options.name || 'Device provisioning').trim();
     const scopes = String(options.scopes || 'write').trim() || 'write';
     const rateLimitRpm = Number.parseInt(options.rateLimitRpm, 10) || 120;
+    const apiKeyPrefix = String(options.apiKeyPrefix || 'edk_').trim() || 'edk_';
 
     if (!db || !userId || !deviceId) {
         return { key: '', name: '' };
@@ -36,7 +38,7 @@ async function createDeviceProvisioningApiKey(db, options = {}) {
         [userId, deviceScope, scopes, rateLimitRpm, name]
     );
 
-    const key = generateApiKey();
+    const key = generateApiKey(apiKeyPrefix);
     const keyPrefix = key.substring(0, 12);
     await db.run(
         `INSERT INTO api_keys (user_id, name, key_hash, key_prefix, scopes, device_ids, expires_at, rate_limit_rpm)

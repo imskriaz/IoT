@@ -21,6 +21,8 @@ final class BridgeConfig {
     final String password;
     final String deviceId;
     final String topicPrefix;
+    final String encryptionKey;
+    final boolean encryptIncomingSms;
     final boolean connectionConfigured;
     final boolean bridgeEnabled;
 
@@ -36,6 +38,8 @@ final class BridgeConfig {
             String password,
             String deviceId,
             String topicPrefix,
+            String encryptionKey,
+            boolean encryptIncomingSms,
             boolean connectionConfigured,
             boolean bridgeEnabled
     ) {
@@ -50,6 +54,8 @@ final class BridgeConfig {
         this.password = password == null ? "" : password;
         this.deviceId = clean(deviceId);
         this.topicPrefix = normalizeTopicPrefix(topicPrefix);
+        this.encryptionKey = clean(encryptionKey);
+        this.encryptIncomingSms = encryptIncomingSms && !this.encryptionKey.isEmpty();
         this.connectionConfigured = connectionConfigured;
         this.bridgeEnabled = bridgeEnabled;
     }
@@ -71,6 +77,8 @@ final class BridgeConfig {
                 connectionConfigured ? prefs.getString("password", "") : "",
                 connectionConfigured ? prefs.getString("device_id", "") : "",
                 prefs.getString("topic_prefix", DEFAULT_TOPIC_PREFIX),
+                prefs.getString("encryption_key", ""),
+                prefs.getBoolean("encrypt_incoming_sms", false),
                 connectionConfigured,
                 connectionConfigured && prefs.getBoolean("bridge_enabled", false)
         );
@@ -90,6 +98,8 @@ final class BridgeConfig {
                 .putString("password", password)
                 .putString("device_id", deviceId)
                 .putString("topic_prefix", topicPrefix)
+                .putString("encryption_key", encryptionKey)
+                .putBoolean("encrypt_incoming_sms", encryptIncomingSms)
                 .putBoolean("connection_configured", connectionConfigured)
                 .putBoolean("bridge_enabled", bridgeEnabled)
                 .apply();
@@ -107,6 +117,8 @@ final class BridgeConfig {
                 .remove("username")
                 .remove("password")
                 .remove("device_id")
+                .remove("encryption_key")
+                .remove("encrypt_incoming_sms")
                 .remove("last_dashboard_url")
                 .remove("env_defaults_stamp")
                 .putBoolean("connection_configured", false)
@@ -130,6 +142,8 @@ final class BridgeConfig {
                 password,
                 deviceId,
                 topicPrefix,
+                encryptionKey,
+                encryptIncomingSms,
                 connectionConfigured,
                 enabled
         );
@@ -148,6 +162,8 @@ final class BridgeConfig {
                 password,
                 deviceId,
                 topicPrefix,
+                encryptionKey,
+                encryptIncomingSms,
                 connectionConfigured,
                 bridgeEnabled
         );
@@ -174,6 +190,28 @@ final class BridgeConfig {
                 nextPassword,
                 nextDeviceId,
                 nextTopicPrefix,
+                encryptionKey,
+                encryptIncomingSms,
+                connectionConfigured,
+                bridgeEnabled
+        );
+    }
+
+    BridgeConfig withEncryption(String nextEncryptionKey, boolean nextEncryptIncomingSms) {
+        return new BridgeConfig(
+                serverUrl,
+                apiKey,
+                installId,
+                transportMode,
+                brokerHost,
+                brokerPort,
+                brokerProtocol,
+                username,
+                password,
+                deviceId,
+                topicPrefix,
+                nextEncryptionKey,
+                nextEncryptIncomingSms,
                 connectionConfigured,
                 bridgeEnabled
         );
@@ -192,6 +230,8 @@ final class BridgeConfig {
                 password,
                 deviceId,
                 topicPrefix,
+                encryptionKey,
+                encryptIncomingSms,
                 configured,
                 bridgeEnabled
         );

@@ -6,6 +6,7 @@ const { body, param, validationResult } = require('express-validator');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const QRCode = require('qrcode');
 const logger = require('../utils/logger');
 const { encodeProvisioningToken } = require('../utils/provisioningToken');
@@ -42,6 +43,10 @@ function normalizeTopicPrefix(value) {
 
 function normalizeServerUrl(value) {
     return clean(value).replace(/\/+$/, '');
+}
+
+function generateSmsEncryptionKey() {
+    return `enc_${crypto.randomBytes(24).toString('hex')}`;
 }
 
 function normalizePublicBaseUrl(req) {
@@ -119,6 +124,7 @@ function isHttpSmsBridge(body) {
 async function buildAndroidProvisioning(req, db, userId, body) {
     const transportMode = 'auto';
     const serverUrl = normalizePublicBaseUrl(req);
+    const encryptionKey = clean(body.encryption_key) || generateSmsEncryptionKey();
     let apiKey = '';
     let apiKeyName = '';
 
@@ -142,6 +148,10 @@ async function buildAndroidProvisioning(req, db, userId, body) {
         },
         server_url: serverUrl,
         api_key: apiKey,
+        sms: {
+            encryption_key: encryptionKey,
+            encrypt_received: false
+        },
         device: {
             id: clean(body.device_id),
             name: clean(body.name),
@@ -170,6 +180,7 @@ async function buildAndroidProvisioning(req, db, userId, body) {
             device_id: payload.device.id,
             topic_prefix: payload.device.topic_prefix,
             server_url: serverUrl,
+            encryption_key: encryptionKey,
             mqtt_configured: Boolean(payload.mqtt.host),
             api_key_name: apiKeyName
         }
@@ -178,7 +189,7 @@ async function buildAndroidProvisioning(req, db, userId, body) {
 
 async function buildHttpSmsProvisioning(req, db, userId, body) {
     const serverUrl = normalizePublicBaseUrl(req);
-    const apiBaseUrl = `${serverUrl}/v1`;
+    const encryptionKey = clean(body.encryption_key) || generateSmsEncryptionKey();
     let apiKey = '';
     let apiKeyName = '';
 
@@ -189,7 +200,8 @@ async function buildHttpSmsProvisioning(req, db, userId, body) {
             name: apiKeyName,
             deviceId: clean(body.device_id),
             scopes: 'write',
-            rateLimitRpm: 120
+            rateLimitRpm: 120,
+            apiKeyPrefix: 'pk_'
         });
         apiKey = provisionedKey.key;
     }
@@ -202,17 +214,21 @@ async function buildHttpSmsProvisioning(req, db, userId, body) {
             width: 320
         }) : '',
         setup: {
-            base_url: apiBaseUrl,
+            base_url: serverUrl,
+            api_base_url: `${serverUrl}/v1`,
             api_key: apiKey,
+            encryption_key: encryptionKey,
             device_id: clean(body.device_id)
         },
         summary: {
             transport_mode: 'http',
             device_id: clean(body.device_id),
-            server_url: apiBaseUrl,
+            server_url: serverUrl,
+            api_base_url: `${serverUrl}/v1`,
+            encryption_key: encryptionKey,
             api_key_name: apiKeyName,
             requires_https: true,
-            server_url_https: apiBaseUrl.toLowerCase().startsWith('https://')
+            server_url_https: serverUrl.toLowerCase().startsWith('https://')
         }
     };
 }

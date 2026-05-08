@@ -320,6 +320,50 @@ static esp_err_t api_bridge_annotate_sms_history_payload(
     return ESP_OK;
 }
 
+static esp_err_t api_bridge_write_sms_pull_diagnostic_payload(
+    char *payload,
+    size_t payload_len,
+    uint32_t synced_count,
+    const unified_action_response_t *pull_response
+) {
+    modem_a7670_status_t modem = {0};
+    char escaped_detail[sizeof(pull_response->detail) * 2U] = {0};
+    uint16_t storage_used = 0U;
+    uint16_t storage_total = 0U;
+    uint16_t storage_free = 0U;
+    int written = 0;
+
+    if (api_bridge_payload_missing(payload, payload_len) || !pull_response) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    modem_a7670_get_status(&modem);
+    storage_used = modem.sms_storage_used;
+    storage_total = modem.sms_storage_total;
+    storage_free = storage_total > storage_used ? (uint16_t)(storage_total - storage_used) : 0U;
+    api_bridge_escape_json(pull_response->detail, escaped_detail, sizeof(escaped_detail));
+
+    written = snprintf(
+        payload,
+        payload_len,
+        "{\"synced\":%" PRIu32 ",\"count\":0,\"entries\":[],\"pull_detail\":\"%s\","
+        "\"pull_result_code\":%" PRId32 ",\"sms_storage_used\":%u,"
+        "\"sms_storage_total\":%u,\"sms_storage_free\":%u}",
+        synced_count,
+        escaped_detail,
+        pull_response->result_code,
+        (unsigned)storage_used,
+        (unsigned)storage_total,
+        (unsigned)storage_free
+    );
+    if (written < 0 || (size_t)written >= payload_len) {
+        payload[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    return ESP_OK;
+}
+
 static unified_action_response_t api_bridge_finish_modem_response(
     const unified_action_envelope_t *action,
     esp_err_t err,
@@ -977,7 +1021,14 @@ static unified_action_response_t api_bridge_execute_get_sms_history(
     if (pull_response.result == UNIFIED_ACTION_RESULT_REJECTED ||
         pull_response.result == UNIFIED_ACTION_RESULT_TIMEOUT ||
         pull_response.result == UNIFIED_ACTION_RESULT_FAILED) {
-        payload[0] = '\0';
+        if (api_bridge_write_sms_pull_diagnostic_payload(
+                payload,
+                payload_len,
+                synced_count,
+                &pull_response
+            ) != ESP_OK) {
+            payload[0] = '\0';
+        }
         return api_bridge_build_response(
             action,
             pull_response.result,

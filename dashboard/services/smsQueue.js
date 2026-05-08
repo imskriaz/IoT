@@ -67,6 +67,13 @@ async function notifyHttpSmsQueued(db, deviceId, payload = {}) {
     });
 }
 
+function boolFlag(value) {
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0 || value === null || value === undefined) return false;
+    const text = String(value || '').trim().toLowerCase();
+    return ['true', '1', 'yes', 'y', 'on'].includes(text);
+}
+
 async function resolveDeviceTransportMode(db, deviceId) {
     if (!db || !deviceId) {
         return 'mqtt';
@@ -114,7 +121,8 @@ async function queueSmsForDelivery({
     userId = null,
     source = 'dashboard',
     existingSmsId = null,
-    batchId = null
+    batchId = null,
+    encrypted = false
 }) {
     if (!db) {
         throw new Error('Database not available');
@@ -134,6 +142,7 @@ async function queueSmsForDelivery({
     const messageId = buildSmsCommandMessageId(smsCommand);
     let smsId = existingSmsId;
     const normalizedSimSlot = Number.isInteger(Number(simSlot)) ? Number(simSlot) : null;
+    const encryptedFlag = boolFlag(encrypted) ? 1 : 0;
 
     if (smsId) {
         await db.run(
@@ -150,16 +159,17 @@ async function queueSmsForDelivery({
                  batch_id = ?,
                  sim_slot = ?,
                  external_id = ?,
+                 encrypted = ?,
                  error = NULL
              WHERE id = ?`,
-            [deviceId, 'self', formattedNumber, message, userId, source, batchId, normalizedSimSlot, messageId, smsId]
+            [deviceId, 'self', formattedNumber, message, userId, source, batchId, normalizedSimSlot, messageId, encryptedFlag, smsId]
         );
     } else {
         const result = await db.run(
             `INSERT INTO sms
-                (device_id, from_number, to_number, message, type, status, timestamp, user_id, source, batch_id, sim_slot, external_id)
-             VALUES (?, ?, ?, ?, 'outgoing', 'queued', strftime('%Y-%m-%dT%H:%M:%f', 'now'), ?, ?, ?, ?, ?)`,
-            [deviceId, 'self', formattedNumber, message, userId, source, batchId, normalizedSimSlot, messageId]
+                (device_id, from_number, to_number, message, type, status, timestamp, user_id, source, batch_id, sim_slot, external_id, encrypted)
+             VALUES (?, ?, ?, ?, 'outgoing', 'queued', strftime('%Y-%m-%dT%H:%M:%f', 'now'), ?, ?, ?, ?, ?, ?)`,
+            [deviceId, 'self', formattedNumber, message, userId, source, batchId, normalizedSimSlot, messageId, encryptedFlag]
         );
         smsId = result.lastID;
     }
@@ -184,7 +194,8 @@ async function queueSmsForDelivery({
             transport: 'http',
             simSlot: normalizedSimSlot,
             sms: smsTransport,
-            messageId
+            messageId,
+            encrypted: Boolean(encryptedFlag)
         };
 
         await emitSmsQueued(deviceId, {
@@ -198,6 +209,15 @@ async function queueSmsForDelivery({
         });
 
         return payload;
+    }
+
+    if (encryptedFlag) {
+        const detail = 'Encrypted SMS requires HTTP Android/httpSMS transport';
+        await db.run(
+            'UPDATE sms SET status = ?, error = ? WHERE id = ?',
+            ['failed', detail, smsId]
+        );
+        throw new Error(detail);
     }
 
     if (!mqttService || typeof mqttService.publishCommand !== 'function') {
@@ -289,7 +309,8 @@ async function queueSmsForDelivery({
             segmentedPdu: pduParts.length > 1,
             queueId: queueResult?.queueId || null,
             queueIds: queueResults.map((result) => result?.queueId).filter(Boolean),
-            messageId
+            messageId,
+            encrypted: Boolean(encryptedFlag)
         };
 
         await emitSmsQueued(deviceId, {

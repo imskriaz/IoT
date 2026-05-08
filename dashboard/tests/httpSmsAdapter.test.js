@@ -74,7 +74,8 @@ describe('httpSmsAdapter routes', () => {
                 to: '+8801700000000',
                 content: 'Queue through httpSMS',
                 sim: 'SIM1',
-                request_id: 'client-1'
+                request_id: 'client-1',
+                encrypted: true
             });
 
         expect(res.status).toBe(200);
@@ -86,7 +87,8 @@ describe('httpSmsAdapter routes', () => {
             content: 'Queue through httpSMS',
             type: 'mobile-terminated',
             status: 'pending',
-            sim: 'SIM1'
+            sim: 'SIM1',
+            encrypted: true
         }));
         expect(queueSmsForDelivery).toHaveBeenCalledWith(expect.objectContaining({
             db,
@@ -94,7 +96,8 @@ describe('httpSmsAdapter routes', () => {
             to: '+8801700000000',
             message: 'Queue through httpSMS',
             simSlot: 0,
-            source: 'httpsms'
+            source: 'httpsms',
+            encrypted: true
         }));
     });
 
@@ -115,6 +118,7 @@ describe('httpSmsAdapter routes', () => {
                 from: '+8801700000000',
                 to: '+8801555000000',
                 content: 'Inbound message',
+                encrypted: true,
                 sim: 'SIM2',
                 timestamp: '2026-05-08T10:00:00.000Z'
             });
@@ -122,7 +126,7 @@ describe('httpSmsAdapter routes', () => {
         expect(res.status).toBe(200);
         expect(db.run).toHaveBeenCalledWith(
             expect.stringContaining('INSERT OR IGNORE INTO sms'),
-            ['httpsms-01', '+8801700000000', '+8801555000000', 'Inbound message', '2026-05-08T10:00:00.000Z', 1, null]
+            ['httpsms-01', '+8801700000000', '+8801555000000', 'Inbound message', '2026-05-08T10:00:00.000Z', 1, null, 1]
         );
         expect(attachSmsToConversation).toHaveBeenCalledWith(db, expect.objectContaining({
             id: 51,
@@ -135,7 +139,8 @@ describe('httpSmsAdapter routes', () => {
             id: 51,
             conversationId: 77,
             source: 'httpsms',
-            sim_slot: 1
+            sim_slot: 1,
+            encrypted: true
         }));
     });
 
@@ -151,7 +156,8 @@ describe('httpSmsAdapter routes', () => {
                 message: 'Send me',
                 timestamp: '2026-05-08T10:00:00.000Z',
                 status: 'queued',
-                sim_slot: 0
+                sim_slot: 0,
+                encrypted: 1
             });
         const router = require('../routes/httpSmsAdapter');
         const app = buildApp(router, db);
@@ -165,7 +171,8 @@ describe('httpSmsAdapter routes', () => {
             id: 'sms_pending',
             contact: '+8801700000000',
             content: 'Send me',
-            status: 'sending'
+            status: 'sending',
+            encrypted: true
         }));
         expect(db.run).toHaveBeenCalledWith(
             expect.stringContaining("UPDATE sms SET status = 'sending'"),

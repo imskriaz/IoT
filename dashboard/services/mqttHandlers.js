@@ -1477,7 +1477,8 @@ class MQTTHandlers {
                     // avoid the UNIQUE(device_id, timestamp, from_number) collision when two
                     // SMS arrive within the same second.
                     const smsTimestamp = normalizeSmsTimestamp(data.timestamp);
-                    const decodedMessage = decodeUcs2Hex(message);
+                    const encrypted = boolFromPayload(data.encrypted, false);
+                    const decodedMessage = encrypted ? String(message || '') : decodeUcs2Hex(message);
                     const decodedFrom = decodeUcs2Hex(fromNumber);
                     const decodedTo = decodeUcs2Hex(toNumber);
                     const simScope = extractSimScope(data);
@@ -1497,8 +1498,8 @@ class MQTTHandlers {
                     const result = await db.run(`
                         INSERT OR IGNORE INTO sms
                             (from_number, to_number, message, type, status, device_id, timestamp, read, source, sim_slot, external_id,
-                             modem_storage_index, firmware_storage_id, multipart_ref, multipart_part_index, multipart_part_count, multipart_group_key)
-                        VALUES (?, ?, ?, ?, ?, COALESCE(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             modem_storage_index, firmware_storage_id, multipart_ref, multipart_part_index, multipart_part_count, multipart_group_key, encrypted)
+                        VALUES (?, ?, ?, ?, ?, COALESCE(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     `, [
                         isOutgoing ? null : decodedFrom,
                         isOutgoing ? decodedTo : (decodedTo || null),
@@ -1516,7 +1517,8 @@ class MQTTHandlers {
                         multipart.multipart_ref,
                         multipart.multipart_part_index,
                         multipart.multipart_part_count,
-                        multipart.multipart_group_key
+                        multipart.multipart_group_key,
+                        encrypted ? 1 : 0
                     ]);
 
                     logger.info(`✅ Saved incoming SMS from ${decodedFrom} (ID: ${result.lastID})`);
@@ -1576,6 +1578,7 @@ class MQTTHandlers {
                         multipart_part_index: multipart.multipart_part_index,
                         multipart_part_count: multipart.multipart_part_count,
                         multipart_group_key: multipart.multipart_group_key,
+                        encrypted,
                         unreadCount: smsCache.get(deviceId),
                         timestamp: storageTimestamp
                     });

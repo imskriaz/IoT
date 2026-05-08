@@ -338,6 +338,99 @@ describe('sms route queue-first delivery', () => {
         }));
     });
 
+    test('pull messages includes storage diagnostics when device execution fails', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+        const error = new Error('sms_pull_failed');
+        error.response = {
+            success: false,
+            result: 'failed',
+            detail: 'sms_pull_failed',
+            payload: {
+                synced: 0,
+                count: 0,
+                entries: [],
+                pull_detail: 'sms_pull_failed',
+                pull_result_code: 260,
+                sms_storage_used: 111,
+                sms_storage_total: 180,
+                sms_storage_free: 69
+            }
+        };
+        global.mqttService.publishCommand.mockRejectedValueOnce(error);
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/sync')
+            .send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(502);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: false,
+            message: 'sms_pull_failed',
+            warning: expect.stringContaining('111/180'),
+            deviceSmsStorage: expect.objectContaining({ used: 111, total: 180, free: 69 })
+        }));
+        expect(res.body.diagnostics).toEqual(expect.objectContaining({
+            blocker: 'sms_storage_has_no_readable_pull_entries',
+            failure: true,
+            pullDetail: 'sms_pull_failed',
+            pullResultCode: 260
+        }));
+        expect(roomEmit).toHaveBeenCalledWith('sms:sync-failed', expect.objectContaining({
+            deviceId: 'device-1',
+            error: 'sms_pull_failed',
+            warning: expect.stringContaining('firmware returned no readable SMS entries')
+        }));
+    });
+
+    test('pull messages treats resolved modem-not-ready payload as device execution failure', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+        global.mqttService.publishCommand.mockResolvedValueOnce({
+            success: true,
+            result: 'completed',
+            detail: 'sms_pull_empty',
+            payload: {
+                synced: 0,
+                count: 0,
+                entries: [],
+                pull_detail: 'modem_not_ready',
+                pull_result_code: 259,
+                sms_storage_used: 111,
+                sms_storage_total: 180,
+                sms_storage_free: 69
+            }
+        });
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/sync')
+            .send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(502);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: false,
+            message: 'modem_not_ready',
+            warning: expect.stringContaining('111/180')
+        }));
+        expect(res.body.diagnostics).toEqual(expect.objectContaining({
+            failure: true,
+            pullDetail: 'modem_not_ready',
+            pullResultCode: 259
+        }));
+    });
+
     test('accepts multipart SMS under the device limit and queues dashboard-built PDU parts', async () => {
         const db = {
             run: jest.fn(async (sql) => {

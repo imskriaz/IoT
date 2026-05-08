@@ -72,6 +72,17 @@ final class BridgeProvisioning {
         );
         String nextServerUrl = firstNonEmpty(json.optString("su", ""));
         String nextApiKey = firstNonEmpty(json.optString("ak", ""));
+        String nextEncryptionKey = firstNonEmpty(
+                json.optString("ek", ""),
+                nestedString(json, "sms", "encryption_key"),
+                nestedString(json, "encryption", "key"),
+                current.encryptionKey
+        );
+        boolean nextEncryptIncomingSms = json.has("er")
+                ? json.optBoolean("er", false)
+                : (json.optJSONObject("sms") != null
+                    ? json.optJSONObject("sms").optBoolean("encrypt_received", current.encryptIncomingSms)
+                    : current.encryptIncomingSms);
         boolean hasHttp = !nextServerUrl.isEmpty() && !nextApiKey.isEmpty();
         boolean hasMqtt = !nextHost.isEmpty();
         if (hasHttp && hasMqtt) {
@@ -107,6 +118,8 @@ final class BridgeProvisioning {
                 nextPassword,
                 nextDeviceId,
                 nextTopicPrefix,
+                nextEncryptionKey,
+                nextEncryptIncomingSms,
                 true,
                 current.bridgeEnabled
         );

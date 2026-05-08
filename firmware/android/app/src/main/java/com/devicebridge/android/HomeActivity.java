@@ -44,6 +44,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -3150,6 +3151,21 @@ public class HomeActivity extends Activity {
             dialog.dismiss();
             requestSmsInboxAccess();
         }));
+        BridgeConfig config = BridgeConfig.load(this);
+        sheet.addView(settingsSectionHeader("SMS encryption", "Compatible with httpSMS encrypted message format."), fullWidth(8));
+        sheet.addView(settingsRow(
+                R.drawable.ic_db_key,
+                "Encryption key",
+                config.encryptionKey.isEmpty()
+                        ? "No local key set. Encrypted outgoing SMS will be rejected."
+                        : (config.encryptIncomingSms ? "Key set. Incoming SMS uploads are encrypted." : "Key set. Incoming SMS uploads stay plain."),
+                config.encryptionKey.isEmpty() ? "Set" : "Edit",
+                "#0f766e",
+                () -> {
+                    dialog.dismiss();
+                    showEncryptionSettingsSheet();
+                }
+        ));
         if (!batteryDisabled) {
             sheet.addView(settingsSectionHeader("Background protection", "Disable battery optimization so the bridge can stay alive after onboarding."), fullWidth(8));
             sheet.addView(settingsRow(R.drawable.ic_db_battery, "Battery optimization", "Android can stop the bridge in the background until this is disabled.", "Disable", "#ca8a04", () -> {
@@ -3177,6 +3193,59 @@ public class HomeActivity extends Activity {
             dialog.dismiss();
             startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(Uri.parse("package:" + getPackageName())));
         }));
+        showBottomSheetDialog(dialog, sheet);
+    }
+
+    private void showEncryptionSettingsSheet() {
+        BridgeConfig config = BridgeConfig.load(this);
+        Dialog dialog = createBottomSheetDialog();
+        LinearLayout sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        sheet.setPadding(dp(14), dp(14), dp(14), dp(14));
+        sheet.setBackground(roundRect("#ffffff", "#ffffff", 24));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.addView(iconTile(R.drawable.ic_db_key, "#0f766e", 42, 14, 22), fixed(42, 42, 10));
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(text("SMS encryption", 18, "#0f172a", true));
+        copy.addView(text("Use the same key as httpSMS for encrypted queue messages.", 12, "#64748b", false));
+        header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        sheet.addView(header, fullWidth(12));
+
+        EditText keyInput = input("Encryption key");
+        keyInput.setSingleLine(true);
+        keyInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        keyInput.setText(config.encryptionKey);
+        sheet.addView(keyInput, fullWidth(10));
+
+        CheckBox encryptIncoming = new CheckBox(this);
+        encryptIncoming.setText("Encrypt incoming SMS uploads");
+        encryptIncoming.setTextColor(color("#0f172a"));
+        encryptIncoming.setTextSize(scaledTextSize(13));
+        encryptIncoming.setChecked(config.encryptIncomingSms);
+        encryptIncoming.setPadding(0, dp(4), 0, dp(6));
+        sheet.addView(encryptIncoming, fullWidth(8));
+
+        TextView helper = text("Outgoing encrypted messages are decrypted before sending. Incoming encryption works only when a key is set.", 12, "#64748b", false);
+        helper.setPadding(dp(2), 0, dp(2), dp(8));
+        sheet.addView(helper, fullWidth(10));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        actions.addView(labelIconButton("Cancel", R.drawable.ic_db_close, "#f8fafc", "#0f172a", dialog::dismiss), weighted(8));
+        actions.addView(labelIconButton("Save", R.drawable.ic_db_key, "#0f766e", "#ffffff", () -> {
+            String key = keyInput.getText().toString().trim();
+            BridgeConfig.load(this)
+                    .withEncryption(key, encryptIncoming.isChecked() && !key.isEmpty())
+                    .save(this);
+            BridgeEventLog.append(this, key.isEmpty() ? "SMS encryption key cleared" : "SMS encryption key updated");
+            dialog.dismiss();
+            loadState(true);
+            showSnack(key.isEmpty() ? "Encryption key cleared." : "Encryption settings saved.");
+        }), weighted(0));
+        sheet.addView(actions);
         showBottomSheetDialog(dialog, sheet);
     }
 

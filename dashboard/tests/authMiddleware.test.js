@@ -248,4 +248,121 @@ describe('auth middleware', () => {
         }));
         expect(res.statusCode).toBe(200);
     });
+
+    test('trims scanned X-API-Key values before validation', async () => {
+        const req = {
+            originalUrl: '/v1/phones/fcm-token',
+            path: '/phones/fcm-token',
+            url: '/phones/fcm-token',
+            baseUrl: '/v1',
+            method: 'PUT',
+            headers: {
+                'x-api-key': '  edk_validtoken  '
+            },
+            session: {},
+            app: {
+                locals: {
+                    db: {
+                        get: jest.fn().mockResolvedValue({
+                            id: 12,
+                            name: 'httpSMS live key',
+                            scopes: 'write',
+                            device_ids: JSON.stringify(['httpsms-live-01']),
+                            username: 'operator',
+                            role: 'operator',
+                            uid: 5
+                        }),
+                        run: jest.fn().mockResolvedValue(undefined)
+                    }
+                }
+            }
+        };
+        const res = createResponse();
+        const next = jest.fn();
+
+        await authMiddleware(req, res, next);
+
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(req.app.locals.db.get).toHaveBeenCalledWith(
+            expect.stringContaining('WHERE ak.key_hash = ?'),
+            [expect.any(String)]
+        );
+        expect(req.apiKey).toEqual(expect.objectContaining({
+            scopes: 'write',
+            device_ids: JSON.stringify(['httpsms-live-01'])
+        }));
+    });
+
+    test('accepts httpSMS pk_ phone API keys only on /v1 routes', async () => {
+        const req = {
+            originalUrl: '/v1/phones/fcm-token',
+            path: '/phones/fcm-token',
+            url: '/phones/fcm-token',
+            baseUrl: '/v1',
+            method: 'PUT',
+            headers: {
+                'x-api-key': 'pk_phonekey'
+            },
+            session: {},
+            app: {
+                locals: {
+                    db: {
+                        get: jest.fn().mockResolvedValue({
+                            id: 14,
+                            name: 'httpSMS phone key',
+                            scopes: 'write',
+                            device_ids: JSON.stringify(['httpsms-live-01']),
+                            username: 'operator',
+                            role: 'operator',
+                            uid: 5
+                        }),
+                        run: jest.fn().mockResolvedValue(undefined)
+                    }
+                }
+            }
+        };
+        const res = createResponse();
+        const next = jest.fn();
+
+        await authMiddleware(req, res, next);
+
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(req.apiKey).toEqual(expect.objectContaining({
+            id: 14,
+            scopes: 'write'
+        }));
+    });
+
+    test('does not accept pk_ phone API keys on dashboard /api routes', async () => {
+        const req = {
+            originalUrl: '/api/sms',
+            path: '/sms',
+            url: '/sms',
+            baseUrl: '/api',
+            method: 'GET',
+            headers: {
+                'x-api-key': 'pk_phonekey'
+            },
+            session: {},
+            app: {
+                locals: {
+                    db: {
+                        get: jest.fn().mockResolvedValue(null),
+                        run: jest.fn().mockResolvedValue(undefined)
+                    }
+                }
+            }
+        };
+        const res = createResponse();
+        const next = jest.fn();
+
+        await authMiddleware(req, res, next);
+
+        expect(next).not.toHaveBeenCalled();
+        expect(res.statusCode).toBe(401);
+        expect(req.app.locals.db.get).not.toHaveBeenCalledWith(
+            expect.stringContaining('WHERE ak.key_hash = ?'),
+            expect.any(Array)
+        );
+    });
 });

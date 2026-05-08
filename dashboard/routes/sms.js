@@ -419,6 +419,29 @@ function getSmsSyncPayloadStorage(response = {}) {
     };
 }
 
+function isFailedSmsSyncResponse(response = {}) {
+    if (!response || typeof response !== 'object') return false;
+    if (response.success === false) return true;
+    const result = String(response.result || response.status || '').trim().toLowerCase();
+    if (['failed', 'rejected', 'timeout', 'error'].includes(result)) return true;
+    const payload = getSmsSyncPayloadObject(response);
+    const pullCode = Number(payload.pull_result_code);
+    const pullDetail = String(payload.pull_detail || '').trim().toLowerCase();
+    return (Number.isFinite(pullCode) && pullCode !== 0)
+        || ['modem_not_ready', 'telephony_unavailable', 'sms_pull_failed', 'sms_pull_timeout'].includes(pullDetail);
+}
+
+function smsSyncFailureMessage(response = {}) {
+    const payload = getSmsSyncPayloadObject(response);
+    return String(
+        response?.error
+        || payload.pull_detail
+        || response?.message
+        || response?.detail
+        || 'SMS pull failed on device'
+    ).trim();
+}
+
 function buildSmsSyncReport(response = {}, importResult = {}, syncEntries = [], deviceSmsStorage = null) {
     const payload = getSmsSyncPayloadObject(response);
     const storage = deviceSmsStorage || getSmsSyncPayloadStorage(response);
@@ -1106,6 +1129,11 @@ router.post('/sync', async (req, res) => {
 
         const db = req.app.locals.db;
         const syncEntries = getSmsSyncPayloadEntries(response);
+        if (isFailedSmsSyncResponse(response)) {
+            const error = new Error(smsSyncFailureMessage(response));
+            error.response = response;
+            throw error;
+        }
         const importResult = await importDeviceSmsSyncEntries(db, deviceId, syncEntries);
         const deviceSmsStorage = getLiveDeviceSmsStorage(deviceId);
         const syncReport = buildSmsSyncReport(response, importResult, syncEntries, deviceSmsStorage);
@@ -1136,10 +1164,23 @@ router.post('/sync', async (req, res) => {
     } catch (error) {
         logger.error('POST /api/sms/sync error:', error);
         if (deviceId) {
+            const response = error?.response && typeof error.response === 'object' ? error.response : {};
+            const syncEntries = getSmsSyncPayloadEntries(response);
+            const deviceSmsStorage = getLiveDeviceSmsStorage(deviceId) || getSmsSyncPayloadStorage(response);
+            const syncReport = buildSmsSyncReport(response, { imported: 0, skipped: 0 }, syncEntries, deviceSmsStorage);
             const payload = {
                 deviceId,
                 device_id: deviceId,
-                synced: 0,
+                total: syncReport.total,
+                synced: syncReport.synced,
+                imported: 0,
+                skipped: 0,
+                deviceSmsStorage: syncReport.deviceSmsStorage,
+                diagnostics: {
+                    ...syncReport.diagnostics,
+                    failure: true
+                },
+                warning: syncReport.diagnostics.warnings[0] || null,
                 requested: true,
                 error: error.message || 'Failed to request message pull',
                 timestamp: new Date().toISOString()
@@ -1147,7 +1188,24 @@ router.post('/sync', async (req, res) => {
             emitDeviceEvent(deviceId, 'sms:sync-failed', payload);
             emitDeviceEvent(deviceId, 'sms:sync-completed', payload);
         }
-        res.status(500).json({ success: false, message: error.message || 'Failed to request message pull' });
+        const response = error?.response && typeof error.response === 'object' ? error.response : {};
+        const syncEntries = getSmsSyncPayloadEntries(response);
+        const deviceSmsStorage = deviceId ? (getLiveDeviceSmsStorage(deviceId) || getSmsSyncPayloadStorage(response)) : getSmsSyncPayloadStorage(response);
+        const syncReport = buildSmsSyncReport(response, { imported: 0, skipped: 0 }, syncEntries, deviceSmsStorage);
+        res.status(error?.response ? 502 : 500).json({
+            success: false,
+            message: error.message || 'Failed to request message pull',
+            warning: syncReport.diagnostics.warnings[0] || null,
+            imported: 0,
+            skipped: 0,
+            total: syncReport.total,
+            synced: syncReport.synced,
+            deviceSmsStorage: syncReport.deviceSmsStorage,
+            diagnostics: {
+                ...syncReport.diagnostics,
+                failure: Boolean(error?.response)
+            }
+        });
     }
 });
 

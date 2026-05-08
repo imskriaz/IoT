@@ -57,6 +57,7 @@ final class BridgeHttpClient {
                     row.optString("id", ""),
                     row.optString("to", ""),
                     row.optString("content", ""),
+                    row.optBoolean("encrypted", false),
                     row.optInt("timeout_ms", 90000),
                     row.has("sim_slot") && !row.isNull("sim_slot") ? row.optInt("sim_slot") : null,
                     row.has("subscription_id") && !row.isNull("subscription_id") ? row.optInt("subscription_id") : null
@@ -170,14 +171,16 @@ final class BridgeHttpClient {
         final String id;
         final String to;
         final String content;
+        final boolean encrypted;
         final int timeoutMs;
         final Integer simSlot;
         final Integer subscriptionId;
 
-        OutstandingMessage(String id, String to, String content, int timeoutMs, Integer simSlot, Integer subscriptionId) {
+        OutstandingMessage(String id, String to, String content, boolean encrypted, int timeoutMs, Integer simSlot, Integer subscriptionId) {
             this.id = id;
             this.to = to;
             this.content = content;
+            this.encrypted = encrypted;
             this.timeoutMs = timeoutMs > 0 ? timeoutMs : 90000;
             this.simSlot = simSlot != null && simSlot >= 0 ? simSlot : null;
             this.subscriptionId = subscriptionId != null && subscriptionId >= 0 ? subscriptionId : null;

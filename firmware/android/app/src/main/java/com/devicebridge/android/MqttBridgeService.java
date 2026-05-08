@@ -616,7 +616,7 @@ public class MqttBridgeService extends Service {
 
     private void handleSendSms(String actionId, JSONObject data) {
         String number = firstNonEmpty(data.optString("number", ""), data.optString("to", ""));
-        String text = firstNonEmpty(data.optString("text", ""), data.optString("message", ""));
+        String text = firstNonEmpty(data.optString("text", ""), data.optString("message", ""), data.optString("content", ""));
         int timeoutMs = data.optInt("timeout_ms", data.optInt("timeoutMs", data.optInt("timeout", 90000)));
         Integer preferredSimSlot = requestedSimSlot(data);
         Integer preferredSubscriptionId = firstInteger(
@@ -625,6 +625,17 @@ public class MqttBridgeService extends Service {
                 jsonInteger(data, "subscriptionId"),
                 jsonInteger(data, "simSubscriptionId")
         );
+        if (data.optBoolean("encrypted", false)) {
+            String decrypted = decryptOutgoingContent(text);
+            if (decrypted == null) {
+                logConsoleEvent("sms", "Encrypted SMS rejected: encryption key missing or invalid");
+                publishSentResult(actionId, number, 0, timeoutMs, false, currentConfig().encryptionKey.isEmpty()
+                        ? "encryption_key_required"
+                        : "sms_decrypt_failed");
+                return;
+            }
+            text = decrypted;
+        }
 
         SmsSender.SendResult result = SmsSender.send(this, actionId, number, text, timeoutMs, preferredSimSlot, preferredSubscriptionId);
         if (!result.accepted) {
@@ -1077,13 +1088,26 @@ public class MqttBridgeService extends Service {
     private void publishIncomingSms(String from, String text, long timestamp, int slot, SmsMultipartInfo multipartInfo) {
         BridgeSmsStore.recordIncoming(this, from, text, timestamp);
         logConsoleEvent("sms", "Incoming SMS from " + firstNonEmpty(from, "unknown"));
+        BridgeConfig cfg = currentConfig();
+        String payloadText = text == null ? "" : text;
+        boolean encrypted = false;
+        if (cfg.encryptIncomingSms) {
+            try {
+                payloadText = BridgeCrypto.encrypt(cfg.encryptionKey, payloadText);
+                encrypted = true;
+            } catch (Exception error) {
+                logConsoleEvent("sms", "Incoming SMS encryption skipped: " + detailForError(error, "encrypt failed"));
+                payloadText = text == null ? "" : text;
+            }
+        }
         JSONObject json = new JSONObject();
         try {
             json.put("type", "sms_incoming");
-            json.put("device_id", currentConfig().deviceId);
+            json.put("device_id", cfg.deviceId);
             json.put("from", from == null ? "" : from);
-            json.put("text", text == null ? "" : text);
-            json.put("content", text == null ? "" : text);
+            json.put("text", payloadText);
+            json.put("content", payloadText);
+            json.put("encrypted", encrypted);
             json.put("timestamp", timestamp);
             if (slot >= 0) {
                 json.put("sim_slot", slot);
@@ -1290,6 +1314,16 @@ public class MqttBridgeService extends Service {
         String localId = objectString(message.get("id"));
         if (address.isEmpty() || body.isEmpty()) return null;
         boolean outgoing = Boolean.TRUE.equals(message.get("outgoing"));
+        boolean encrypted = false;
+        String payloadBody = body;
+        if (!outgoing && cfg.encryptIncomingSms) {
+            try {
+                payloadBody = BridgeCrypto.encrypt(cfg.encryptionKey, body);
+                encrypted = true;
+            } catch (Exception ignored) {
+                payloadBody = body;
+            }
+        }
         JSONObject json = new JSONObject();
         try {
             json.put("type", "sms_sync");
@@ -1301,9 +1335,10 @@ public class MqttBridgeService extends Service {
             json.put("to", outgoing ? address : "");
             json.put("from_number", outgoing ? "" : address);
             json.put("to_number", outgoing ? address : "");
-            json.put("text", body);
-            json.put("content", body);
-            json.put("message", body);
+            json.put("text", payloadBody);
+            json.put("content", payloadBody);
+            json.put("message", payloadBody);
+            json.put("encrypted", encrypted);
             json.put("timestamp", objectLong(message.get("timestamp"), System.currentTimeMillis()));
             json.put("read", Boolean.TRUE.equals(message.get("read")) ? 1 : 0);
             json.put("source", "android-initial-sync");
@@ -2280,19 +2315,42 @@ public class MqttBridgeService extends Service {
     }
 
     SmsSender.SendResult sendHttpOutstandingMessage(BridgeHttpClient.OutstandingMessage message) {
+        String content = message.content;
+        if (message.encrypted) {
+            String decrypted = decryptOutgoingContent(content);
+            if (decrypted == null) {
+                return SmsSender.SendResult.rejected(currentConfig().encryptionKey.isEmpty()
+                        ? "encryption_key_required"
+                        : "sms_decrypt_failed");
+            }
+            content = decrypted;
+        }
         SmsSender.SendResult result = SmsSender.send(
                 this,
                 message.id,
                 message.to,
-                message.content,
+                content,
                 message.timeoutMs,
                 message.simSlot,
                 message.subscriptionId
         );
         if (result.accepted) {
-            BridgeSmsStore.recordOutgoing(this, message.id, message.to, message.content, System.currentTimeMillis(), "dashboard_http");
+            BridgeSmsStore.recordOutgoing(this, message.id, message.to, content, System.currentTimeMillis(), "dashboard_http");
         }
         return result;
+    }
+
+    private String decryptOutgoingContent(String content) {
+        BridgeConfig cfg = currentConfig();
+        if (cfg.encryptionKey.isEmpty()) {
+            return null;
+        }
+        try {
+            return BridgeCrypto.decrypt(cfg.encryptionKey, content);
+        } catch (Exception error) {
+            logConsoleEvent("sms", "Encrypted outgoing SMS decrypt failed: " + detailForError(error, "decrypt failed"));
+            return null;
+        }
     }
 
     private String commandFromTopic(String topic) {

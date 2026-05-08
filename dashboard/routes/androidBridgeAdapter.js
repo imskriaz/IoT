@@ -280,6 +280,7 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
         const from = clean(req.body.from || req.body.from_number);
         const to = clean(req.body.to || req.body.to_number);
         const content = String(req.body.content || req.body.text || '');
+        const encrypted = boolFromPayload(req.body.encrypted, false);
         if ((!isOutgoing && !from) || (isOutgoing && !to) || !content) {
             return res.status(400).json({ success: false, message: isOutgoing ? 'to and content required' : 'from and content required' });
         }
@@ -303,8 +304,8 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
         const result = await db.run(
             `INSERT OR IGNORE INTO sms
                 (device_id, from_number, to_number, message, type, status, timestamp, read, source, sim_slot, external_id,
-                 multipart_ref, multipart_part_index, multipart_part_count, multipart_group_key)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 multipart_ref, multipart_part_index, multipart_part_count, multipart_group_key, encrypted)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 deviceId,
                 isOutgoing ? null : from,
@@ -320,7 +321,8 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
                 multipart.multipart_ref,
                 multipart.multipart_part_index,
                 multipart.multipart_part_count,
-                multipart.multipart_group_key
+                multipart.multipart_group_key,
+                encrypted ? 1 : 0
             ]
         );
 
@@ -349,6 +351,7 @@ router.post('/messages/receive', requireBoundDevice, async (req, res) => {
                 multipart_part_count: multipart.multipart_part_count,
                 multipart_group_key: multipart.multipart_group_key,
                 sim_slot: simScope.simSlot,
+                encrypted,
                 message: content,
                 text: content,
                 timestamp: storageTimestamp
@@ -379,7 +382,7 @@ router.get('/messages/outstanding', requireBoundDevice, async (req, res) => {
         }
 
         const rows = await db.all(
-            `SELECT id, external_id, to_number, message, timestamp, sim_slot
+            `SELECT id, external_id, to_number, message, timestamp, sim_slot, encrypted
              FROM sms
              WHERE device_id = ?
                AND type = 'outgoing'
@@ -409,6 +412,7 @@ router.get('/messages/outstanding', requireBoundDevice, async (req, res) => {
                 sms_id: row.id,
                 to: row.to_number,
                 content: row.message,
+                encrypted: boolFromPayload(row.encrypted, false),
                 sim_slot: Number.isInteger(Number(row.sim_slot)) ? Number(row.sim_slot) : null,
                 timeout_ms: 90000,
                 created_at: row.timestamp

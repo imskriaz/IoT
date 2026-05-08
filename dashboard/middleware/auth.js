@@ -60,12 +60,15 @@ function isApiRequest(req) {
 async function _resolveApiKey(req) {
     let raw = null;
     const authHeader = req.headers['authorization'];
-    if (authHeader && authHeader.startsWith('Bearer edk_')) {
-        raw = authHeader.slice(7);
+    if (authHeader && authHeader.trim().startsWith('Bearer edk_')) {
+        raw = authHeader.trim().slice(7);
     } else if (req.headers['x-api-key']) {
         raw = req.headers['x-api-key'];
     }
-    if (!raw || !raw.startsWith('edk_')) return null;
+    raw = String(raw || '').trim();
+    const isDashboardKey = raw.startsWith('edk_');
+    const isPhoneKey = raw.startsWith('pk_') && getRequestPath(req).startsWith('/v1/');
+    if (!raw || (!isDashboardKey && !isPhoneKey)) return null;
 
     const hash = crypto.createHash('sha256').update(raw).digest('hex');
     const db = req.app?.locals?.db;

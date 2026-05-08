@@ -273,6 +273,7 @@ describe('androidBridgeAdapter routes', () => {
                 sync: true,
                 from: '+8801555000000',
                 content: 'historical message',
+                encrypted: true,
                 timestamp: '2026-04-03T09:00:00.000Z',
                 read: 1,
                 external_id: 'android-sms-42'
@@ -296,7 +297,8 @@ describe('androidBridgeAdapter routes', () => {
                 null,
                 null,
                 null,
-                null
+                null,
+                1
             ]
         );
         expect(emit).toHaveBeenCalledWith(
@@ -321,7 +323,8 @@ describe('androidBridgeAdapter routes', () => {
                     external_id: 'send-sms_abc123',
                     to_number: '+8801700000000',
                     message: 'Queue me',
-                    timestamp: '2026-04-18T12:00:00.000Z'
+                    timestamp: '2026-04-18T12:00:00.000Z',
+                    encrypted: 1
                 }
             ])
         });
@@ -338,7 +341,8 @@ describe('androidBridgeAdapter routes', () => {
             expect.objectContaining({
                 id: 'send-sms_abc123',
                 to: '+8801700000000',
-                content: 'Queue me'
+                content: 'Queue me',
+                encrypted: true
             })
         ]);
         expect(db.run).toHaveBeenCalledWith(
@@ -454,7 +458,8 @@ describe('androidBridgeAdapter routes', () => {
                 '44',
                 2,
                 3,
-                'multipart:android-http-01:incoming:3=:24;82=8<3=86<2:41:0:44:3'
+                'multipart:android-http-01:incoming:3=:24;82=8<3=86<2:41:0:44:3',
+                0
             ]
         );
         expect(emit).toHaveBeenCalledWith(

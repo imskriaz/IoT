@@ -1569,36 +1569,77 @@ function renderProvisioningPanel() {
     if (provisioning.type === 'httpsms') {
         const summary = provisioning.summary || {};
         const setup = provisioning.setup || {};
+        const baseUrl = summary.server_url || setup.base_url || '';
+        const apiBaseUrl = summary.api_base_url || setup.api_base_url || (baseUrl ? `${baseUrl.replace(/\/+$/, '')}/v1` : '');
+        const apiKey = setup.api_key || '';
+        const encryptionKey = setup.encryption_key || summary.encryption_key || '';
+        const isHttpsBaseUrl = /^https:\/\//i.test(baseUrl);
+        const routableWarning = isHttpsBaseUrl ? '' : `
+            <div class="alert alert-warning small mb-3">
+                <div class="fw-semibold mb-1"><i class="bi bi-exclamation-triangle me-1"></i>Phone app requires HTTPS</div>
+                <div>The installed httpSMS app will reject local or plain HTTP URLs. Use your public HTTPS dashboard root URL, then register again or copy that HTTPS Server URL into the app.</div>
+            </div>
+        `;
         content.innerHTML = `
             <div class="row g-4 align-items-start">
-                <div class="col-lg-5">
+                <div class="col-lg-5 text-center">
                     <h5 class="mb-2">httpSMS App Setup</h5>
-                    <div class="alert alert-primary small mb-0">
+                    ${provisioning.qr_data_url ? `
+                        <p class="text-muted small mb-3">In the httpSMS app, tap the API key field or QR icon, then scan this code.</p>
+                        <img src="${provisioning.qr_data_url}" alt="httpSMS API key QR" class="img-fluid border rounded p-2 bg-white" style="max-width:280px;">
+                    ` : `
+                        <div class="alert alert-warning small mb-3">No API key was generated for this session.</div>
+                    `}
+                    <div class="alert alert-primary small text-start mt-3 mb-0">
                         <div class="fw-semibold mb-1"><i class="bi bi-chat-dots me-1"></i>Phone-side order</div>
                         <ol class="mb-0 ps-3">
-                            <li>Install and open the httpSMS app.</li>
-                            <li>Set the server/API base URL to the dashboard URL shown here.</li>
-                            <li>Use the API key shown here for Authorization or X-API-Key.</li>
-                            <li>Keep the app allowed for SMS permissions and background activity.</li>
+                            <li>Open the installed httpSMS app.</li>
+                            <li>Set Server URL to the HTTPS dashboard root shown on the right.</li>
+                            <li>Tap the API key field or QR icon and scan this QR.</li>
+                            <li>Set Encryption key to the generated key if you want encrypted message content.</li>
+                            <li>Confirm your SIM phone number, grant SMS and notification permissions, then log in.</li>
+                            <li>Keep background/battery optimization disabled so FCM can wake the app for queued SMS.</li>
                         </ol>
                     </div>
                 </div>
                 <div class="col-lg-7">
+                    ${routableWarning}
                     <h6 class="mb-2">Connection details</h6>
                     <table class="table table-sm align-middle mb-3">
                         <tbody>
                             <tr><td class="text-muted">Device ID</td><td><code>${escHtml(summary.device_id || setup.device_id || '')}</code></td></tr>
-                            <tr><td class="text-muted">Base URL</td><td><code>${escHtml(summary.server_url || setup.base_url || '')}</code></td></tr>
-                            <tr><td class="text-muted">API key</td><td><textarea class="form-control font-monospace" id="httpSmsApiKey" rows="3" readonly>${escHtml(setup.api_key || '')}</textarea></td></tr>
+                            <tr>
+                                <td class="text-muted">Server URL</td>
+                                <td>
+                                    <div class="input-group input-group-sm">
+                                        <input class="form-control font-monospace" id="httpSmsBaseUrl" value="${escHtml(baseUrl)}" readonly>
+                                        <button type="button" class="btn btn-outline-secondary" onclick="copyHttpSmsBaseUrl()">
+                                            <i class="bi bi-clipboard"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr><td class="text-muted">API path used by app</td><td><code>${escHtml(apiBaseUrl)}</code></td></tr>
+                            <tr><td class="text-muted">API key</td><td><textarea class="form-control font-monospace" id="httpSmsApiKey" rows="3" readonly>${escHtml(apiKey)}</textarea></td></tr>
+                            <tr><td class="text-muted">Encryption key</td><td><textarea class="form-control font-monospace" id="httpSmsEncryptionKey" rows="2" readonly>${escHtml(encryptionKey)}</textarea></td></tr>
                         </tbody>
                     </table>
                     <div class="d-flex flex-wrap gap-2">
                         <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyHttpSmsApiKey()">
                             <i class="bi bi-clipboard me-1"></i>Copy API key
                         </button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyHttpSmsBaseUrl()">
+                            <i class="bi bi-link-45deg me-1"></i>Copy Server URL
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyHttpSmsEncryptionKey()">
+                            <i class="bi bi-key me-1"></i>Copy encryption key
+                        </button>
                         <a class="btn btn-sm btn-outline-secondary" href="/devices/settings?device=${encodeURIComponent(summary.device_id || setup.device_id || '')}">
                             <i class="bi bi-gear me-1"></i>Open device settings
                         </a>
+                    </div>
+                    <div class="alert alert-light border small mt-3 mb-0">
+                        The QR contains only the API key because the public httpSMS app scans into that field. Enter the Server URL separately as <code>${escHtml(baseUrl)}</code>; do not add <code>/v1</code> because the app adds it automatically. The encryption key is shown once here and is not stored by the dashboard.
                     </div>
                 </div>
             </div>
@@ -1681,6 +1722,38 @@ function copyHttpSmsApiKey() {
             field?.focus();
             field?.select();
             showToast('Select and copy the API key manually.', 'warning');
+        });
+}
+
+function copyHttpSmsBaseUrl() {
+    const url = document.getElementById('httpSmsBaseUrl')?.value || '';
+    if (!url) {
+        showToast('No Server URL is available yet.', 'warning');
+        return;
+    }
+    navigator.clipboard.writeText(url)
+        .then(() => showToast('Server URL copied.', 'success'))
+        .catch(() => {
+            const field = document.getElementById('httpSmsBaseUrl');
+            field?.focus();
+            field?.select();
+            showToast('Select and copy the Server URL manually.', 'warning');
+        });
+}
+
+function copyHttpSmsEncryptionKey() {
+    const key = document.getElementById('httpSmsEncryptionKey')?.value || '';
+    if (!key) {
+        showToast('No encryption key is available yet.', 'warning');
+        return;
+    }
+    navigator.clipboard.writeText(key)
+        .then(() => showToast('Encryption key copied.', 'success'))
+        .catch(() => {
+            const field = document.getElementById('httpSmsEncryptionKey');
+            field?.focus();
+            field?.select();
+            showToast('Select and copy the encryption key manually.', 'warning');
         });
 }
 

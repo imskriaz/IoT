@@ -120,12 +120,14 @@ describe('onboarding routes', () => {
         expect(html).toContain('data-onboard-scope="android-transport"');
         expect(html).toContain('function applyStep3FieldVisibility()');
         expect(html).toContain('return `android-${randomToken(8)}`;');
+        expect(html).toContain('return `httpsms-${randomToken(8)}`;');
         expect(html).toContain('return `esp-${randomToken(5)}-${randomToken(6)}-${randomToken(6)}`;');
-        expect(html).toContain('ESP devices use esp-, Android devices use android-.');
+        expect(html).toContain('ESP devices use esp-, Android devices use android-, httpSMS devices use httpsms-.');
         expect(html).toContain("if (scope === 'esp32') show = !bridgeDevice;");
         expect(html).not.toContain("if (scope === 'mqtt')");
         expect(html).toContain("if (scope === 'android-transport') show = wizardState.deviceType === 'android';");
         expect(html).toContain('Install the app, register this bridge, then scan the generated QR in the phone app.');
+        expect(html).toContain('In the httpSMS app, tap the API key field or QR icon, then scan this code.');
         expect(html).toContain('function registerAndroidBridge()');
         expect(html).toContain('const ANDROID_STEP_META');
         expect(html).toContain('const ANDROID_APP_DOWNLOADS');
@@ -134,12 +136,11 @@ describe('onboarding routes', () => {
         expect(html).toContain('Other APK variants');
         expect(html).toContain('<tr><td class="text-muted">Device ID</td><td><code>${escHtml(summary.device_id || \'\')}</code></td></tr>');
         expect(html).not.toContain('<tr><td class="text-muted">Connection</td>');
-        expect(html).not.toContain('<tr><td class="text-muted">Server URL</td>');
         expect(html).not.toContain('<tr><td class="text-muted">Topic Prefix</td>');
         expect(html).not.toContain('API Key Name</td>');
         expect(html).not.toContain('Register &amp; Generate App Setup');
-        expect(html).not.toContain('httpSMS');
-        expect(html).not.toContain('typeHttpSms');
+        expect(html).toContain('httpSMS');
+        expect(html).toContain('typeHttpSms');
         expect(html).not.toContain('Dashboard &gt; API Keys');
     });
 
@@ -391,6 +392,47 @@ describe('onboarding routes', () => {
                 120
             ])
         );
+    });
+
+    test('returns httpSMS provisioning with API-key QR and HTTPS setup metadata', async () => {
+        const db = makeDbMock({
+            run: jest.fn().mockResolvedValue({ lastID: 90, changes: 1 })
+        });
+        const router = require('../routes/onboarding');
+        const app = buildApiApp(router, db);
+
+        await withEnv({ ANDROID_BRIDGE_PUBLIC_URL: 'https://bridge.example.com/iot' }, async () => {
+            const res = await request(app)
+                .post('/api/onboard/register')
+                .send({
+                    device_id: 'httpsms-live-01',
+                    name: 'httpSMS Live',
+                    model: 'httpsms-bridge',
+                    bridge_type: 'httpsms'
+                });
+
+            expect(res.status).toBe(200);
+            expect(res.body.success).toBe(true);
+            expect(res.body.provisioning.type).toBe('httpsms');
+            expect(res.body.provisioning.qr_data_url).toMatch(/^data:image\/png;base64,/);
+            expect(res.body.provisioning.setup).toMatchObject({
+                base_url: 'https://bridge.example.com/iot',
+                api_base_url: 'https://bridge.example.com/iot/v1',
+                device_id: 'httpsms-live-01',
+                api_key: expect.stringMatching(/^pk_/),
+                encryption_key: expect.stringMatching(/^enc_/)
+            });
+            expect(res.body.provisioning.summary).toMatchObject({
+                transport_mode: 'http',
+                device_id: 'httpsms-live-01',
+                server_url: 'https://bridge.example.com/iot',
+                api_base_url: 'https://bridge.example.com/iot/v1',
+                encryption_key: expect.stringMatching(/^enc_/),
+                requires_https: true,
+                server_url_https: true,
+                api_key_name: 'httpSMS Live'
+            });
+        });
     });
 
     test('uses a public Android bridge URL when dashboard localhost is not device-routable', async () => {

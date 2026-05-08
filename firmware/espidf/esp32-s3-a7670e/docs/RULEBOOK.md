@@ -21,10 +21,15 @@ For the file-by-file execution roadmap, use [Runtime Implementation Plan](/d:/Pr
 - The device should only do work that requires physical access to the modem, Wi-Fi radio, GPIO, storage, sensors, or local safety decisions.
 - Dashboard runtime operations must go through MQTT.
 - USB/serial is for debug, provisioning, recovery, and controlled config only. It is not a normal runtime path.
+- Before adding or changing ESP32 firmware behavior for modem, Wi-Fi, GPIO, storage, battery, camera, display, GNSS, or other board hardware, check the matching vendor docs under `docs/vendor/` and record any constraint that affects the implementation or dashboard contract.
 - For any new or changed modem, Wi-Fi, SMS, USSD, or command sequence, validate
   the sequence directly in the serial monitor or terminal first. Only after the
   direct sequence is understood and behaves correctly should it be tested again
   through the real firmware and MQTT runtime path.
+- If serial or terminal validation is blocked because the device, port, SIM, network,
+  or required peripheral is unavailable, do not claim hardware proof. Report the
+  exact blocker, keep automated validation complete, and leave the exact command
+  sequence ready for the next hardware run.
 - Wi-Fi is the preferred internet path. Modem is the fallback path.
 - When dashboard behavior depends on firmware support or vendor constraints, verify the exact capability in firmware and `/docs` before exposing or assuming the runtime action.
 - The firmware must stay selective. If a feature can be delegated safely to the dashboard, do not add that workload to the device.

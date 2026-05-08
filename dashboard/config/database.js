@@ -185,6 +185,7 @@ async function initializeDatabase() {
                 batch_id TEXT,
                 sim_slot INTEGER,
                 external_id TEXT,
+                encrypted INTEGER DEFAULT 0,
                 modem_storage_index INTEGER,
                 firmware_storage_id INTEGER,
                 device_deleted_at DATETIME,
@@ -985,6 +986,7 @@ async function initializeDatabase() {
         try { await db.exec(`ALTER TABLE sms ADD COLUMN source TEXT DEFAULT 'device'`); } catch (e) {}
         try { await db.exec(`ALTER TABLE sms ADD COLUMN batch_id TEXT`); } catch (e) {}
         try { await db.exec(`ALTER TABLE sms ADD COLUMN external_id TEXT`); } catch (e) {}
+        try { await db.exec(`ALTER TABLE sms ADD COLUMN encrypted INTEGER DEFAULT 0`); } catch (e) {}
         try { await db.exec(`ALTER TABLE sms ADD COLUMN modem_storage_index INTEGER`); } catch (e) {}
         try { await db.exec(`ALTER TABLE sms ADD COLUMN firmware_storage_id INTEGER`); } catch (e) {}
         try { await db.exec(`ALTER TABLE sms ADD COLUMN device_deleted_at DATETIME`); } catch (e) {}
