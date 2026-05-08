@@ -1,0 +1,17 @@
+[Unit]
+Description=IoT Dashboard for device.atebd.com/server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/iot/dashboard
+EnvironmentFile=/opt/iot/dashboard/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+User=www-data
+Group=www-data
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

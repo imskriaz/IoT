@@ -6,6 +6,8 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <unistd.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -116,6 +118,43 @@ static esp_err_t storage_mgr_record_to_line(const storage_mgr_record_t *record, 
 static esp_err_t storage_mgr_build_pending_record(const storage_mgr_record_t *record, storage_mgr_pending_record_t *out_record);
 static esp_err_t storage_mgr_queue_pending_record_locked(const storage_mgr_pending_record_t *record);
 static bool storage_mgr_pop_pending_record_locked(storage_mgr_pending_record_t *out_record);
+static esp_err_t storage_mgr_normalize_relative_path(const char *input, char *output, size_t output_len);
+static esp_err_t storage_mgr_build_sd_path(const char *relative_path, char *full_path, size_t full_path_len);
+static esp_err_t storage_mgr_build_path_for_mount(
+    const char *mount_point,
+    const char *relative_path,
+    char *full_path,
+    size_t full_path_len
+);
+
+static esp_err_t storage_mgr_resolve_existing_path(
+    const char *relative_path,
+    const char *mount_point,
+    char *normalized_path,
+    size_t normalized_path_len,
+    char *full_path,
+    size_t full_path_len,
+    struct stat *out_stat
+) {
+    esp_err_t err = ESP_OK;
+
+    if (!relative_path || !normalized_path || normalized_path_len == 0U || !full_path || full_path_len == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = storage_mgr_normalize_relative_path(relative_path, normalized_path, normalized_path_len);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = storage_mgr_build_path_for_mount(mount_point, normalized_path, full_path, full_path_len);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (stat(full_path, out_stat) != 0) {
+        return errno == ENOENT ? ESP_ERR_NOT_FOUND : ESP_FAIL;
+    }
+    return ESP_OK;
+}
 
 static void *storage_mgr_alloc_zeroed(size_t size) {
     void *buffer = heap_caps_calloc(1U, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -173,13 +212,22 @@ static esp_err_t storage_mgr_normalize_relative_path(const char *input, char *ou
 }
 
 static esp_err_t storage_mgr_build_sd_path(const char *relative_path, char *full_path, size_t full_path_len) {
+    return storage_mgr_build_path_for_mount(s_mount_point, relative_path, full_path, full_path_len);
+}
+
+static esp_err_t storage_mgr_build_path_for_mount(
+    const char *mount_point,
+    const char *relative_path,
+    char *full_path,
+    size_t full_path_len
+) {
     int written = 0;
 
-    if (!relative_path || !full_path || full_path_len == 0U || s_mount_point[0] == '\0') {
+    if (!mount_point || mount_point[0] == '\0' || !relative_path || !full_path || full_path_len == 0U) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    written = snprintf(full_path, full_path_len, "%s/%s", s_mount_point, relative_path);
+    written = snprintf(full_path, full_path_len, "%s/%s", mount_point, relative_path);
     if (written < 0 || (size_t)written >= full_path_len) {
         return ESP_ERR_INVALID_SIZE;
     }
@@ -1195,6 +1243,227 @@ esp_err_t storage_mgr_build_sms_history_json(char *buffer, size_t buffer_len, ui
     buffer[written] = '\0';
     xSemaphoreGive(s_lock);
     return ESP_OK;
+}
+
+esp_err_t storage_mgr_list_files_json(const char *relative_path, uint16_t max_entries, char *buffer, size_t buffer_len) {
+    char mount_point[sizeof(s_mount_point)] = {0};
+    char normalized_path[STORAGE_SD_PATH_LEN] = {0};
+    char full_path[STORAGE_SD_PATH_LEN] = {0};
+    char escaped_path[STORAGE_SD_PATH_LEN * 2U] = {0};
+    struct stat path_stat = {0};
+    DIR *dir = NULL;
+    struct dirent *entry = NULL;
+    size_t written = 0U;
+    uint16_t count = 0U;
+    bool truncated = false;
+    const char *effective_path = (relative_path && relative_path[0] != '\0') ? relative_path : "logs";
+    esp_err_t err = ESP_OK;
+
+    if (!buffer || buffer_len == 0U || !s_lock) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    buffer[0] = '\0';
+
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    snprintf(mount_point, sizeof(mount_point), "%s", s_mount_point);
+    xSemaphoreGive(s_lock);
+
+    err = storage_mgr_resolve_existing_path(
+        effective_path,
+        mount_point,
+        normalized_path,
+        sizeof(normalized_path),
+        full_path,
+        sizeof(full_path),
+        &path_stat
+    );
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (!S_ISDIR(path_stat.st_mode)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    dir = opendir(full_path);
+    if (!dir) {
+        return ESP_FAIL;
+    }
+
+    storage_mgr_escape_json(normalized_path, escaped_path, sizeof(escaped_path));
+    written = (size_t)snprintf(buffer, buffer_len, "{\"path\":\"%s\",\"count\":0,\"truncated\":false,\"entries\":[", escaped_path);
+    if (written >= buffer_len) {
+        closedir(dir);
+        buffer[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        char child_relative[STORAGE_SD_PATH_LEN] = {0};
+        char child_full[STORAGE_SD_PATH_LEN] = {0};
+        char escaped_name[STORAGE_SD_PATH_LEN * 2U] = {0};
+        struct stat child_stat = {0};
+        int append_result = 0;
+
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        if (max_entries > 0U && count >= max_entries) {
+            truncated = true;
+            break;
+        }
+        if (snprintf(child_relative, sizeof(child_relative), "%s/%s", normalized_path, entry->d_name) >= (int)sizeof(child_relative)) {
+            continue;
+        }
+        if (storage_mgr_build_path_for_mount(mount_point, child_relative, child_full, sizeof(child_full)) != ESP_OK) {
+            continue;
+        }
+        if (stat(child_full, &child_stat) != 0) {
+            continue;
+        }
+
+        storage_mgr_escape_json(entry->d_name, escaped_name, sizeof(escaped_name));
+        append_result = snprintf(
+            buffer + written,
+            buffer_len - written,
+            "%s{\"name\":\"%s\",\"type\":\"%s\",\"size\":%" PRIu64 "}",
+            count > 0U ? "," : "",
+            escaped_name,
+            S_ISDIR(child_stat.st_mode) ? "directory" : "file",
+            (uint64_t)child_stat.st_size
+        );
+        if (append_result < 0 || (size_t)append_result >= (buffer_len - written)) {
+            closedir(dir);
+            buffer[0] = '\0';
+            return ESP_ERR_INVALID_SIZE;
+        }
+        written += (size_t)append_result;
+        count++;
+    }
+
+    closedir(dir);
+    {
+        const size_t old_header_len = written;
+        int header_result = snprintf(
+            buffer,
+            buffer_len,
+            "{\"path\":\"%s\",\"count\":%u,\"truncated\":%s,\"entries\":[",
+            escaped_path,
+            (unsigned)count,
+            truncated ? "true" : "false"
+        );
+        if (header_result < 0 || (size_t)header_result >= buffer_len) {
+            buffer[0] = '\0';
+            return ESP_ERR_INVALID_SIZE;
+        }
+        if ((size_t)header_result != old_header_len) {
+            memmove(
+                buffer + (size_t)header_result,
+                buffer + old_header_len,
+                written - old_header_len + 1U
+            );
+        }
+        written = (size_t)header_result + (written - old_header_len);
+    }
+    if (written + 3U > buffer_len) {
+        buffer[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+    buffer[written++] = ']';
+    buffer[written++] = '}';
+    buffer[written] = '\0';
+    return ESP_OK;
+}
+
+esp_err_t storage_mgr_build_file_meta_json(const char *relative_path, char *buffer, size_t buffer_len) {
+    char mount_point[sizeof(s_mount_point)] = {0};
+    char normalized_path[STORAGE_SD_PATH_LEN] = {0};
+    char full_path[STORAGE_SD_PATH_LEN] = {0};
+    char escaped_path[STORAGE_SD_PATH_LEN * 2U] = {0};
+    struct stat path_stat = {0};
+    esp_err_t err = ESP_OK;
+
+    if (!relative_path || relative_path[0] == '\0' || !buffer || buffer_len == 0U || !s_lock) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    buffer[0] = '\0';
+
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    snprintf(mount_point, sizeof(mount_point), "%s", s_mount_point);
+    xSemaphoreGive(s_lock);
+
+    err = storage_mgr_resolve_existing_path(
+        relative_path,
+        mount_point,
+        normalized_path,
+        sizeof(normalized_path),
+        full_path,
+        sizeof(full_path),
+        &path_stat
+    );
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    storage_mgr_escape_json(normalized_path, escaped_path, sizeof(escaped_path));
+    if (snprintf(
+            buffer,
+            buffer_len,
+            "{\"path\":\"%s\",\"type\":\"%s\",\"size\":%" PRIu64 ",\"mtime\":%" PRIu64 "}",
+            escaped_path,
+            S_ISDIR(path_stat.st_mode) ? "directory" : "file",
+            (uint64_t)path_stat.st_size,
+            (uint64_t)path_stat.st_mtime
+        ) >= (int)buffer_len) {
+        buffer[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return ESP_OK;
+}
+
+esp_err_t storage_mgr_delete_file(const char *relative_path) {
+    char mount_point[sizeof(s_mount_point)] = {0};
+    char normalized_path[STORAGE_SD_PATH_LEN] = {0};
+    char full_path[STORAGE_SD_PATH_LEN] = {0};
+    struct stat path_stat = {0};
+    esp_err_t err = ESP_OK;
+
+    if (!relative_path || relative_path[0] == '\0' || !s_lock) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    snprintf(mount_point, sizeof(mount_point), "%s", s_mount_point);
+    xSemaphoreGive(s_lock);
+
+    err = storage_mgr_resolve_existing_path(
+        relative_path,
+        mount_point,
+        normalized_path,
+        sizeof(normalized_path),
+        full_path,
+        sizeof(full_path),
+        &path_stat
+    );
+    if (err == ESP_OK) {
+        if (S_ISDIR(path_stat.st_mode)) {
+            err = rmdir(full_path) == 0 ? ESP_OK : (errno == ENOTEMPTY ? ESP_ERR_INVALID_STATE : ESP_FAIL);
+        } else {
+            err = unlink(full_path) == 0 ? ESP_OK : ESP_FAIL;
+        }
+    }
+    if (err == ESP_OK) {
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+            s_usage_dirty = true;
+            xSemaphoreGive(s_lock);
+        }
+    }
+    return err;
 }
 
 void storage_mgr_get_status(storage_mgr_status_t *out_status) {

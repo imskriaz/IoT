@@ -25,4 +25,7 @@ esp_err_t storage_mgr_init(void);
 esp_err_t storage_mgr_append_sms(const unified_sms_payload_t *payload);
 esp_err_t storage_mgr_append_call(const unified_call_payload_t *payload);
 esp_err_t storage_mgr_build_sms_history_json(char *buffer, size_t buffer_len, uint16_t max_entries);
+esp_err_t storage_mgr_list_files_json(const char *relative_path, uint16_t max_entries, char *buffer, size_t buffer_len);
+esp_err_t storage_mgr_build_file_meta_json(const char *relative_path, char *buffer, size_t buffer_len);
+esp_err_t storage_mgr_delete_file(const char *relative_path);
 void storage_mgr_get_status(storage_mgr_status_t *out_status);

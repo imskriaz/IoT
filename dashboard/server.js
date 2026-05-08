@@ -54,10 +54,19 @@ const backgroundTimers = [];
 const activeSockets = new Set();
 let isShuttingDown = false;
 const statusWatchReadyDevices = new Set();
+function socketCorsOrigin() {
+    const configured = String(process.env.SOCKET_IO_CORS_ORIGIN || process.env.CORS_ORIGIN || '').trim();
+    if (!configured) {
+        return false;
+    }
+    const origins = configured.split(',').map(origin => origin.trim()).filter(Boolean);
+    return origins.length > 1 ? origins : origins[0];
+}
+
 const io = socketIo(server, {
     cors: {
-        // In production set CORS_ORIGIN to the exact dashboard URL; leave unset for same-origin only
-        origin: process.env.CORS_ORIGIN || false,
+        // In production set SOCKET_IO_CORS_ORIGIN/CORS_ORIGIN to the exact dashboard/VPS URL(s); leave unset for same-origin only
+        origin: socketCorsOrigin(),
         methods: ["GET", "POST"],
         credentials: true
     },

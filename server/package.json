@@ -1,0 +1,8 @@
+{
+  "name": "iot-vps-server-tools",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "share": "node share-tunnel.js"
+  }
+}

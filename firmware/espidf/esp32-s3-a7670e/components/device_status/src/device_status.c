@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 #include "battery_monitor.h"
 #include "board_bsp.h"
 #include "config_mgr.h"
@@ -23,6 +26,45 @@
 
 static bool s_ready;
 static char *s_status_log_buffer;
+static SemaphoreHandle_t s_json_lock;
+
+typedef struct {
+    char device_id[UNIFIED_DEVICE_ID_LEN * 2U];
+    char wifi_reason[UNIFIED_TEXT_MEDIUM_LEN * 2U];
+    char wifi_scan_summary[UNIFIED_TEXT_LONG_LEN * 2U];
+    char wifi_ssid[UNIFIED_WIFI_SSID_LEN * 2U];
+    char wifi_ip[UNIFIED_IPV4_ADDR_LEN * 2U];
+    char wifi_security[48];
+    char storage_total[24];
+    char storage_used[24];
+    char storage_free[24];
+    char storage_media_label[48];
+    char storage_media_type[32];
+    char storage_media_bus[32];
+    char health_reason[UNIFIED_TEXT_MEDIUM_LEN * 2U];
+    char modem_operator[UNIFIED_TEXT_SHORT_LEN * 2U];
+    char modem_network_type[48];
+    char modem_ip[UNIFIED_IPV4_ADDR_LEN * 2U];
+    char modem_data_ip[UNIFIED_IPV4_ADDR_LEN * 2U];
+    char imei[UNIFIED_TEXT_SHORT_LEN * 2U];
+    char subscriber[UNIFIED_TEXT_SHORT_LEN * 2U];
+    char sms_last_detail[UNIFIED_TEXT_MEDIUM_LEN * 2U];
+    char sms_last_destination[UNIFIED_TEXT_SHORT_LEN * 2U];
+    char reboot_reason[UNIFIED_TEXT_SHORT_LEN * 2U];
+    char min_stack_task_name[DEVICE_STATUS_TASK_NAME_LEN * 2U];
+} device_status_json_scratch_t;
+
+static device_status_json_scratch_t *s_json_scratch;
+
+static void *device_status_alloc_zeroed(size_t size) {
+    void *buffer = heap_caps_calloc(1U, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    if (!buffer) {
+        buffer = heap_caps_calloc(1U, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+
+    return buffer;
+}
 
 static const char *device_status_bool_json(bool value) {
     return value ? "true" : "false";
@@ -150,6 +192,13 @@ static void device_status_u64_to_dec(uint64_t value, char *output, size_t output
 }
 
 esp_err_t device_status_init(void) {
+    if (!s_json_lock) {
+        s_json_lock = xSemaphoreCreateMutex();
+        if (!s_json_lock) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     if (!s_status_log_buffer) {
         s_status_log_buffer = heap_caps_calloc(
             DEVICE_STATUS_JSON_BUFFER_LEN,
@@ -164,6 +213,13 @@ esp_err_t device_status_init(void) {
             );
         }
         if (!s_status_log_buffer) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    if (!s_json_scratch) {
+        s_json_scratch = device_status_alloc_zeroed(sizeof(*s_json_scratch));
+        if (!s_json_scratch) {
             return ESP_ERR_NO_MEM;
         }
     }
@@ -344,29 +400,9 @@ esp_err_t device_status_build_json_from_snapshot(
     char *buffer,
     size_t buffer_len
 ) {
-    char device_id[UNIFIED_DEVICE_ID_LEN * 2U];
-    char wifi_reason[UNIFIED_TEXT_MEDIUM_LEN * 2U];
-    char wifi_scan_summary[UNIFIED_TEXT_LONG_LEN * 2U];
-    char wifi_ssid[UNIFIED_WIFI_SSID_LEN * 2U];
-    char wifi_ip[UNIFIED_IPV4_ADDR_LEN * 2U];
-    char wifi_security[48];
-    char storage_total[24];
-    char storage_used[24];
-    char storage_free[24];
-    char storage_media_label[48];
-    char storage_media_type[32];
-    char storage_media_bus[32];
-    char health_reason[UNIFIED_TEXT_MEDIUM_LEN * 2U];
-    char modem_operator[UNIFIED_TEXT_SHORT_LEN * 2U];
-    char modem_network_type[48];
-    char modem_ip[UNIFIED_IPV4_ADDR_LEN * 2U];
-    char modem_data_ip[UNIFIED_IPV4_ADDR_LEN * 2U];
-    char imei[UNIFIED_TEXT_SHORT_LEN * 2U];
-    char subscriber[UNIFIED_TEXT_SHORT_LEN * 2U];
-    char sms_last_detail[UNIFIED_TEXT_MEDIUM_LEN * 2U];
-    char sms_last_destination[UNIFIED_TEXT_SHORT_LEN * 2U];
-    char reboot_reason[UNIFIED_TEXT_SHORT_LEN * 2U];
-    char min_stack_task_name[DEVICE_STATUS_TASK_NAME_LEN * 2U];
+    device_status_json_scratch_t *scratch = NULL;
+    bool scratch_locked = false;
+    bool scratch_owned = false;
     size_t used = 0U;
     esp_err_t err = ESP_OK;
 
@@ -378,48 +414,60 @@ esp_err_t device_status_build_json_from_snapshot(
     }
     buffer[0] = '\0';
 
-    device_status_escape_json(snapshot->device_id, device_id, sizeof(device_id));
+    if (s_json_scratch && s_json_lock && xSemaphoreTake(s_json_lock, pdMS_TO_TICKS(500)) == pdTRUE) {
+        scratch = s_json_scratch;
+        scratch_locked = true;
+        memset(scratch, 0, sizeof(*scratch));
+    } else {
+        scratch = device_status_alloc_zeroed(sizeof(*scratch));
+        scratch_owned = true;
+    }
+    if (!scratch) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    device_status_escape_json(snapshot->device_id, scratch->device_id, sizeof(scratch->device_id));
     device_status_escape_json(
         snapshot->wifi_last_disconnect_reason_text,
-        wifi_reason,
-        sizeof(wifi_reason)
+        scratch->wifi_reason,
+        sizeof(scratch->wifi_reason)
     );
-    device_status_escape_json(snapshot->wifi_last_scan_summary, wifi_scan_summary, sizeof(wifi_scan_summary));
-    device_status_escape_json(snapshot->wifi_ssid, wifi_ssid, sizeof(wifi_ssid));
-    device_status_escape_json(snapshot->wifi_ip_address, wifi_ip, sizeof(wifi_ip));
-    device_status_escape_json(snapshot->wifi_security, wifi_security, sizeof(wifi_security));
-    device_status_escape_json(snapshot->storage_media_label, storage_media_label, sizeof(storage_media_label));
-    device_status_escape_json(snapshot->storage_media_type, storage_media_type, sizeof(storage_media_type));
-    device_status_escape_json(snapshot->storage_media_bus, storage_media_bus, sizeof(storage_media_bus));
-    device_status_escape_json(snapshot->health_last_reason, health_reason, sizeof(health_reason));
-    device_status_escape_json(snapshot->modem_operator, modem_operator, sizeof(modem_operator));
-    device_status_escape_json(snapshot->modem_network_type, modem_network_type, sizeof(modem_network_type));
-    device_status_escape_json(snapshot->modem_ip_address, modem_ip, sizeof(modem_ip));
-    device_status_escape_json(snapshot->modem_data_ip, modem_data_ip, sizeof(modem_data_ip));
-    device_status_escape_json(snapshot->modem_imei, imei, sizeof(imei));
-    device_status_escape_json(snapshot->modem_subscriber_number, subscriber, sizeof(subscriber));
-    device_status_escape_json(snapshot->sms_last_detail, sms_last_detail, sizeof(sms_last_detail));
-    device_status_escape_json(snapshot->sms_last_destination, sms_last_destination, sizeof(sms_last_destination));
-    device_status_escape_json(snapshot->reboot_reason, reboot_reason, sizeof(reboot_reason));
-    device_status_escape_json(snapshot->min_stack_task_name, min_stack_task_name, sizeof(min_stack_task_name));
-    device_status_u64_to_dec(snapshot->storage_total_bytes, storage_total, sizeof(storage_total));
-    device_status_u64_to_dec(snapshot->storage_used_bytes, storage_used, sizeof(storage_used));
-    device_status_u64_to_dec(snapshot->storage_free_bytes, storage_free, sizeof(storage_free));
+    device_status_escape_json(snapshot->wifi_last_scan_summary, scratch->wifi_scan_summary, sizeof(scratch->wifi_scan_summary));
+    device_status_escape_json(snapshot->wifi_ssid, scratch->wifi_ssid, sizeof(scratch->wifi_ssid));
+    device_status_escape_json(snapshot->wifi_ip_address, scratch->wifi_ip, sizeof(scratch->wifi_ip));
+    device_status_escape_json(snapshot->wifi_security, scratch->wifi_security, sizeof(scratch->wifi_security));
+    device_status_escape_json(snapshot->storage_media_label, scratch->storage_media_label, sizeof(scratch->storage_media_label));
+    device_status_escape_json(snapshot->storage_media_type, scratch->storage_media_type, sizeof(scratch->storage_media_type));
+    device_status_escape_json(snapshot->storage_media_bus, scratch->storage_media_bus, sizeof(scratch->storage_media_bus));
+    device_status_escape_json(snapshot->health_last_reason, scratch->health_reason, sizeof(scratch->health_reason));
+    device_status_escape_json(snapshot->modem_operator, scratch->modem_operator, sizeof(scratch->modem_operator));
+    device_status_escape_json(snapshot->modem_network_type, scratch->modem_network_type, sizeof(scratch->modem_network_type));
+    device_status_escape_json(snapshot->modem_ip_address, scratch->modem_ip, sizeof(scratch->modem_ip));
+    device_status_escape_json(snapshot->modem_data_ip, scratch->modem_data_ip, sizeof(scratch->modem_data_ip));
+    device_status_escape_json(snapshot->modem_imei, scratch->imei, sizeof(scratch->imei));
+    device_status_escape_json(snapshot->modem_subscriber_number, scratch->subscriber, sizeof(scratch->subscriber));
+    device_status_escape_json(snapshot->sms_last_detail, scratch->sms_last_detail, sizeof(scratch->sms_last_detail));
+    device_status_escape_json(snapshot->sms_last_destination, scratch->sms_last_destination, sizeof(scratch->sms_last_destination));
+    device_status_escape_json(snapshot->reboot_reason, scratch->reboot_reason, sizeof(scratch->reboot_reason));
+    device_status_escape_json(snapshot->min_stack_task_name, scratch->min_stack_task_name, sizeof(scratch->min_stack_task_name));
+    device_status_u64_to_dec(snapshot->storage_total_bytes, scratch->storage_total, sizeof(scratch->storage_total));
+    device_status_u64_to_dec(snapshot->storage_used_bytes, scratch->storage_used, sizeof(scratch->storage_used));
+    device_status_u64_to_dec(snapshot->storage_free_bytes, scratch->storage_free, sizeof(scratch->storage_free));
 
     err = device_status_append_json(buffer, buffer_len, &used, "{");
     if (err != ESP_OK) {
-        return err;
+        goto cleanup;
     }
     err = device_status_append_json(
         buffer,
         buffer_len,
         &used,
         "\"type\":\"device_status\",\"device_id\":\"%s\",\"active_path\":\"%s\"",
-        device_id,
+        scratch->device_id,
         snapshot->active_path
     );
     if (err != ESP_OK) {
-        return err;
+        goto cleanup;
     }
     err = device_status_append_json(
         buffer,
@@ -438,7 +486,7 @@ esp_err_t device_status_build_json_from_snapshot(
         snapshot->free_psram_bytes
     );
     if (err != ESP_OK) {
-        return err;
+        goto cleanup;
     }
     err = device_status_append_json(
         buffer,
@@ -460,17 +508,17 @@ esp_err_t device_status_build_json_from_snapshot(
         snapshot->wifi_connect_attempt_count,
         snapshot->wifi_reconnect_count,
         snapshot->wifi_last_disconnect_reason,
-        wifi_reason,
+        scratch->wifi_reason,
         device_status_bool_json(snapshot->wifi_last_scan_target_visible),
         snapshot->wifi_last_scan_visible_count,
         snapshot->wifi_last_scan_elapsed_ms,
-        wifi_scan_summary,
-        wifi_ssid,
-        wifi_ip,
-        wifi_security
+        scratch->wifi_scan_summary,
+        scratch->wifi_ssid,
+        scratch->wifi_ip,
+        scratch->wifi_security
     );
     if (err != ESP_OK) {
-        return err;
+        goto cleanup;
     }
     err = device_status_append_json(
         buffer,
@@ -492,15 +540,15 @@ esp_err_t device_status_build_json_from_snapshot(
         snapshot->storage_mount_failures,
         snapshot->storage_sd_write_failures,
         snapshot->storage_sd_flush_count,
-        storage_total,
-        storage_used,
-        storage_free,
-        storage_media_label,
-        storage_media_type,
-        storage_media_bus
+        scratch->storage_total,
+        scratch->storage_used,
+        scratch->storage_free,
+        scratch->storage_media_label,
+        scratch->storage_media_type,
+        scratch->storage_media_bus
     );
     if (err != ESP_OK) {
-        return err;
+        goto cleanup;
     }
     err = device_status_append_json(
         buffer,
@@ -523,7 +571,7 @@ esp_err_t device_status_build_json_from_snapshot(
         snapshot->mqtt_action_result_failures
     );
     if (err != ESP_OK) {
-        return err;
+        goto cleanup;
     }
     err = device_status_append_json(
         buffer,
@@ -542,16 +590,16 @@ esp_err_t device_status_build_json_from_snapshot(
         (uint32_t)snapshot->stack_tracked_task_count,
         (uint32_t)snapshot->low_stack_task_count,
         snapshot->min_stack_high_water_bytes,
-        min_stack_task_name,
+        scratch->min_stack_task_name,
         device_status_bool_json(snapshot->health_degraded),
         (uint32_t)snapshot->health_module_count,
         (uint32_t)snapshot->degraded_module_count,
         (uint32_t)snapshot->failed_module_count,
         (uint32_t)snapshot->stub_module_count,
-        health_reason
+        scratch->health_reason
     );
     if (err != ESP_OK) {
-        return err;
+        goto cleanup;
     }
     err = device_status_append_json(
         buffer,
@@ -567,15 +615,15 @@ esp_err_t device_status_build_json_from_snapshot(
         device_status_bool_json(snapshot->data_mode_enabled),
         device_status_bool_json(snapshot->modem_ip_bearer_ready),
         (int)snapshot->modem_signal,
-        modem_operator,
-        modem_operator,
-        modem_network_type,
-        modem_network_type,
-        modem_ip,
-        modem_data_ip
+        scratch->modem_operator,
+        scratch->modem_operator,
+        scratch->modem_network_type,
+        scratch->modem_network_type,
+        scratch->modem_ip,
+        scratch->modem_data_ip
     );
     if (err != ESP_OK) {
-        return err;
+        goto cleanup;
     }
     err = device_status_append_json(
         buffer,
@@ -589,28 +637,28 @@ esp_err_t device_status_build_json_from_snapshot(
         snapshot->sms_sent_count,
         snapshot->sms_received_count,
         snapshot->sms_failure_count,
-        sms_last_detail
+        scratch->sms_last_detail
     );
     if (err != ESP_OK) {
-        return err;
+        goto cleanup;
     }
 
     if (snapshot->modem_imei[0] != '\0') {
-        err = device_status_append_json(buffer, buffer_len, &used, ",\"imei\":\"%s\"", imei);
+        err = device_status_append_json(buffer, buffer_len, &used, ",\"imei\":\"%s\"", scratch->imei);
         if (err != ESP_OK) {
-            return err;
+            goto cleanup;
         }
     }
     if (snapshot->modem_subscriber_number[0] != '\0') {
-        err = device_status_append_json(buffer, buffer_len, &used, ",\"modem_subscriber_number\":\"%s\"", subscriber);
+        err = device_status_append_json(buffer, buffer_len, &used, ",\"modem_subscriber_number\":\"%s\"", scratch->subscriber);
         if (err != ESP_OK) {
-            return err;
+            goto cleanup;
         }
     }
     if (snapshot->battery_percent >= 0 && snapshot->battery_percent <= 100) {
         err = device_status_append_json(buffer, buffer_len, &used, ",\"battery\":%d", (int)snapshot->battery_percent);
         if (err != ESP_OK) {
-            return err;
+            goto cleanup;
         }
     }
     if (snapshot->charging_state == 0 || snapshot->charging_state == 1) {
@@ -622,13 +670,13 @@ esp_err_t device_status_build_json_from_snapshot(
             device_status_bool_json(snapshot->charging_state == 1)
         );
         if (err != ESP_OK) {
-            return err;
+            goto cleanup;
         }
     }
     if (snapshot->sms_last_destination[0] != '\0') {
-        err = device_status_append_json(buffer, buffer_len, &used, ",\"sms_last_destination\":\"%s\"", sms_last_destination);
+        err = device_status_append_json(buffer, buffer_len, &used, ",\"sms_last_destination\":\"%s\"", scratch->sms_last_destination);
         if (err != ESP_OK) {
-            return err;
+            goto cleanup;
         }
     }
     /* The main firmware publishes gauge-backed battery voltage here. Only
@@ -636,28 +684,34 @@ esp_err_t device_status_build_json_from_snapshot(
     if (snapshot->voltage_mv >= 3000 && snapshot->voltage_mv <= 5000) {
         err = device_status_append_json(buffer, buffer_len, &used, ",\"voltage_mV\":%" PRId32, snapshot->voltage_mv);
         if (err != ESP_OK) {
-            return err;
+            goto cleanup;
         }
     }
     if (snapshot->temperature_c > -100 && snapshot->temperature_c < 200) {
         err = device_status_append_json(buffer, buffer_len, &used, ",\"temperature\":%" PRId32, snapshot->temperature_c);
         if (err != ESP_OK) {
-            return err;
+            goto cleanup;
         }
     }
     if (snapshot->reboot_reason[0] != '\0') {
-        err = device_status_append_json(buffer, buffer_len, &used, ",\"reboot_reason\":\"%s\"", reboot_reason);
+        err = device_status_append_json(buffer, buffer_len, &used, ",\"reboot_reason\":\"%s\"", scratch->reboot_reason);
         if (err != ESP_OK) {
-            return err;
+            goto cleanup;
         }
     }
 
     err = device_status_append_json(buffer, buffer_len, &used, "}");
     if (err != ESP_OK) {
-        return err;
+        goto cleanup;
     }
 
-    return ESP_OK;
+cleanup:
+    if (scratch_locked) {
+        xSemaphoreGive(s_json_lock);
+    } else if (scratch_owned) {
+        heap_caps_free(scratch);
+    }
+    return err;
 }
 
 esp_err_t device_status_build_json(char *buffer, size_t buffer_len) {

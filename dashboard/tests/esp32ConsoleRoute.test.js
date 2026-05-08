@@ -229,7 +229,7 @@ describe('ESP32 MQTT console route', () => {
         }
     });
 
-    test('keeps non-dispatched firmware aliases limited to the known pending lanes', () => {
+    test('keeps every parsed firmware alias dispatched through the API bridge', () => {
         const repoRoot = path.join(__dirname, '..', '..');
         const firmwareRoot = path.join(repoRoot, 'firmware', 'espidf', 'esp32-s3-a7670e', 'components');
         const automationBridge = fs.readFileSync(
@@ -248,29 +248,56 @@ describe('ESP32 MQTT console route', () => {
             Array.from(apiBridge.matchAll(/case\s+(UNIFIED_ACTION_CMD_[A-Z0-9_]+):/g))
                 .map((match) => match[1])
         );
-        const pendingAliases = new Set([
-            'gpio_pulse',
-            'sensor_read',
-            'file_list',
-            'file_read_meta',
-            'file_delete',
-            'file_export',
-            'start_camera',
-            'stop_camera',
-            'take_snapshot',
-            'start_stream',
-            'stop_stream',
-            'card_scan_start',
-            'card_scan_stop',
-            'card_read',
-            'card_write'
-        ]);
         const missingAliases = Array.from(aliasMap.entries())
             .filter(([, actionEnum]) => !dispatchedEnums.has(actionEnum))
             .map(([alias]) => alias)
             .sort();
 
-        expect(missingAliases).toEqual(Array.from(pendingAliases).sort());
+        expect(missingAliases).toEqual([]);
+    });
+
+    test('new firmware aliases are split between real file-gpio handlers and explicit placeholder lanes', () => {
+        const repoRoot = path.join(__dirname, '..', '..');
+        const firmwareRoot = path.join(repoRoot, 'firmware', 'espidf', 'esp32-s3-a7670e', 'components');
+        const apiBridge = fs.readFileSync(
+            path.join(firmwareRoot, 'api_bridge', 'src', 'api_bridge.c'),
+            'utf8'
+        );
+
+        expect(apiBridge).toContain('static unified_action_response_t api_bridge_execute_gpio_pulse(');
+        expect(apiBridge).toContain('static unified_action_response_t api_bridge_execute_file_list(');
+        expect(apiBridge).toContain('static unified_action_response_t api_bridge_execute_file_read_meta(');
+        expect(apiBridge).toContain('static unified_action_response_t api_bridge_execute_file_delete(');
+        expect(apiBridge).toContain('request->max_entries > CONFIG_UNIFIED_API_BRIDGE_MAX_LIST_ENTRIES');
+        expect(apiBridge).toContain(': CONFIG_UNIFIED_API_BRIDGE_MAX_LIST_ENTRIES;');
+        expect(apiBridge).toContain('return api_bridge_execute_placeholder_lane(action, payload, payload_len, "sensor", "sensor_lane_not_implemented")');
+        expect(apiBridge).toContain('return api_bridge_execute_placeholder_lane(action, payload, payload_len, "camera", "camera_lane_not_installed")');
+        expect(apiBridge).toContain('return api_bridge_execute_placeholder_lane(action, payload, payload_len, "card", "card_lane_not_installed")');
+    });
+
+    test('storage manager exposes file list, meta, and delete helpers for the new firmware handlers', () => {
+        const repoRoot = path.join(__dirname, '..', '..');
+        const firmwareRoot = path.join(repoRoot, 'firmware', 'espidf', 'esp32-s3-a7670e', 'components');
+        const storageHeader = fs.readFileSync(
+            path.join(firmwareRoot, 'storage_mgr', 'include', 'storage_mgr.h'),
+            'utf8'
+        );
+        const storageSource = fs.readFileSync(
+            path.join(firmwareRoot, 'storage_mgr', 'src', 'storage_mgr.c'),
+            'utf8'
+        );
+
+        expect(storageHeader).toContain('esp_err_t storage_mgr_list_files_json(');
+        expect(storageHeader).toContain('esp_err_t storage_mgr_build_file_meta_json(');
+        expect(storageHeader).toContain('esp_err_t storage_mgr_delete_file(');
+        expect(storageSource).toContain('static esp_err_t storage_mgr_resolve_existing_path(');
+        expect(storageSource).toContain('static esp_err_t storage_mgr_build_path_for_mount(');
+        expect(storageSource).toContain('esp_err_t storage_mgr_list_files_json(');
+        expect(storageSource).toContain('esp_err_t storage_mgr_build_file_meta_json(');
+        expect(storageSource).toContain('esp_err_t storage_mgr_delete_file(');
+        expect(storageSource).toContain('\\"count\\":%u');
+        expect(storageSource).toContain('\\"truncated\\":%s');
+        expect(storageSource).toContain('\\"entries\\":[');
     });
 
     test('persists and reads compact console events from the merged log', async () => {

@@ -198,6 +198,7 @@ describe('auth middleware', () => {
                             id: 12,
                             name: 'Swagger test key',
                             scopes: 'read',
+                            device_ids: JSON.stringify(['android-http-01']),
                             username: 'operator',
                             role: 'operator',
                             uid: 5
@@ -222,7 +223,8 @@ describe('auth middleware', () => {
         expect(req.apiKey).toEqual(expect.objectContaining({
             id: 12,
             name: 'Swagger test key',
-            scopes: 'read'
+            scopes: 'read',
+            device_ids: JSON.stringify(['android-http-01'])
         }));
         expect(res.statusCode).toBe(200);
     });

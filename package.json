@@ -7,6 +7,8 @@
     "start":     "cd dashboard && node server.js",
     "dev":       "cd dashboard && npx nodemon server.js",
     "test":      "cd dashboard && npm test",
+    "server": "node server/share-tunnel.js",
+    "share:vps": "node server/share-tunnel.js",
     "android:build": "cd firmware/android && gradlew.bat :app:assembleRelease",
     "android:install": "powershell -ExecutionPolicy Bypass -File firmware/android/install-apk.ps1",
     "android:devices": "adb devices -l"

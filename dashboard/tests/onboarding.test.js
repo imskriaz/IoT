@@ -383,6 +383,29 @@ describe('onboarding routes', () => {
         );
     });
 
+    test('uses a public Android bridge URL when dashboard localhost is not device-routable', async () => {
+        const db = makeDbMock({
+            run: jest.fn().mockResolvedValue({ lastID: 89, changes: 1 })
+        });
+        const router = require('../routes/onboarding');
+        const app = buildApiApp(router, db);
+
+        await withEnv({ ANDROID_BRIDGE_PUBLIC_URL: 'https://bridge.example.com/iot/' }, async () => {
+            const res = await request(app)
+                .post('/api/onboard/register')
+                .set('Host', 'localhost:3001')
+                .send({
+                    device_id: 'android-public-01',
+                    name: 'Android Public',
+                    model: 'android-sms-bridge',
+                    bridge_type: 'android'
+                });
+
+            expect(res.status).toBe(200);
+            expect(res.body.provisioning.summary.server_url).toBe('https://bridge.example.com/iot');
+        });
+    });
+
     test('rejects Android onboarding IDs without android prefix', async () => {
         const db = makeDbMock();
         const router = require('../routes/onboarding');

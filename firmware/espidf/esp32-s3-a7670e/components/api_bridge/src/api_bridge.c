@@ -39,6 +39,9 @@ enum {
     API_BRIDGE_OTA_RESTART_DELAY_MS = 1500,
     API_BRIDGE_MODEM_RESTART_DEFAULT_TIMEOUT_MS = 45000,
     API_BRIDGE_GPIO_DIAGNOSTIC_PIN = 2,
+    API_BRIDGE_GPIO_PULSE_MIN_MS = 50,
+    API_BRIDGE_GPIO_PULSE_DEFAULT_MS = 500,
+    API_BRIDGE_GPIO_PULSE_MAX_MS = 10000,
     API_BRIDGE_MODEM_AT_RESPONSE_LEN = 768,
     API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN = 160,
 };
@@ -61,6 +64,14 @@ typedef struct {
     char escaped_ssid[(sizeof(((wifi_mgr_scan_result_t *)0)->ssid) * 2U)];
     char escaped_auth[32];
 } api_bridge_wifi_scan_scratch_t;
+
+typedef struct {
+    char modem_response[API_BRIDGE_MODEM_AT_RESPONSE_LEN];
+    char escaped_line[UNIFIED_TEXT_LONG_LEN * 2U];
+    char escaped_response[API_BRIDGE_MODEM_AT_RESPONSE_LEN * 2U];
+    char truncated_response[API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN + 16U];
+    char escaped_truncated_response[(API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN + 16U) * 2U];
+} api_bridge_modem_at_scratch_t;
 
 static SemaphoreHandle_t s_lock;
 static SemaphoreHandle_t s_wifi_scan_lock;
@@ -93,6 +104,16 @@ static void api_bridge_free_record_snapshot(api_bridge_action_record_t *record) 
     if (record) {
         heap_caps_free(record);
     }
+}
+
+static void *api_bridge_alloc_zeroed(size_t size) {
+    void *buffer = heap_caps_calloc(1U, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    if (!buffer) {
+        buffer = heap_caps_calloc(1U, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+
+    return buffer;
 }
 
 static void api_bridge_set_health_locked(const char *detail) {
@@ -326,9 +347,8 @@ static unified_action_response_t api_bridge_execute_modem_at(
     char *payload,
     size_t payload_len
 ) {
-    char modem_response[API_BRIDGE_MODEM_AT_RESPONSE_LEN] = {0};
-    char escaped_line[UNIFIED_TEXT_LONG_LEN * 2U] = {0};
-    char escaped_response[sizeof(modem_response) * 2U] = {0};
+    api_bridge_modem_at_scratch_t *scratch = NULL;
+    unified_action_response_t response = {0};
     esp_err_t err = ESP_OK;
     const uint32_t timeout_ms = action && action->timeout_ms > 0U ? action->timeout_ms : 10000U;
 
@@ -342,60 +362,77 @@ static unified_action_response_t api_bridge_execute_modem_at(
         );
     }
 
-    err = modem_a7670_command(request->raw_line, modem_response, sizeof(modem_response), timeout_ms);
-    api_bridge_escape_json(request->raw_line, escaped_line, sizeof(escaped_line));
-    api_bridge_escape_json(modem_response, escaped_response, sizeof(escaped_response));
+    scratch = api_bridge_alloc_zeroed(sizeof(*scratch));
+    if (!scratch) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            ESP_ERR_NO_MEM,
+            UNIFIED_FEATURE_REASON_NONE,
+            "modem_at_no_memory"
+        );
+    }
+
+    err = modem_a7670_command(request->raw_line, scratch->modem_response, sizeof(scratch->modem_response), timeout_ms);
+    api_bridge_escape_json(request->raw_line, scratch->escaped_line, sizeof(scratch->escaped_line));
+    api_bridge_escape_json(scratch->modem_response, scratch->escaped_response, sizeof(scratch->escaped_response));
     if (snprintf(
             payload,
             payload_len,
             "{\"line\":\"%s\",\"response\":\"%s\"}",
-            escaped_line,
-            escaped_response
+            scratch->escaped_line,
+            scratch->escaped_response
         ) >= (int)payload_len) {
-        char truncated_response[API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN + 16] = {0};
-        char escaped_truncated_response[(API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN + 16) * 2U] = {0};
         size_t preview_len = 0U;
 
         while (preview_len < API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN &&
-               modem_response[preview_len] != '\0') {
-            truncated_response[preview_len] = modem_response[preview_len];
+               scratch->modem_response[preview_len] != '\0') {
+            scratch->truncated_response[preview_len] = scratch->modem_response[preview_len];
             ++preview_len;
         }
-        truncated_response[preview_len] = '\0';
-        if (modem_response[preview_len] != '\0') {
+        scratch->truncated_response[preview_len] = '\0';
+        if (scratch->modem_response[preview_len] != '\0') {
             const char *suffix = "...[truncated]";
             strncat(
-                truncated_response,
+                scratch->truncated_response,
                 suffix,
-                sizeof(truncated_response) - strlen(truncated_response) - 1U
+                sizeof(scratch->truncated_response) - strlen(scratch->truncated_response) - 1U
             );
         }
-        api_bridge_escape_json(truncated_response, escaped_truncated_response, sizeof(escaped_truncated_response));
+        api_bridge_escape_json(
+            scratch->truncated_response,
+            scratch->escaped_truncated_response,
+            sizeof(scratch->escaped_truncated_response)
+        );
         if (snprintf(
                 payload,
                 payload_len,
                 "{\"line\":\"%s\",\"response\":\"%s\"}",
-                escaped_line,
-                escaped_truncated_response
+                scratch->escaped_line,
+                scratch->escaped_truncated_response
             ) >= (int)payload_len) {
             payload[0] = '\0';
-            return api_bridge_build_response(
+            response = api_bridge_build_response(
                 action,
                 UNIFIED_ACTION_RESULT_FAILED,
                 ESP_ERR_INVALID_SIZE,
                 UNIFIED_FEATURE_REASON_NONE,
                 "modem_at_payload_failed"
             );
+            heap_caps_free(scratch);
+            return response;
         }
     }
 
-    return api_bridge_build_response(
+    response = api_bridge_build_response(
         action,
         err == ESP_OK ? UNIFIED_ACTION_RESULT_COMPLETED : (err == ESP_ERR_TIMEOUT ? UNIFIED_ACTION_RESULT_TIMEOUT : UNIFIED_ACTION_RESULT_FAILED),
         err,
         UNIFIED_FEATURE_REASON_NONE,
         err == ESP_OK ? "modem_at_completed" : (err == ESP_ERR_TIMEOUT ? "modem_at_timeout" : "modem_at_failed")
     );
+    heap_caps_free(scratch);
+    return response;
 }
 
 static unified_action_response_t api_bridge_execute_storage_info(
@@ -627,6 +664,195 @@ static unified_action_response_t api_bridge_execute_gpio_write(
         ESP_OK,
         UNIFIED_FEATURE_REASON_NONE,
         "gpio_write_completed"
+    );
+}
+
+static unified_action_response_t api_bridge_execute_gpio_pulse(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    const uint8_t pin = (request && request->gpio_pin_present)
+        ? request->gpio_pin
+        : API_BRIDGE_GPIO_DIAGNOSTIC_PIN;
+    const gpio_num_t gpio = (gpio_num_t)pin;
+    const bool value = request && request->gpio_value_present ? request->gpio_value : true;
+    uint32_t pulse_ms = (request && request->ttl_ms > 0U)
+        ? request->ttl_ms
+        : ((request && request->interval_ms > 0U) ? request->interval_ms : API_BRIDGE_GPIO_PULSE_DEFAULT_MS);
+    esp_err_t err = ESP_OK;
+    int final_level = 0;
+
+    if (!api_bridge_gpio_pin_is_allowed(pin) || !GPIO_IS_VALID_OUTPUT_GPIO(gpio)) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_REJECTED,
+            ESP_ERR_NOT_SUPPORTED,
+            UNIFIED_FEATURE_REASON_NONE,
+            "unsupported_gpio_pin"
+        );
+    }
+    if (!payload || payload_len == 0U) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            ESP_ERR_INVALID_ARG,
+            UNIFIED_FEATURE_REASON_NONE,
+            "gpio_pulse_payload_missing"
+        );
+    }
+
+    if (pulse_ms < API_BRIDGE_GPIO_PULSE_MIN_MS) {
+        pulse_ms = API_BRIDGE_GPIO_PULSE_MIN_MS;
+    } else if (pulse_ms > API_BRIDGE_GPIO_PULSE_MAX_MS) {
+        pulse_ms = API_BRIDGE_GPIO_PULSE_MAX_MS;
+    }
+
+    err = gpio_set_direction(gpio, GPIO_MODE_INPUT_OUTPUT);
+    if (err == ESP_OK) err = gpio_set_level(gpio, value ? 1 : 0);
+    if (err == ESP_OK) vTaskDelay(pdMS_TO_TICKS(pulse_ms));
+    if (err == ESP_OK) err = gpio_set_level(gpio, value ? 0 : 1);
+    if (err != ESP_OK) {
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            err,
+            UNIFIED_FEATURE_REASON_NONE,
+            "gpio_pulse_failed"
+        );
+    }
+
+    final_level = gpio_get_level(gpio);
+    if (snprintf(
+            payload,
+            payload_len,
+            "{\"pin\":%u,\"pulse_ms\":%" PRIu32 ",\"active_value\":%s,\"final_level\":%d,\"allowed_pins\":[%u]}",
+            (unsigned)pin,
+            pulse_ms,
+            value ? "true" : "false",
+            final_level,
+            (unsigned)API_BRIDGE_GPIO_DIAGNOSTIC_PIN
+        ) >= (int)payload_len) {
+        payload[0] = '\0';
+        return api_bridge_build_response(
+            action,
+            UNIFIED_ACTION_RESULT_FAILED,
+            ESP_ERR_INVALID_SIZE,
+            UNIFIED_FEATURE_REASON_NONE,
+            "gpio_pulse_payload_failed"
+        );
+    }
+
+    return api_bridge_build_response(
+        action,
+        UNIFIED_ACTION_RESULT_COMPLETED,
+        ESP_OK,
+        UNIFIED_FEATURE_REASON_NONE,
+        "gpio_pulse_completed"
+    );
+}
+
+static unified_action_response_t api_bridge_execute_file_list(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    const uint16_t max_entries = (request && request->max_entries > 0U)
+        ? ((request->max_entries > CONFIG_UNIFIED_API_BRIDGE_MAX_LIST_ENTRIES)
+            ? CONFIG_UNIFIED_API_BRIDGE_MAX_LIST_ENTRIES
+            : request->max_entries)
+        : CONFIG_UNIFIED_API_BRIDGE_MAX_LIST_ENTRIES;
+    esp_err_t err = storage_mgr_list_files_json(
+        request ? request->path : NULL,
+        max_entries,
+        payload,
+        payload_len
+    );
+
+    return api_bridge_build_response(
+        action,
+        api_bridge_result_from_err(err),
+        err,
+        UNIFIED_FEATURE_REASON_NONE,
+        api_bridge_detail_from_err(err, "file_list_completed", "file_list_timeout", "file_list_failed")
+    );
+}
+
+static unified_action_response_t api_bridge_execute_file_read_meta(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    esp_err_t err = storage_mgr_build_file_meta_json(request ? request->path : NULL, payload, payload_len);
+
+    return api_bridge_build_response(
+        action,
+        api_bridge_result_from_err(err),
+        err,
+        UNIFIED_FEATURE_REASON_NONE,
+        api_bridge_detail_from_err(err, "file_read_meta_completed", "file_read_meta_timeout", "file_read_meta_failed")
+    );
+}
+
+static unified_action_response_t api_bridge_execute_file_delete(
+    const unified_action_envelope_t *action,
+    const api_bridge_request_t *request,
+    char *payload,
+    size_t payload_len
+) {
+    char escaped_path[CONFIG_UNIFIED_API_BRIDGE_PATH_LEN * 2U] = {0};
+    esp_err_t err = storage_mgr_delete_file(request ? request->path : NULL);
+
+    if (err == ESP_OK && payload && payload_len > 0U) {
+        api_bridge_escape_json(request ? request->path : "", escaped_path, sizeof(escaped_path));
+        if (snprintf(payload, payload_len, "{\"path\":\"%s\",\"deleted\":true}", escaped_path) >= (int)payload_len) {
+            payload[0] = '\0';
+            err = ESP_ERR_INVALID_SIZE;
+        }
+    }
+
+    return api_bridge_build_response(
+        action,
+        api_bridge_result_from_err(err),
+        err,
+        UNIFIED_FEATURE_REASON_NONE,
+        api_bridge_detail_from_err(err, "file_delete_completed", "file_delete_timeout", "file_delete_failed")
+    );
+}
+
+static unified_action_response_t api_bridge_execute_placeholder_lane(
+    const unified_action_envelope_t *action,
+    char *payload,
+    size_t payload_len,
+    const char *lane,
+    const char *detail
+) {
+    char escaped_lane[64] = {0};
+    char escaped_detail[96] = {0};
+
+    if (payload && payload_len > 0U) {
+        api_bridge_escape_json(lane, escaped_lane, sizeof(escaped_lane));
+        api_bridge_escape_json(detail, escaped_detail, sizeof(escaped_detail));
+        if (snprintf(
+                payload,
+                payload_len,
+                "{\"lane\":\"%s\",\"implemented\":false,\"message\":\"%s\"}",
+                escaped_lane,
+                escaped_detail
+            ) >= (int)payload_len) {
+            payload[0] = '\0';
+        }
+    }
+
+    return api_bridge_build_response(
+        action,
+        UNIFIED_ACTION_RESULT_REJECTED,
+        ESP_ERR_NOT_SUPPORTED,
+        UNIFIED_FEATURE_REASON_FEATURE_NOT_INSTALLED,
+        detail
     );
 }
 
@@ -1896,6 +2122,36 @@ static unified_action_response_t api_bridge_dispatch_action(
             return api_bridge_execute_gpio_status(action, request, payload, payload_len);
         case UNIFIED_ACTION_CMD_GPIO_WRITE:
             return api_bridge_execute_gpio_write(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_GPIO_PULSE:
+            return api_bridge_execute_gpio_pulse(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_FILE_LIST:
+            return api_bridge_execute_file_list(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_FILE_READ_META:
+            return api_bridge_execute_file_read_meta(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_FILE_DELETE:
+            return api_bridge_execute_file_delete(action, request, payload, payload_len);
+        case UNIFIED_ACTION_CMD_FILE_EXPORT:
+            return api_bridge_execute_placeholder_lane(action, payload, payload_len, "file_export", "file_export_not_implemented");
+        case UNIFIED_ACTION_CMD_SENSOR_READ:
+            return api_bridge_execute_placeholder_lane(action, payload, payload_len, "sensor", "sensor_lane_not_implemented");
+        case UNIFIED_ACTION_CMD_START_CAMERA:
+            return api_bridge_execute_placeholder_lane(action, payload, payload_len, "camera", "camera_lane_not_installed");
+        case UNIFIED_ACTION_CMD_STOP_CAMERA:
+            return api_bridge_execute_placeholder_lane(action, payload, payload_len, "camera", "camera_lane_not_installed");
+        case UNIFIED_ACTION_CMD_TAKE_SNAPSHOT:
+            return api_bridge_execute_placeholder_lane(action, payload, payload_len, "camera", "camera_lane_not_installed");
+        case UNIFIED_ACTION_CMD_START_STREAM:
+            return api_bridge_execute_placeholder_lane(action, payload, payload_len, "camera", "camera_lane_not_installed");
+        case UNIFIED_ACTION_CMD_STOP_STREAM:
+            return api_bridge_execute_placeholder_lane(action, payload, payload_len, "camera", "camera_lane_not_installed");
+        case UNIFIED_ACTION_CMD_CARD_SCAN_START:
+            return api_bridge_execute_placeholder_lane(action, payload, payload_len, "card", "card_lane_not_installed");
+        case UNIFIED_ACTION_CMD_CARD_SCAN_STOP:
+            return api_bridge_execute_placeholder_lane(action, payload, payload_len, "card", "card_lane_not_installed");
+        case UNIFIED_ACTION_CMD_CARD_READ:
+            return api_bridge_execute_placeholder_lane(action, payload, payload_len, "card", "card_lane_not_installed");
+        case UNIFIED_ACTION_CMD_CARD_WRITE:
+            return api_bridge_execute_placeholder_lane(action, payload, payload_len, "card", "card_lane_not_installed");
         case UNIFIED_ACTION_CMD_RESTART_MODEM:
             return api_bridge_execute_restart_modem(action, payload, payload_len);
         case UNIFIED_ACTION_CMD_SEND_SMS:
@@ -1985,18 +2241,7 @@ esp_err_t api_bridge_init(void) {
         return ESP_ERR_NO_MEM;
     }
 
-    s_wifi_scan_scratch = heap_caps_calloc(
-        1U,
-        sizeof(*s_wifi_scan_scratch),
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
-    );
-    if (!s_wifi_scan_scratch) {
-        s_wifi_scan_scratch = heap_caps_calloc(
-            1U,
-            sizeof(*s_wifi_scan_scratch),
-            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
-        );
-    }
+    s_wifi_scan_scratch = api_bridge_alloc_zeroed(sizeof(*s_wifi_scan_scratch));
     if (!s_wifi_scan_scratch) {
         return ESP_ERR_NO_MEM;
     }

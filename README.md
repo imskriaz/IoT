@@ -19,6 +19,7 @@ Current transport rule:
 - Android bridge app: [firmware/android](D:/Projects/IoT/firmware/android)
 - Flutter UI: [firmware/android/flutter_ui](D:/Projects/IoT/firmware/android/flutter_ui)
 - Dashboard server: [dashboard](D:/Projects/IoT/dashboard)
+- Ubuntu/VPS deployment bundle for `device.atebd.com/server`: [server](D:/Projects/IoT/server)
 - Source docs index: [firmware/docs/README.md](D:/Projects/IoT/firmware/docs/README.md)
 
 ## Feature Review Matrix

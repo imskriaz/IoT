@@ -62,7 +62,7 @@ typedef struct {
 
 static SemaphoreHandle_t s_lock;
 static automation_bridge_status_t s_status;
-static automation_bridge_task_context_t s_task_context;
+static automation_bridge_task_context_t *s_task_context;
 static TaskHandle_t s_task_handle;
 static automation_bridge_queue_item_t *s_pending_queue;
 static automation_bridge_background_state_t *s_background_state;
@@ -79,6 +79,21 @@ static void *automation_bridge_alloc_zeroed(size_t size) {
     }
 
     return buffer;
+}
+
+static void automation_bridge_free_allocated(void) {
+    if (s_pending_queue) {
+        heap_caps_free(s_pending_queue);
+        s_pending_queue = NULL;
+    }
+    if (s_background_state) {
+        heap_caps_free(s_background_state);
+        s_background_state = NULL;
+    }
+    if (s_task_context) {
+        heap_caps_free(s_task_context);
+        s_task_context = NULL;
+    }
 }
 
 static void automation_bridge_set_health_locked(const char *detail) {
@@ -800,7 +815,7 @@ static void automation_bridge_record_response_locked(
 }
 
 static void automation_bridge_task(void *arg) {
-    automation_bridge_task_context_t *ctx = &s_task_context;
+    automation_bridge_task_context_t *ctx = s_task_context;
     esp_err_t err = ESP_OK;
     bool response_recorded = false;
     bool parse_failed = false;
@@ -809,6 +824,12 @@ static void automation_bridge_task(void *arg) {
     const char *error_detail = NULL;
 
     (void)arg;
+
+    if (!ctx) {
+        ESP_LOGE(TAG, "automation task context missing");
+        vTaskDelete(NULL);
+        return;
+    }
 
     memset(ctx, 0, sizeof(*ctx));
     s_task_handle = xTaskGetCurrentTaskHandle();
@@ -951,11 +972,9 @@ esp_err_t automation_bridge_init(void) {
     s_background_state = automation_bridge_alloc_zeroed(
         sizeof(automation_bridge_background_state_t) * CONFIG_UNIFIED_AUTOMATION_QUEUE_DEPTH
     );
-    if (!s_pending_queue || !s_background_state) {
-        heap_caps_free(s_pending_queue);
-        heap_caps_free(s_background_state);
-        s_pending_queue = NULL;
-        s_background_state = NULL;
+    s_task_context = automation_bridge_alloc_zeroed(sizeof(*s_task_context));
+    if (!s_pending_queue || !s_background_state || !s_task_context) {
+        automation_bridge_free_allocated();
         vSemaphoreDelete(s_lock);
         s_lock = NULL;
         return ESP_ERR_NO_MEM;
@@ -985,10 +1004,7 @@ esp_err_t automation_bridge_init(void) {
         );
     }
     if (task_ok != pdPASS) {
-        heap_caps_free(s_pending_queue);
-        heap_caps_free(s_background_state);
-        s_pending_queue = NULL;
-        s_background_state = NULL;
+        automation_bridge_free_allocated();
         vSemaphoreDelete(s_lock);
         s_lock = NULL;
         return ESP_ERR_NO_MEM;

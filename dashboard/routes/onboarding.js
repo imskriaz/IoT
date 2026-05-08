@@ -45,7 +45,12 @@ function normalizeServerUrl(value) {
 }
 
 function normalizePublicBaseUrl(req) {
-    const configured = normalizeServerUrl(process.env.PUBLIC_BASE_URL || '');
+    const configured = normalizeServerUrl(
+        process.env.ANDROID_BRIDGE_PUBLIC_URL ||
+        process.env.PUBLIC_BRIDGE_BASE_URL ||
+        process.env.PUBLIC_BASE_URL ||
+        ''
+    );
     if (configured) return configured;
     const protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
     return normalizeServerUrl(`${protocol}://${req.get('host')}`);

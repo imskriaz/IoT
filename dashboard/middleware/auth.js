@@ -118,7 +118,12 @@ const authMiddleware = async (req, res, next) => {
         req.user = withEffectiveRole({ id: apiKeyRow.uid, username: apiKeyRow.username, role: apiKeyRow.role });
         req.session = req.session || {};
         req.session.user = req.user;
-        req.apiKey = { id: apiKeyRow.id, name: apiKeyRow.name, scopes: apiKeyRow.scopes };
+        req.apiKey = {
+            id: apiKeyRow.id,
+            name: apiKeyRow.name,
+            scopes: apiKeyRow.scopes,
+            device_ids: apiKeyRow.device_ids || null
+        };
 
         // Enforce scope
         const requiredScope = getRequiredScope(req.method, req.path);

@@ -1363,7 +1363,20 @@ async function onDeviceSettingsPick() {
     if (!id) return;
 
     window._activeDeviceId = id;
+    if (typeof window.setActiveDeviceContext === 'function') {
+        window.setActiveDeviceContext(id);
+    } else {
+        window.DEVICE_ID = id;
+        localStorage.setItem('activeDeviceId', id);
+    }
     history.replaceState({}, '', deviceSettingsHref(id));
+    if (window.socket) {
+        window.socket.emit('subscribe:device', { deviceId: id });
+    }
+    if (typeof window.persistActiveDeviceSelection === 'function') {
+        window.persistActiveDeviceSelection(id).catch(() => {});
+    }
+    window.dispatchEvent(new CustomEvent('device:changed', { detail: { deviceId: id } }));
 
     const editorLink = document.getElementById('deviceEditorLink');
     if (editorLink) {

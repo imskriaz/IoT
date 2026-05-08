@@ -146,7 +146,12 @@ function sortDeviceList(devices, activeDeviceId = '') {
 }
 
 function normalizePublicBaseUrl(req) {
-    const configured = String(process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '');
+    const configured = String(
+        process.env.ANDROID_BRIDGE_PUBLIC_URL ||
+        process.env.PUBLIC_BRIDGE_BASE_URL ||
+        process.env.PUBLIC_BASE_URL ||
+        ''
+    ).trim().replace(/\/+$/, '');
     if (configured) return configured;
     const protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
     return `${protocol}://${req.get('host')}`.replace(/\/+$/, '');

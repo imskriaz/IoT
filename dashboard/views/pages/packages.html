@@ -193,6 +193,13 @@ function renderPackageRequests(requests) {
         const statusCls = request.status === 'approved'
             ? 'bg-success'
             : (request.status === 'rejected' ? 'bg-danger' : 'bg-warning text-dark');
+        const paymentParts = [
+            [request.payment_method, request.payment_number].filter(Boolean).join(' '),
+            request.payment_reference ? `Ref: ${request.payment_reference}` : ''
+        ].filter(Boolean);
+        const paymentLine = paymentParts.length
+            ? `<div class="small text-muted">Payment: ${paymentParts.map(escapeHtml).join(' · ')}</div>`
+            : '';
         return `
             <div class="list-group-item">
                 <div class="d-flex flex-column flex-lg-row justify-content-between gap-3">
@@ -205,7 +212,7 @@ function renderPackageRequests(requests) {
                         <div class="small text-muted mt-1">
                             Device: <code>${escapeHtml(request.device_id)}</code> · User: ${escapeHtml(request.username || 'unknown')} · Price: ${packageCurrency(request.price_bdt)}
                         </div>
-                        <div class="small text-muted">Payment: ${escapeHtml(request.payment_method)} ${escapeHtml(request.payment_number)}${request.payment_reference ? ` · Ref: ${escapeHtml(request.payment_reference)}` : ''}</div>
+                        ${paymentLine}
                         ${request.notes ? `<div class="small mt-2">${escapeHtml(request.notes)}</div>` : ''}
                     </div>
                     ${request.status === 'pending' ? `

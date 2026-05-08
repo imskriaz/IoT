@@ -36,6 +36,8 @@ The token contains:
 
 The app should onboard directly from QR scan or setup token import. Raw secrets are not shown in the dashboard UI when Android recovery QR is generated.
 
+When the dashboard process is running only on `localhost`, set `ANDROID_BRIDGE_PUBLIC_URL` or `PUBLIC_BRIDGE_BASE_URL` to the VPS/reverse-proxy URL before generating Android setup QR codes. For the planned Ubuntu deployment this is `https://device.atebd.com/server`. The Android app cannot call the operator laptop's `localhost`; it must receive a routable HTTPS/HTTP URL that forwards to `/v1/android/bridge/*`. For browser Socket.IO through the same VPS, set `SOCKET_IO_CORS_ORIGIN` or `CORS_ORIGIN` to the public dashboard origin, for example `https://device.atebd.com`.
+
 ## Device Identity
 
 Android devices should be registered as:
