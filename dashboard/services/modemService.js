@@ -527,10 +527,26 @@ class ModemService {
             mqtt: device.status?.mqtt || null,
             sync: device.status?.sync || null,
             storage,
+            hardware: device.status?.hardware || null,
             systemRuntime: {
-                freeHeap: system?.freeHeap ?? null,
-                freePsram: system?.freePsram ?? null,
-                largestFreeBlock: system?.largestFreeBlock ?? null,
+                heapTotal: system?.heapTotal ?? null,
+                heapUsed: system?.heapUsed ?? null,
+                freeHeap: system?.freeHeap ?? system?.heapFree ?? null,
+                heapFree: system?.heapFree ?? system?.freeHeap ?? null,
+                heapLargestFreeBlock: system?.heapLargestFreeBlock ?? system?.largestFreeBlock ?? null,
+                runtimeRamTotal: system?.runtimeRamTotal ?? null,
+                runtimeRamUsed: system?.runtimeRamUsed ?? null,
+                runtimeRamFree: system?.runtimeRamFree ?? null,
+                runtimeRamLargestFreeBlock: system?.runtimeRamLargestFreeBlock ?? null,
+                psramTotal: system?.psramTotal ?? null,
+                psramUsed: system?.psramUsed ?? null,
+                freePsram: system?.freePsram ?? system?.psramFree ?? null,
+                psramFree: system?.psramFree ?? system?.freePsram ?? null,
+                psramLargestFreeBlock: system?.psramLargestFreeBlock ?? null,
+                otherHeapTotal: system?.otherHeapTotal ?? null,
+                otherHeapUsed: system?.otherHeapUsed ?? null,
+                otherHeapFree: system?.otherHeapFree ?? null,
+                largestFreeBlock: system?.largestFreeBlock ?? system?.heapLargestFreeBlock ?? null,
                 rebootReason: system?.rebootReason || null,
                 degradedReason: system?.degradedReason || null
             },
@@ -821,6 +837,21 @@ class ModemService {
                         uptime: data.system.uptime ?? (
                             Number.isFinite(Number(data.uptime_ms)) ? Math.floor(Number(data.uptime_ms) / 1000) : data.uptime
                         ),
+                        heapTotal: data.system.heapTotal ?? data.heap_total_bytes ?? null,
+                        heapUsed: data.system.heapUsed ?? data.heap_used_bytes ?? null,
+                        heapFree: data.system.heapFree ?? data.heap_free_bytes ?? data.free_heap_bytes ?? null,
+                        heapLargestFreeBlock: data.system.heapLargestFreeBlock ?? data.heap_largest_free_block_bytes ?? data.largest_free_block_bytes ?? null,
+                        runtimeRamTotal: data.system.runtimeRamTotal ?? data.runtime_ram_total_bytes ?? null,
+                        runtimeRamUsed: data.system.runtimeRamUsed ?? data.runtime_ram_used_bytes ?? null,
+                        runtimeRamFree: data.system.runtimeRamFree ?? data.runtime_ram_free_bytes ?? data.internal_free_heap_bytes ?? null,
+                        runtimeRamLargestFreeBlock: data.system.runtimeRamLargestFreeBlock ?? data.runtime_ram_largest_free_block_bytes ?? data.internal_largest_free_block_bytes ?? null,
+                        psramTotal: data.system.psramTotal ?? data.psram_total_bytes ?? null,
+                        psramUsed: data.system.psramUsed ?? data.psram_used_bytes ?? null,
+                        psramFree: data.system.psramFree ?? data.psram_free_bytes ?? data.free_psram_bytes ?? null,
+                        psramLargestFreeBlock: data.system.psramLargestFreeBlock ?? data.psram_largest_free_block_bytes ?? null,
+                        otherHeapTotal: data.system.otherHeapTotal ?? data.other_heap_total_bytes ?? null,
+                        otherHeapUsed: data.system.otherHeapUsed ?? data.other_heap_used_bytes ?? null,
+                        otherHeapFree: data.system.otherHeapFree ?? data.other_heap_free_bytes ?? null,
                         freeHeap: data.system.freeHeap ?? data.free_heap_bytes ?? null,
                         freePsram: data.system.freePsram ?? data.free_psram_bytes ?? null,
                         largestFreeBlock: data.system.largestFreeBlock ?? data.largest_free_block_bytes ?? null,
@@ -833,8 +864,10 @@ class ModemService {
 
             if (!data.system && (
                 data.uptime_ms !== undefined ||
+                data.heap_total_bytes !== undefined ||
                 data.free_heap_bytes !== undefined ||
                 data.free_psram_bytes !== undefined ||
+                data.runtime_ram_free_bytes !== undefined ||
                 data.largest_free_block_bytes !== undefined ||
                 data.reboot_reason !== undefined ||
                 data.degraded_reason !== undefined
@@ -843,11 +876,59 @@ class ModemService {
                     ...data,
                     system: {
                         uptime: Number.isFinite(Number(data.uptime_ms)) ? Math.floor(Number(data.uptime_ms) / 1000) : data.uptime,
+                        heapTotal: data.heap_total_bytes ?? null,
+                        heapUsed: data.heap_used_bytes ?? null,
+                        heapFree: data.heap_free_bytes ?? data.free_heap_bytes ?? null,
+                        heapLargestFreeBlock: data.heap_largest_free_block_bytes ?? data.largest_free_block_bytes ?? null,
+                        runtimeRamTotal: data.runtime_ram_total_bytes ?? null,
+                        runtimeRamUsed: data.runtime_ram_used_bytes ?? null,
+                        runtimeRamFree: data.runtime_ram_free_bytes ?? data.internal_free_heap_bytes ?? null,
+                        runtimeRamLargestFreeBlock: data.runtime_ram_largest_free_block_bytes ?? data.internal_largest_free_block_bytes ?? null,
+                        psramTotal: data.psram_total_bytes ?? null,
+                        psramUsed: data.psram_used_bytes ?? null,
+                        psramFree: data.psram_free_bytes ?? data.free_psram_bytes ?? null,
+                        psramLargestFreeBlock: data.psram_largest_free_block_bytes ?? null,
+                        otherHeapTotal: data.other_heap_total_bytes ?? null,
+                        otherHeapUsed: data.other_heap_used_bytes ?? null,
+                        otherHeapFree: data.other_heap_free_bytes ?? null,
                         freeHeap: data.free_heap_bytes ?? null,
                         freePsram: data.free_psram_bytes ?? null,
                         largestFreeBlock: data.largest_free_block_bytes ?? null,
                         rebootReason: data.reboot_reason || null,
                         degradedReason: data.degraded_reason || null
+                    }
+                };
+            }
+
+            if (!data.hardware && (
+                data.hardware_uid !== undefined ||
+                data.board_name !== undefined ||
+                data.board_chip !== undefined ||
+                data.static_ram_bytes !== undefined ||
+                data.rom_bytes !== undefined ||
+                data.flash_size_bytes !== undefined ||
+                data.psram_size_bytes !== undefined ||
+                data.psram_available !== undefined
+            )) {
+                data = {
+                    ...data,
+                    hardware: {
+                        uid: data.hardware_uid || null,
+                        boardName: data.board_name || null,
+                        chip: data.board_chip || null,
+                        cpu: data.board_cpu || null,
+                        staticRamBytes: data.static_ram_bytes ?? null,
+                        romBytes: data.rom_bytes ?? null,
+                        flashSizeBytes: data.flash_size_bytes ?? null,
+                        psramSizeBytes: data.psram_size_bytes ?? null,
+                        psramAvailable: typeof data.psram_available === 'boolean' ? data.psram_available : null,
+                        smsStorage: data.modem_sms_storage_total !== undefined
+                            ? {
+                                name: data.modem_sms_storage_name || null,
+                                used: Number(data.modem_sms_storage_used || 0),
+                                total: Number(data.modem_sms_storage_total || 0)
+                            }
+                            : null
                     }
                 };
             }
@@ -904,6 +985,7 @@ class ModemService {
                             type: data.storage_media_label || data.storage_media_type || 'SSD',
                             bus: data.storage_media_bus || null
                         },
+                        hardware: data.hardware || null,
                         mqtt: {
                             connected: !!data.mqtt_connected,
                             subscribed: !!data.mqtt_subscribed,
@@ -922,7 +1004,14 @@ class ModemService {
                             dataSession: !!data.modem_data_session_open,
                             ipBearer: !!data.modem_ip_bearer_ready,
                             dataIp: data.modem_data_ip || data.modem_ip_address || null,
-                            subscriberNumber: data.modem_subscriber_number || null
+                            subscriberNumber: data.modem_subscriber_number || null,
+                            smsStorage: data.modem_sms_storage_total !== undefined
+                                ? {
+                                    name: data.modem_sms_storage_name || null,
+                                    used: Number(data.modem_sms_storage_used || 0),
+                                    total: Number(data.modem_sms_storage_total || 0)
+                                }
+                                : null
                         }
                     }
                 };
@@ -1078,6 +1167,15 @@ class ModemService {
                 device.status = {
                     ...device.status,
                     ...data.status
+                };
+            }
+            if (data.hardware) {
+                device.status = {
+                    ...device.status,
+                    hardware: {
+                        ...(device.status?.hardware || {}),
+                        ...data.hardware
+                    }
                 };
             }
 

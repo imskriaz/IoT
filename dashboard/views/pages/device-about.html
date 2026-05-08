@@ -208,6 +208,19 @@
         return `${(num / (1024 * 1024 * 1024)).toFixed(2)} GB`;
     }
 
+    function formatMemoryBreakdown(total, used, free) {
+        const totalNum = Number(total);
+        const usedNum = Number(used);
+        const freeNum = Number(free);
+        if (!Number.isFinite(totalNum) && !Number.isFinite(usedNum) && !Number.isFinite(freeNum)) return '-';
+
+        const parts = [];
+        if (Number.isFinite(freeNum)) parts.push(`${formatBytes(freeNum)} free`);
+        if (Number.isFinite(usedNum)) parts.push(`${formatBytes(usedNum)} used`);
+        if (Number.isFinite(totalNum)) parts.push(`${formatBytes(totalNum)} total`);
+        return parts.join(' / ');
+    }
+
     function formatWifiDisconnect(code, text) {
         const numeric = Number(code || 0);
         const label = String(text || '').trim();
@@ -501,6 +514,12 @@
             || system.modemModel
             || '';
         const mqttClientId = live.mqtt?.clientId || device.mqttClientId || system.mqttClientId || '';
+        const runtimeMemory = live.systemRuntime || {};
+        const liveHardware = live.hardware || {};
+        const smsStorage = liveHardware.smsStorage || live.status?.modem?.smsStorage || null;
+        const smsStorageLabel = smsStorage && Number(smsStorage.total) > 0
+            ? `${smsStorage.name || 'ME'} ${Number(smsStorage.used || 0)}/${Number(smsStorage.total || 0)} slots`
+            : '-';
 
         renderSummary(snapshot);
 
@@ -585,22 +604,30 @@
             ['Desired / applied sync version', offline ? heartbeatNotice : (live.sync ? esc(`${live.sync.desiredVersion || 0} / ${live.sync.appliedVersion || 0}`) : '-')],
             ['Storage queue / drops', live.storage ? esc(`${live.storage.queueDepth || 0} / ${live.storage.dropped || 0}`) : '-'],
             ['Storage mode', !live.storage ? '-' : (live.storage.bufferedOnly ? 'Buffered only' : (live.storage.mounted ? 'Mounted' : 'Unavailable'))],
-            ['Runtime heap / PSRAM', !live.systemRuntime ? '-' : esc(`${live.systemRuntime.freeHeap ?? 0} / ${live.systemRuntime.freePsram ?? 0}`)],
-            ['Largest free block', live.systemRuntime?.largestFreeBlock == null ? '-' : esc(String(live.systemRuntime.largestFreeBlock))],
+            ['Runtime heap', !live.systemRuntime ? '-' : esc(formatMemoryBreakdown(runtimeMemory.heapTotal, runtimeMemory.heapUsed, runtimeMemory.heapFree ?? runtimeMemory.freeHeap))],
+            ['Runtime RAM (SRAM heap)', !live.systemRuntime ? '-' : esc(formatMemoryBreakdown(runtimeMemory.runtimeRamTotal, runtimeMemory.runtimeRamUsed, runtimeMemory.runtimeRamFree))],
+            ['PSRAM heap', !live.systemRuntime ? '-' : esc(formatMemoryBreakdown(runtimeMemory.psramTotal, runtimeMemory.psramUsed, runtimeMemory.psramFree ?? runtimeMemory.freePsram))],
+            ['Other heap', !live.systemRuntime ? '-' : esc(formatMemoryBreakdown(runtimeMemory.otherHeapTotal, runtimeMemory.otherHeapUsed, runtimeMemory.otherHeapFree))],
+            ['Modem SMS store', esc(smsStorageLabel)],
+            ['Largest free block', live.systemRuntime?.largestFreeBlock == null ? '-' : esc(formatBytes(live.systemRuntime.largestFreeBlock))],
+            ['Runtime RAM largest block', runtimeMemory.runtimeRamLargestFreeBlock == null ? '-' : esc(formatBytes(runtimeMemory.runtimeRamLargestFreeBlock))],
+            ['PSRAM largest block', runtimeMemory.psramLargestFreeBlock == null ? '-' : esc(formatBytes(runtimeMemory.psramLargestFreeBlock))],
             ['Last reboot reason', safeValue(live.systemRuntime?.rebootReason)],
             ['Degraded reason', safeValue(live.systemRuntime?.degradedReason)],
-            ['Call transport', offline ? heartbeatNotice : formatBoolean(live.transport?.mqttCommandAccepting, { yes: live.transport?.voiceSessionActive ? 'Ready, voice active' : 'Ready', no: live.transport?.reason || 'Blocked' })]
+            ['Hardware report', liveHardware.boardName ? safeValue(`${liveHardware.boardName} (${liveHardware.chip || 'chip unknown'})`) : safeValue(metadata.specSource || specs.detectionSource)]
         ]);
 
         renderTable(els.board, [
-            ['Board', safeValue(board.name || device.board)],
+            ['Board', safeValue(liveHardware.boardName || board.name || device.board)],
             ['Vendor', safeValue(board.vendor)],
             ['Revision', safeValue(board.revision)],
             ['Family', safeValue(board.family)],
-            ['Chip / SoC', safeValue(board.chip)],
+            ['Chip / SoC', safeValue(liveHardware.chip || board.chip)],
             ['CPU', safeValue(board.cpu)],
-            ['Flash', safeValue(board.flash)],
-            ['PSRAM', safeValue(board.psram)],
+            ['Built-in SRAM', liveHardware.staticRamBytes == null ? safeValue(board.staticRam || board.sram) : esc(formatBytes(liveHardware.staticRamBytes))],
+            ['ROM', liveHardware.romBytes == null ? safeValue(board.rom) : esc(formatBytes(liveHardware.romBytes))],
+            ['Flash', liveHardware.flashSizeBytes == null ? safeValue(board.flash) : esc(formatBytes(liveHardware.flashSizeBytes))],
+            ['PSRAM', liveHardware.psramSizeBytes == null ? safeValue(board.psram) : esc(`${formatBytes(liveHardware.psramSizeBytes)}${liveHardware.psramAvailable === false ? ' unavailable' : ''}`)],
             ['Detection source', safeValue(specs.detectionSource || metadata.specSource)],
             ['Notes', safeValue(board.notes)]
         ]);

@@ -127,6 +127,10 @@ static bool sms_service_telephony_unavailable(const modem_a7670_status_t *modem_
     return modem_status && modem_status->runtime.running && !modem_a7670_telephony_supported();
 }
 
+static bool sms_service_no_pending_sms(esp_err_t err) {
+    return err == ESP_ERR_NOT_FOUND;
+}
+
 static void sms_service_set_health_locked(bool ready, const char *detail) {
     s_status.ready = ready;
     s_status.runtime.state = ready ? UNIFIED_MODULE_STATE_RUNNING : UNIFIED_MODULE_STATE_DEGRADED;
@@ -357,24 +361,27 @@ static unified_action_response_t sms_service_send_with_transport(
             modem_response[0] ? modem_response : "<empty>"
         );
     }
-    snprintf(outgoing.from, sizeof(outgoing.from), "%s", number ? number : "");
-    snprintf(outgoing.text, sizeof(outgoing.text), "%s", text ? text : "");
+    unified_copy_cstr(outgoing.from, sizeof(outgoing.from), number ? number : "");
+    unified_copy_cstr(outgoing.text, sizeof(outgoing.text), text ? text : "");
     has_message_reference = err == ESP_OK &&
         sms_service_extract_cmgs_reference(modem_response, &message_reference);
     if (has_message_reference) {
-        snprintf(
+        int written = snprintf(
             success_detail_with_reference,
             sizeof(success_detail_with_reference),
             "%s_mr_%u",
             success_detail,
             (unsigned)message_reference
         );
+        if (written < 0 || (size_t)written >= sizeof(success_detail_with_reference)) {
+            has_message_reference = false;
+            success_detail_with_reference[0] = '\0';
+        }
     }
 
-    snprintf(
+    unified_copy_cstr(
         outgoing.detail,
         sizeof(outgoing.detail),
-        "%s",
         err == ESP_OK
             ? success_detail
             : (err == ESP_ERR_TIMEOUT ? timeout_detail : failed_detail)
@@ -385,9 +392,9 @@ static unified_action_response_t sms_service_send_with_transport(
     (void)storage_mgr_append_sms(&outgoing);
 
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
-        snprintf(s_status.last_destination, sizeof(s_status.last_destination), "%s", number ? number : "");
+        unified_copy_cstr(s_status.last_destination, sizeof(s_status.last_destination), number ? number : "");
         s_status.last_outgoing = outgoing;
-        snprintf(s_status.last_detail, sizeof(s_status.last_detail), "%s", outgoing.detail);
+        unified_copy_cstr(s_status.last_detail, sizeof(s_status.last_detail), outgoing.detail);
         if (err == ESP_OK) {
             s_status.sent_count++;
         } else {
@@ -536,13 +543,22 @@ static void sms_service_task(void *arg) {
             cycle_health_detail = "modem_not_ready";
         } else {
             while (modem_a7670_pop_sms_index(&sms_index)) {
+                esp_err_t consume_err = ESP_OK;
+
                 saw_event = true;
                 memset(payload, 0, sizeof(*payload));
-                if (modem_a7670_consume_sms_index(sms_index, payload, event_timeout_ms) == ESP_OK) {
+                consume_err = modem_a7670_consume_sms_index(sms_index, payload, event_timeout_ms);
+                if (consume_err == ESP_OK) {
                     event_consumed = true;
                     last_urc_success_ms = now_ms;
                     sms_service_emit_incoming(payload, "incoming_sms_urc");
                     cycle_detail = "incoming_sms";
+                } else if (!sms_service_no_pending_sms(consume_err)) {
+                    failure_count_delta++;
+                    cycle_error = consume_err;
+                    cycle_error_text = "sms_urc_consume_failed";
+                    cycle_detail = "sms_urc_consume_failed";
+                    cycle_health_detail = "sms_urc_consume_failed";
                 }
             }
 
@@ -563,14 +579,25 @@ static void sms_service_task(void *arg) {
                 (saw_event ||
                  last_fallback_poll_ms == 0U ||
                  (now_ms - last_fallback_poll_ms) >= SMS_SERVICE_FALLBACK_POLL_INTERVAL_MS)) {
+                esp_err_t pending_err = ESP_OK;
+
                 last_fallback_poll_ms = now_ms;
                 memset(payload, 0, sizeof(*payload));
-                if (modem_a7670_consume_pending_sms(payload, background_timeout_ms) == ESP_OK) {
+                pending_err = modem_a7670_consume_pending_sms(payload, background_timeout_ms);
+                if (pending_err == ESP_OK) {
                     do {
                         sms_service_emit_incoming(payload, "incoming_sms_fallback");
                         cycle_detail = "incoming_sms_fallback";
                         memset(payload, 0, sizeof(*payload));
-                    } while (modem_a7670_consume_pending_sms(payload, background_timeout_ms) == ESP_OK);
+                        pending_err = modem_a7670_consume_pending_sms(payload, background_timeout_ms);
+                    } while (pending_err == ESP_OK);
+                }
+                if (!sms_service_no_pending_sms(pending_err)) {
+                    failure_count_delta++;
+                    cycle_error = pending_err;
+                    cycle_error_text = "sms_fallback_consume_failed";
+                    cycle_detail = "sms_fallback_consume_failed";
+                    cycle_health_detail = "sms_fallback_consume_failed";
                 }
             }
 
@@ -721,6 +748,15 @@ unified_action_response_t sms_service_pull_pending(uint32_t timeout_ms, uint32_t
             UNIFIED_ACTION_RESULT_TIMEOUT,
             err,
             "sms_pull_timeout",
+            effective_timeout_ms
+        );
+    }
+    if (!sms_service_no_pending_sms(err) && synced_count == 0U) {
+        return sms_service_build_response(
+            UNIFIED_ACTION_CMD_GET_SMS_HISTORY,
+            UNIFIED_ACTION_RESULT_FAILED,
+            err,
+            "sms_pull_failed",
             effective_timeout_ms
         );
     }

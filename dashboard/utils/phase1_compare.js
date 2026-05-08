@@ -343,8 +343,10 @@ function summarize(fromCapture, toCapture) {
     lines.push(`- Storage mounted: ${fmtBool(fromStatus.storage?.mounted)} -> ${fmtBool(toStatus.storage?.mounted)}`);
     lines.push(`- Storage queue depth: ${fmtNumberDelta(fromStatus.storage?.queueDepth, toStatus.storage?.queueDepth)}`);
     lines.push(`- Storage dropped count: ${fmtNumberDelta(fromStatus.storage?.dropped, toStatus.storage?.dropped)}`);
-    lines.push(`- Heap bytes: ${fmtNumberDelta(fromStatus.systemRuntime?.freeHeap, toStatus.systemRuntime?.freeHeap)}`);
-    lines.push(`- PSRAM bytes: ${fmtNumberDelta(fromStatus.systemRuntime?.freePsram, toStatus.systemRuntime?.freePsram)}`);
+    lines.push(`- Runtime heap free bytes: ${fmtNumberDelta(fromStatus.systemRuntime?.heapFree ?? fromStatus.systemRuntime?.freeHeap, toStatus.systemRuntime?.heapFree ?? toStatus.systemRuntime?.freeHeap)}`);
+    lines.push(`- Runtime RAM free bytes: ${fmtNumberDelta(fromStatus.systemRuntime?.runtimeRamFree, toStatus.systemRuntime?.runtimeRamFree)}`);
+    lines.push(`- PSRAM free bytes: ${fmtNumberDelta(fromStatus.systemRuntime?.psramFree ?? fromStatus.systemRuntime?.freePsram, toStatus.systemRuntime?.psramFree ?? toStatus.systemRuntime?.freePsram)}`);
+    lines.push(`- Other heap free bytes: ${fmtNumberDelta(fromStatus.systemRuntime?.otherHeapFree, toStatus.systemRuntime?.otherHeapFree)}`);
     lines.push(`- Largest free block: ${fmtNumberDelta(fromStatus.systemRuntime?.largestFreeBlock, toStatus.systemRuntime?.largestFreeBlock)}`);
     lines.push(`- Reboot reason: ${fmtChange(fromStatus.systemRuntime?.rebootReason, toStatus.systemRuntime?.rebootReason)}`);
     lines.push(`- Degraded reason: ${fmtChange(fromStatus.systemRuntime?.degradedReason, toStatus.systemRuntime?.degradedReason)}`);

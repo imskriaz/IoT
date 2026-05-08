@@ -42,6 +42,10 @@ esp_err_t board_bsp_init(void) {
         mac[4],
         mac[5]
     );
+    snprintf(s_identity.board_name, sizeof(s_identity.board_name), "%s", BOARD_NAME);
+    snprintf(s_identity.chip_name, sizeof(s_identity.chip_name), "%s", BOARD_CHIP_NAME);
+    s_identity.static_ram_bytes = BOARD_STATIC_RAM_BYTES;
+    s_identity.rom_bytes = BOARD_ROM_BYTES;
 
     ESP_ERROR_CHECK(esp_flash_get_size(NULL, &flash_size));
     s_identity.flash_size_bytes = flash_size;

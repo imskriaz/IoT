@@ -9,6 +9,21 @@
 
 typedef struct {
     uint32_t uptime_ms;
+    uint32_t heap_total_bytes;
+    uint32_t heap_used_bytes;
+    uint32_t heap_free_bytes;
+    uint32_t heap_largest_free_block_bytes;
+    uint32_t runtime_ram_total_bytes;
+    uint32_t runtime_ram_used_bytes;
+    uint32_t runtime_ram_free_bytes;
+    uint32_t runtime_ram_largest_free_block_bytes;
+    uint32_t psram_total_bytes;
+    uint32_t psram_used_bytes;
+    uint32_t psram_free_bytes;
+    uint32_t psram_largest_free_block_bytes;
+    uint32_t other_heap_total_bytes;
+    uint32_t other_heap_used_bytes;
+    uint32_t other_heap_free_bytes;
     uint32_t free_heap_bytes;
     uint32_t min_free_heap_bytes;
     uint32_t largest_free_block_bytes;

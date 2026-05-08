@@ -77,7 +77,7 @@ typedef struct {
 static SemaphoreHandle_t s_lock;
 static SemaphoreHandle_t s_wifi_scan_lock;
 static api_bridge_status_t s_status;
-static api_bridge_action_record_t s_recent_records[CONFIG_UNIFIED_API_BRIDGE_HISTORY_DEPTH];
+static api_bridge_action_record_t *s_recent_records;
 static size_t s_recent_head;
 static size_t s_recent_count;
 static uint32_t s_recent_sequence;
@@ -105,6 +105,10 @@ static void api_bridge_free_record_snapshot(api_bridge_action_record_t *record) 
     if (record) {
         heap_caps_free(record);
     }
+}
+
+static size_t api_bridge_history_bytes(void) {
+    return sizeof(*s_recent_records) * CONFIG_UNIFIED_API_BRIDGE_HISTORY_DEPTH;
 }
 
 static void *api_bridge_alloc_zeroed(size_t size) {
@@ -2275,8 +2279,13 @@ esp_err_t api_bridge_init(void) {
         return ESP_ERR_NO_MEM;
     }
 
+    s_recent_records = api_bridge_alloc_zeroed(api_bridge_history_bytes());
+    if (!s_recent_records) {
+        return ESP_ERR_NO_MEM;
+    }
+
     memset(&s_status, 0, sizeof(s_status));
-    memset(s_recent_records, 0, sizeof(s_recent_records));
+    memset(s_recent_records, 0, api_bridge_history_bytes());
     s_status.runtime.initialized = true;
     s_status.runtime.state = UNIFIED_MODULE_STATE_INITIALIZED;
     ESP_ERROR_CHECK(health_monitor_register_module("api_bridge"));

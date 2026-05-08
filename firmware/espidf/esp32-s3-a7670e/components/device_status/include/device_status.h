@@ -11,8 +11,31 @@
 
 typedef struct {
     char device_id[UNIFIED_DEVICE_ID_LEN];
+    char hardware_uid[24];
+    char board_name[48];
+    char board_chip[24];
     char active_path[8];
+    uint32_t static_ram_bytes;
+    uint32_t rom_bytes;
+    uint32_t flash_size_bytes;
+    uint32_t psram_size_bytes;
+    bool psram_available;
     uint32_t uptime_ms;
+    uint32_t heap_total_bytes;
+    uint32_t heap_used_bytes;
+    uint32_t heap_free_bytes;
+    uint32_t heap_largest_free_block_bytes;
+    uint32_t runtime_ram_total_bytes;
+    uint32_t runtime_ram_used_bytes;
+    uint32_t runtime_ram_free_bytes;
+    uint32_t runtime_ram_largest_free_block_bytes;
+    uint32_t psram_total_bytes;
+    uint32_t psram_used_bytes;
+    uint32_t psram_free_bytes;
+    uint32_t psram_largest_free_block_bytes;
+    uint32_t other_heap_total_bytes;
+    uint32_t other_heap_used_bytes;
+    uint32_t other_heap_free_bytes;
     uint32_t free_heap_bytes;
     uint32_t largest_free_block_bytes;
     uint32_t internal_free_heap_bytes;
@@ -88,6 +111,9 @@ typedef struct {
     char modem_subscriber_number[UNIFIED_TEXT_SHORT_LEN];
     char modem_ip_address[UNIFIED_IPV4_ADDR_LEN];
     char modem_data_ip[UNIFIED_IPV4_ADDR_LEN];
+    char modem_sms_storage_name[8];
+    uint16_t modem_sms_storage_used;
+    uint16_t modem_sms_storage_total;
     bool sms_ready;
     uint32_t sms_poll_count;
     uint32_t sms_sent_count;

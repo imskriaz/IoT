@@ -18,7 +18,7 @@
 #include "task_registry.h"
 #include "unified_runtime.h"
 
-#define TELEMETRY_STATUS_BUFFER_LEN              3072U
+#define TELEMETRY_STATUS_BUFFER_LEN              4096U
 #define TELEMETRY_STABLE_HEARTBEAT_INTERVAL_MS  60000U
 #define TELEMETRY_HEAP_BUCKET_BYTES              4096U
 #define TELEMETRY_SIGNAL_BUCKET_PERCENT          5
@@ -156,9 +156,11 @@ static uint32_t telemetry_snapshot_fingerprint(const device_status_snapshot_t *s
 
     hash = telemetry_hash_text(hash, snapshot->device_id);
     hash = telemetry_hash_text(hash, snapshot->active_path);
-    hash = telemetry_hash_u32(hash, telemetry_bucket_u32(snapshot->internal_free_heap_bytes, TELEMETRY_HEAP_BUCKET_BYTES));
-    hash = telemetry_hash_u32(hash, telemetry_bucket_u32(snapshot->internal_largest_free_block_bytes, TELEMETRY_HEAP_BUCKET_BYTES));
-    hash = telemetry_hash_u32(hash, telemetry_bucket_u32(snapshot->free_psram_bytes, TELEMETRY_HEAP_BUCKET_BYTES));
+    hash = telemetry_hash_u32(hash, telemetry_bucket_u32(snapshot->runtime_ram_free_bytes, TELEMETRY_HEAP_BUCKET_BYTES));
+    hash = telemetry_hash_u32(hash, telemetry_bucket_u32(snapshot->runtime_ram_largest_free_block_bytes, TELEMETRY_HEAP_BUCKET_BYTES));
+    hash = telemetry_hash_u32(hash, telemetry_bucket_u32(snapshot->psram_free_bytes, TELEMETRY_HEAP_BUCKET_BYTES));
+    hash = telemetry_hash_u32(hash, telemetry_bucket_u32(snapshot->psram_largest_free_block_bytes, TELEMETRY_HEAP_BUCKET_BYTES));
+    hash = telemetry_hash_u32(hash, telemetry_bucket_u32(snapshot->other_heap_free_bytes, TELEMETRY_HEAP_BUCKET_BYTES));
     hash = telemetry_hash_bool(hash, snapshot->wifi_configured);
     hash = telemetry_hash_bool(hash, snapshot->wifi_started);
     hash = telemetry_hash_bool(hash, snapshot->wifi_connected);

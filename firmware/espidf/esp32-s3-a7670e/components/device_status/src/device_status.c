@@ -22,7 +22,7 @@
 #include "task_registry.h"
 #include "wifi_mgr.h"
 
-#define DEVICE_STATUS_JSON_BUFFER_LEN 2048U
+#define DEVICE_STATUS_JSON_BUFFER_LEN 4096U
 
 static bool s_ready;
 static char *s_status_log_buffer;
@@ -30,6 +30,9 @@ static SemaphoreHandle_t s_json_lock;
 
 typedef struct {
     char device_id[UNIFIED_DEVICE_ID_LEN * 2U];
+    char hardware_uid[48];
+    char board_name[96];
+    char board_chip[48];
     char wifi_reason[UNIFIED_TEXT_MEDIUM_LEN * 2U];
     char wifi_scan_summary[UNIFIED_TEXT_LONG_LEN * 2U];
     char wifi_ssid[UNIFIED_WIFI_SSID_LEN * 2U];
@@ -46,6 +49,7 @@ typedef struct {
     char modem_network_type[48];
     char modem_ip[UNIFIED_IPV4_ADDR_LEN * 2U];
     char modem_data_ip[UNIFIED_IPV4_ADDR_LEN * 2U];
+    char modem_sms_storage_name[16];
     char imei[UNIFIED_TEXT_SHORT_LEN * 2U];
     char subscriber[UNIFIED_TEXT_SHORT_LEN * 2U];
     char sms_last_detail[UNIFIED_TEXT_MEDIUM_LEN * 2U];
@@ -267,13 +271,36 @@ esp_err_t device_status_snapshot(device_status_snapshot_t *out_snapshot) {
         "%s",
         device_id_override[0] ? device_id_override : identity.device_id
     );
+    snprintf(out_snapshot->hardware_uid, sizeof(out_snapshot->hardware_uid), "%s", identity.hardware_uid);
+    snprintf(out_snapshot->board_name, sizeof(out_snapshot->board_name), "%s", identity.board_name);
+    snprintf(out_snapshot->board_chip, sizeof(out_snapshot->board_chip), "%s", identity.chip_name);
     snprintf(
         out_snapshot->active_path,
         sizeof(out_snapshot->active_path),
         "%s",
         device_status_active_path_name(&state, &wifi, &modem)
     );
+    out_snapshot->static_ram_bytes = identity.static_ram_bytes;
+    out_snapshot->rom_bytes = identity.rom_bytes;
+    out_snapshot->flash_size_bytes = identity.flash_size_bytes;
+    out_snapshot->psram_size_bytes = identity.psram_size_bytes;
+    out_snapshot->psram_available = identity.psram_available;
     out_snapshot->uptime_ms = diagnostics.uptime_ms;
+    out_snapshot->heap_total_bytes = diagnostics.heap_total_bytes;
+    out_snapshot->heap_used_bytes = diagnostics.heap_used_bytes;
+    out_snapshot->heap_free_bytes = diagnostics.heap_free_bytes;
+    out_snapshot->heap_largest_free_block_bytes = diagnostics.heap_largest_free_block_bytes;
+    out_snapshot->runtime_ram_total_bytes = diagnostics.runtime_ram_total_bytes;
+    out_snapshot->runtime_ram_used_bytes = diagnostics.runtime_ram_used_bytes;
+    out_snapshot->runtime_ram_free_bytes = diagnostics.runtime_ram_free_bytes;
+    out_snapshot->runtime_ram_largest_free_block_bytes = diagnostics.runtime_ram_largest_free_block_bytes;
+    out_snapshot->psram_total_bytes = diagnostics.psram_total_bytes;
+    out_snapshot->psram_used_bytes = diagnostics.psram_used_bytes;
+    out_snapshot->psram_free_bytes = diagnostics.psram_free_bytes;
+    out_snapshot->psram_largest_free_block_bytes = diagnostics.psram_largest_free_block_bytes;
+    out_snapshot->other_heap_total_bytes = diagnostics.other_heap_total_bytes;
+    out_snapshot->other_heap_used_bytes = diagnostics.other_heap_used_bytes;
+    out_snapshot->other_heap_free_bytes = diagnostics.other_heap_free_bytes;
     out_snapshot->free_heap_bytes = diagnostics.free_heap_bytes;
     out_snapshot->largest_free_block_bytes = diagnostics.largest_free_block_bytes;
     out_snapshot->internal_free_heap_bytes = diagnostics.internal_free_heap_bytes;
@@ -378,6 +405,14 @@ esp_err_t device_status_snapshot(device_status_snapshot_t *out_snapshot) {
     );
     snprintf(out_snapshot->modem_ip_address, sizeof(out_snapshot->modem_ip_address), "%s", modem.data_ip_address);
     snprintf(out_snapshot->modem_data_ip, sizeof(out_snapshot->modem_data_ip), "%s", modem.data_ip_address);
+    snprintf(
+        out_snapshot->modem_sms_storage_name,
+        sizeof(out_snapshot->modem_sms_storage_name),
+        "%s",
+        modem.sms_storage_name
+    );
+    out_snapshot->modem_sms_storage_used = modem.sms_storage_used;
+    out_snapshot->modem_sms_storage_total = modem.sms_storage_total;
     out_snapshot->sms_ready = sms.ready;
     out_snapshot->sms_poll_count = sms.poll_count;
     out_snapshot->sms_sent_count = sms.sent_count;
@@ -427,6 +462,9 @@ esp_err_t device_status_build_json_from_snapshot(
     }
 
     device_status_escape_json(snapshot->device_id, scratch->device_id, sizeof(scratch->device_id));
+    device_status_escape_json(snapshot->hardware_uid, scratch->hardware_uid, sizeof(scratch->hardware_uid));
+    device_status_escape_json(snapshot->board_name, scratch->board_name, sizeof(scratch->board_name));
+    device_status_escape_json(snapshot->board_chip, scratch->board_chip, sizeof(scratch->board_chip));
     device_status_escape_json(
         snapshot->wifi_last_disconnect_reason_text,
         scratch->wifi_reason,
@@ -444,6 +482,11 @@ esp_err_t device_status_build_json_from_snapshot(
     device_status_escape_json(snapshot->modem_network_type, scratch->modem_network_type, sizeof(scratch->modem_network_type));
     device_status_escape_json(snapshot->modem_ip_address, scratch->modem_ip, sizeof(scratch->modem_ip));
     device_status_escape_json(snapshot->modem_data_ip, scratch->modem_data_ip, sizeof(scratch->modem_data_ip));
+    device_status_escape_json(
+        snapshot->modem_sms_storage_name,
+        scratch->modem_sms_storage_name,
+        sizeof(scratch->modem_sms_storage_name)
+    );
     device_status_escape_json(snapshot->modem_imei, scratch->imei, sizeof(scratch->imei));
     device_status_escape_json(snapshot->modem_subscriber_number, scratch->subscriber, sizeof(scratch->subscriber));
     device_status_escape_json(snapshot->sms_last_detail, scratch->sms_last_detail, sizeof(scratch->sms_last_detail));
@@ -462,9 +505,23 @@ esp_err_t device_status_build_json_from_snapshot(
         buffer,
         buffer_len,
         &used,
-        "\"type\":\"device_status\",\"device_id\":\"%s\",\"active_path\":\"%s\"",
+        "\"type\":\"device_status\",\"device_id\":\"%s\",\"hardware_uid\":\"%s\""
+        ",\"board_name\":\"%s\",\"board_chip\":\"%s\",\"active_path\":\"%s\""
+        ",\"static_ram_bytes\":%" PRIu32
+        ",\"rom_bytes\":%" PRIu32
+        ",\"flash_size_bytes\":%" PRIu32
+        ",\"psram_size_bytes\":%" PRIu32
+        ",\"psram_available\":%s",
         scratch->device_id,
-        snapshot->active_path
+        scratch->hardware_uid,
+        scratch->board_name,
+        scratch->board_chip,
+        snapshot->active_path,
+        snapshot->static_ram_bytes,
+        snapshot->rom_bytes,
+        snapshot->flash_size_bytes,
+        snapshot->psram_size_bytes,
+        device_status_bool_json(snapshot->psram_available)
     );
     if (err != ESP_OK) {
         goto cleanup;
@@ -473,12 +530,43 @@ esp_err_t device_status_build_json_from_snapshot(
         buffer,
         buffer_len,
         &used,
-        ",\"uptime_ms\":%" PRIu32 ",\"free_heap_bytes\":%" PRIu32
+        ",\"uptime_ms\":%" PRIu32
+        ",\"heap_total_bytes\":%" PRIu32
+        ",\"heap_used_bytes\":%" PRIu32
+        ",\"heap_free_bytes\":%" PRIu32
+        ",\"heap_largest_free_block_bytes\":%" PRIu32
+        ",\"runtime_ram_total_bytes\":%" PRIu32
+        ",\"runtime_ram_used_bytes\":%" PRIu32
+        ",\"runtime_ram_free_bytes\":%" PRIu32
+        ",\"runtime_ram_largest_free_block_bytes\":%" PRIu32
+        ",\"psram_total_bytes\":%" PRIu32
+        ",\"psram_used_bytes\":%" PRIu32
+        ",\"psram_free_bytes\":%" PRIu32
+        ",\"psram_largest_free_block_bytes\":%" PRIu32
+        ",\"other_heap_total_bytes\":%" PRIu32
+        ",\"other_heap_used_bytes\":%" PRIu32
+        ",\"other_heap_free_bytes\":%" PRIu32
+        ",\"free_heap_bytes\":%" PRIu32
         ",\"largest_free_block_bytes\":%" PRIu32
         ",\"internal_free_heap_bytes\":%" PRIu32
         ",\"internal_largest_free_block_bytes\":%" PRIu32
         ",\"free_psram_bytes\":%" PRIu32,
         snapshot->uptime_ms,
+        snapshot->heap_total_bytes,
+        snapshot->heap_used_bytes,
+        snapshot->heap_free_bytes,
+        snapshot->heap_largest_free_block_bytes,
+        snapshot->runtime_ram_total_bytes,
+        snapshot->runtime_ram_used_bytes,
+        snapshot->runtime_ram_free_bytes,
+        snapshot->runtime_ram_largest_free_block_bytes,
+        snapshot->psram_total_bytes,
+        snapshot->psram_used_bytes,
+        snapshot->psram_free_bytes,
+        snapshot->psram_largest_free_block_bytes,
+        snapshot->other_heap_total_bytes,
+        snapshot->other_heap_used_bytes,
+        snapshot->other_heap_free_bytes,
         snapshot->free_heap_bytes,
         snapshot->largest_free_block_bytes,
         snapshot->internal_free_heap_bytes,
@@ -608,7 +696,9 @@ esp_err_t device_status_build_json_from_snapshot(
         ",\"modem_registered\":%s,\"telephony_supported\":%s,\"telephony_enabled\":%s"
         ",\"data_mode_enabled\":%s,\"modem_ip_bearer_ready\":%s,\"modem_signal\":%d"
         ",\"modem_operator\":\"%s\",\"modem_operator_name\":\"%s\",\"modem_network_type\":\"%s\",\"networkType\":\"%s\""
-        ",\"modem_ip_address\":\"%s\",\"modem_data_ip\":\"%s\"",
+        ",\"modem_ip_address\":\"%s\",\"modem_data_ip\":\"%s\""
+        ",\"modem_sms_storage_name\":\"%s\",\"modem_sms_storage_used\":%" PRIu32
+        ",\"modem_sms_storage_total\":%" PRIu32,
         device_status_bool_json(snapshot->modem_registered),
         device_status_bool_json(snapshot->telephony_supported),
         device_status_bool_json(snapshot->telephony_enabled),
@@ -620,7 +710,10 @@ esp_err_t device_status_build_json_from_snapshot(
         scratch->modem_network_type,
         scratch->modem_network_type,
         scratch->modem_ip,
-        scratch->modem_data_ip
+        scratch->modem_data_ip,
+        scratch->modem_sms_storage_name,
+        (uint32_t)snapshot->modem_sms_storage_used,
+        (uint32_t)snapshot->modem_sms_storage_total
     );
     if (err != ESP_OK) {
         goto cleanup;

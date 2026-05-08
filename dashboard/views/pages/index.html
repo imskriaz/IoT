@@ -172,11 +172,33 @@
     const homeCaps = caps || {};
     const showSmsUi = Boolean(homeCaps.sms);
     const showCallsUi = Boolean(homeCaps.calls);
+    const showHardwareCard = homeDeviceLane === 'esp32';
+    const showCallsCard = showCallsUi && !showHardwareCard;
     const showUssdUi = Boolean(homeCaps.ussd);
     const showModemUi = Boolean(homeCaps.modem || homeCaps.internet);
     const showQuickActions = showSmsUi || showUssdUi || showModemUi;
-    const activityColumnClass = showSmsUi && showCallsUi ? 'col-12 col-lg-4' : ((showSmsUi || showCallsUi) ? 'col-12 col-lg-6' : 'col-12');
-    const communicationColumnClass = showSmsUi && showCallsUi ? 'col-12 col-lg-4' : 'col-12 col-lg-6';
+    const showSecondCommunicationCard = showHardwareCard || showCallsCard;
+    const activityColumnClass = showSmsUi && showSecondCommunicationCard ? 'col-12 col-lg-4' : ((showSmsUi || showSecondCommunicationCard) ? 'col-12 col-lg-6' : 'col-12');
+    const communicationColumnClass = showSmsUi && showSecondCommunicationCard ? 'col-12 col-lg-4' : 'col-12 col-lg-6';
+    const homeHardware = deviceStatus.hardware || {};
+    const formatHomeBytes = (value, fallback = 'Not reported') => {
+        const num = Number(value);
+        if (!Number.isFinite(num) || num < 0) return fallback;
+        if (num < 1024) return `${num} B`;
+        if (num < 1024 * 1024) return `${(num / 1024).toFixed(0)} KB`;
+        return `${(num / (1024 * 1024)).toFixed(1)} MB`;
+    };
+    const homeHardwareBoard = homeHardware.boardName || 'Waveshare ESP32-S3-A7670E-4G';
+    const homeHardwareChip = homeHardware.chip || 'ESP32-S3R8';
+    const homeHardwareCpu = 'dual-core Xtensa LX7 up to 240 MHz';
+    const homeHardwareSram = formatHomeBytes(homeHardware.staticRamBytes, '512 KB');
+    const homeHardwareRom = formatHomeBytes(homeHardware.romBytes, '384 KB');
+    const homeHardwarePsram = formatHomeBytes(homeHardware.psramSizeBytes, '8.0 MB');
+    const homeHardwareFlash = formatHomeBytes(homeHardware.flashSizeBytes, '16.0 MB');
+    const homeSmsStorage = homeHardware.smsStorage || deviceStatus.status?.modem?.smsStorage || null;
+    const homeSmsStorageLabel = homeSmsStorage && Number(homeSmsStorage.total) > 0
+        ? `${homeSmsStorage.name || 'ME'} SMS store ${Number(homeSmsStorage.used || 0)}/${Number(homeSmsStorage.total || 0)}`
+        : 'SMS store not reported';
     const homeQueueState = queueState || {};
     const homeDashboardQueue = homeQueueState.dashboard || {};
     const homeDashboardSummary = homeDashboardQueue.summary || {};
@@ -601,8 +623,45 @@
     </div>
     <% } %>
 
-    <!-- Recent Calls -->
-    <% if (showCallsUi) { %>
+    <!-- Hardware Profile -->
+    <% if (showHardwareCard) { %>
+    <div class="<%= communicationColumnClass %>" data-cap="hardware">
+        <div class="card h-100 dashboard-list">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 fs-6 fw-semibold">
+                    <i class="bi bi-motherboard me-2"></i>Hardware
+                </h5>
+                <a href="/device-about" data-device-aware-href="/device-about" class="btn btn-sm btn-primary">
+                    <span class="d-none d-sm-inline">Details</span>
+                    <i class="bi bi-arrow-right d-sm-none"></i>
+                </a>
+            </div>
+            <div class="card-body">
+                <div class="fw-semibold text-truncate" title="<%= homeHardwareBoard %>"><%= homeHardwareBoard %></div>
+                <div class="small text-muted mb-3"><%= homeHardwareChip %> - <%= homeHardwareCpu %></div>
+                <div class="row g-2 small">
+                    <div class="col-6">
+                        <div class="text-muted">SRAM</div>
+                        <div class="fw-semibold"><%= homeHardwareSram %></div>
+                    </div>
+                    <div class="col-6">
+                        <div class="text-muted">ROM</div>
+                        <div class="fw-semibold"><%= homeHardwareRom %></div>
+                    </div>
+                    <div class="col-6">
+                        <div class="text-muted">PSRAM</div>
+                        <div class="fw-semibold"><%= homeHardwarePsram %></div>
+                    </div>
+                    <div class="col-6">
+                        <div class="text-muted">Flash</div>
+                        <div class="fw-semibold"><%= homeHardwareFlash %></div>
+                    </div>
+                </div>
+                <div class="small text-muted mt-3"><%= homeSmsStorageLabel %></div>
+            </div>
+        </div>
+    </div>
+    <% } else if (showCallsCard) { %>
     <div class="<%= communicationColumnClass %>" data-cap="calls">
         <div class="card h-100 dashboard-list">
             <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">

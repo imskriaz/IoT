@@ -918,6 +918,7 @@ function buildDashboardDeviceStatus(status, online) {
         source?.status?.modem?.dataSession
     );
     const systemRuntime = source?.systemRuntime ? { ...source.systemRuntime } : null;
+    const hardware = source?.hardware ? { ...source.hardware } : null;
     const transport = source?.transport ? { ...source.transport } : null;
     const sync = source?.sync || source?.status?.sync || null;
 
@@ -991,6 +992,7 @@ function buildDashboardDeviceStatus(status, online) {
             sync,
             storage,
             systemRuntime,
+            hardware,
             call: source?.call
                 ? {
                     ...source.call,
@@ -1186,6 +1188,7 @@ function buildDashboardDeviceStatus(status, online) {
         sync,
         storage,
         systemRuntime,
+        hardware,
         call: source?.call || null,
         transport,
         sim,

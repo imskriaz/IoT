@@ -1,5 +1,6 @@
 #include "diagnostics.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -24,6 +25,18 @@ static SemaphoreHandle_t s_runtime_lock;
 static diagnostics_runtime_t s_cached_runtime;
 static uint32_t s_last_runtime_refresh_ms;
 static bool s_ready;
+
+static uint32_t diagnostics_u32_from_size(size_t value) {
+    return value > UINT32_MAX ? UINT32_MAX : (uint32_t)value;
+}
+
+static uint32_t diagnostics_subtract_u32(uint32_t value, uint32_t subtract) {
+    return value > subtract ? value - subtract : 0U;
+}
+
+static uint32_t diagnostics_used_bytes(uint32_t total, uint32_t free_bytes) {
+    return total > free_bytes ? total - free_bytes : 0U;
+}
 
 static const char *reset_reason_name(esp_reset_reason_t reason) {
     switch (reason) {
@@ -116,12 +129,33 @@ void diagnostics_snapshot(diagnostics_runtime_t *out_runtime) {
     }
 
     runtime.uptime_ms = now_ms;
-    runtime.free_heap_bytes = esp_get_free_heap_size();
+    runtime.heap_total_bytes = diagnostics_u32_from_size(heap_caps_get_total_size(MALLOC_CAP_8BIT));
+    runtime.heap_free_bytes = diagnostics_u32_from_size(heap_caps_get_free_size(MALLOC_CAP_8BIT));
+    runtime.heap_used_bytes = diagnostics_used_bytes(runtime.heap_total_bytes, runtime.heap_free_bytes);
+    runtime.heap_largest_free_block_bytes = diagnostics_u32_from_size(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    runtime.runtime_ram_total_bytes = diagnostics_u32_from_size(heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    runtime.runtime_ram_free_bytes = diagnostics_u32_from_size(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    runtime.runtime_ram_used_bytes = diagnostics_used_bytes(runtime.runtime_ram_total_bytes, runtime.runtime_ram_free_bytes);
+    runtime.runtime_ram_largest_free_block_bytes = diagnostics_u32_from_size(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    runtime.psram_total_bytes = diagnostics_u32_from_size(heap_caps_get_total_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    runtime.psram_free_bytes = diagnostics_u32_from_size(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    runtime.psram_used_bytes = diagnostics_used_bytes(runtime.psram_total_bytes, runtime.psram_free_bytes);
+    runtime.psram_largest_free_block_bytes = diagnostics_u32_from_size(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    runtime.other_heap_total_bytes = diagnostics_subtract_u32(
+        diagnostics_subtract_u32(runtime.heap_total_bytes, runtime.runtime_ram_total_bytes),
+        runtime.psram_total_bytes
+    );
+    runtime.other_heap_free_bytes = diagnostics_subtract_u32(
+        diagnostics_subtract_u32(runtime.heap_free_bytes, runtime.runtime_ram_free_bytes),
+        runtime.psram_free_bytes
+    );
+    runtime.other_heap_used_bytes = diagnostics_used_bytes(runtime.other_heap_total_bytes, runtime.other_heap_free_bytes);
+    runtime.free_heap_bytes = runtime.heap_free_bytes;
     runtime.min_free_heap_bytes = esp_get_minimum_free_heap_size();
-    runtime.largest_free_block_bytes = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    runtime.internal_free_heap_bytes = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    runtime.internal_largest_free_block_bytes = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    runtime.free_psram_bytes = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    runtime.largest_free_block_bytes = runtime.heap_largest_free_block_bytes;
+    runtime.internal_free_heap_bytes = runtime.runtime_ram_free_bytes;
+    runtime.internal_largest_free_block_bytes = runtime.runtime_ram_largest_free_block_bytes;
+    runtime.free_psram_bytes = runtime.psram_free_bytes;
     runtime.reset_reason = esp_reset_reason();
     snprintf(runtime.last_boot_breadcrumb, sizeof(runtime.last_boot_breadcrumb), "%s", s_last_boot);
 

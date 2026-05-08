@@ -931,6 +931,15 @@ static bool modem_a7670_parse_sms_list_index(const char *response, int *out_inde
     return true;
 }
 
+static bool modem_a7670_sms_list_no_unread_response(const char *response) {
+    if (!response || strstr(response, "+CMGL:") != NULL) {
+        return false;
+    }
+
+    return strstr(response, "+CMS ERROR: unknown error") != NULL ||
+           strstr(response, "+CMS ERROR: 500") != NULL;
+}
+
 static bool modem_a7670_parse_concat_indexes(
     const char *response,
     int *out_indexes,
@@ -1839,7 +1848,9 @@ esp_err_t modem_a7670_consume_pending_sms(unified_sms_payload_t *out_payload, ui
             } else {
                 err = modem_a7670_send_command_locked("AT+CMGL=\"REC UNREAD\"", response, sizeof(response), remaining_timeout_ms, false);
             }
-            if (err == ESP_OK && modem_a7670_parse_sms_list_index(response, &sms_index)) {
+            if (err != ESP_OK && modem_a7670_sms_list_no_unread_response(response)) {
+                err = ESP_ERR_NOT_FOUND;
+            } else if (err == ESP_OK && modem_a7670_parse_sms_list_index(response, &sms_index)) {
                 remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
                 if (remaining_timeout_ms == 0U) {
                     err = ESP_ERR_TIMEOUT;

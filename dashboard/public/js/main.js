@@ -40,14 +40,14 @@ const RUNTIME_CAPABILITY_KEYS = new Set([
     'desiredVersion', 'imei', 'in_sync', 'inSync', 'ip', 'message', 'messageId',
     'message_id', 'moduleHealth', 'mqtt', 'network', 'online', 'operator',
     'queueState', 'reboot_reason', 'rebootReason', 'sim', 'simNumber',
-    'sim_number', 'sync', 'systemRuntime', 'temperature', 'timestamp',
+    'sim_number', 'sync', 'systemRuntime', 'hardware', 'temperature', 'timestamp',
     'transport', 'type', 'uptime', 'uptimeMs', 'uptime_ms', 'voltageMv',
     'voltage_mV'
 ]);
 const RUNTIME_CAPABILITY_PREFIXES = [
-    'dashboard_', 'free_', 'health_', 'internal_', 'largest_', 'low_',
+    'board_', 'dashboard_', 'flash_', 'free_', 'hardware_', 'health_', 'heap_', 'internal_', 'largest_', 'low_',
     'missing_', 'modem_', 'mqtt_', 'queue_', 'sd_', 'sms_', 'stack_',
-    'status_', 'storage_', 'task_', 'wifi_'
+    'status_', 'storage_', 'task_', 'wifi_', 'psram_', 'rom_', 'runtime_ram_', 'other_heap_', 'static_'
 ];
 
 function sanitizeDeviceCapabilities(caps = {}) {

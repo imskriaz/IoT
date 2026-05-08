@@ -107,7 +107,7 @@ config UNIFIED_API_BRIDGE_HISTORY_DEPTH
 config UNIFIED_API_BRIDGE_PAYLOAD_LEN
     int "API bridge payload buffer length"
     range 256 4096
-    default 3072
+    default 4096
 
 config UNIFIED_AUTOMATION_QUEUE_DEPTH
     int "Automation bridge queue depth"

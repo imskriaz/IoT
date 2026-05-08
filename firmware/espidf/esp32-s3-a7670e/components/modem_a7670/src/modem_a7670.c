@@ -13,6 +13,7 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -42,16 +43,17 @@
 #endif
 
 #ifndef CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN
-#define CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN  2048
+#define CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN  4096
 #endif
 
 #define MODEM_A7670_UART_PARSE_LINE_LEN  (CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN + 64U)
 #define MODEM_A7670_MQTT_QUEUE_DEPTH      12
 #define MODEM_A7670_MQTT_TOPIC_LEN        160
+#define MODEM_A7670_MQTT_PAYLOAD_LEN      CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN
 
 typedef struct {
     char topic[MODEM_A7670_MQTT_TOPIC_LEN];
-    char payload[CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN];
+    char payload[MODEM_A7670_MQTT_PAYLOAD_LEN];
 } modem_a7670_mqtt_message_t;
 
 typedef struct {
@@ -86,7 +88,7 @@ static size_t s_sms_count;
 static unified_sms_delivery_payload_t s_sms_delivery_queue[CONFIG_UNIFIED_MODEM_EVENT_QUEUE_DEPTH];
 static size_t s_sms_delivery_head;
 static size_t s_sms_delivery_count;
-static modem_a7670_mqtt_message_t s_mqtt_queue[MODEM_A7670_MQTT_QUEUE_DEPTH];
+static modem_a7670_mqtt_message_t *s_mqtt_queue;
 static size_t s_mqtt_head;
 static size_t s_mqtt_count;
 static bool s_mqtt_service_started;
@@ -103,12 +105,12 @@ static size_t s_mqtt_rx_topic_bytes;
 static size_t s_mqtt_rx_payload_bytes;
 static bool s_mqtt_rx_overflow;
 static char s_mqtt_rx_topic[MODEM_A7670_MQTT_TOPIC_LEN];
-static char s_mqtt_rx_payload[CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN];
+static char *s_mqtt_rx_payload;
 static unified_ussd_payload_t s_ussd_queue[CONFIG_UNIFIED_MODEM_EVENT_QUEUE_DEPTH];
 static size_t s_ussd_head;
 static size_t s_ussd_count;
 char s_last_ussd_code[UNIFIED_TEXT_SHORT_LEN];
-static modem_a7670_runtime_scratch_t s_runtime_scratch;
+static modem_a7670_runtime_scratch_t *s_runtime_scratch;
 static bool s_verbose_errors_configured;
 static bool s_operator_format_configured;
 static uint32_t s_last_registration_refresh_ms;
@@ -119,6 +121,16 @@ static uint32_t s_last_data_session_refresh_ms;
 static bool s_imei_refresh_pending;
 static bool s_subscriber_refresh_pending;
 static bool s_metadata_refresh_pending;
+
+static void *modem_a7670_alloc_zeroed(size_t size) {
+    void *buffer = heap_caps_calloc(1U, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    if (!buffer) {
+        buffer = heap_caps_calloc(1U, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+
+    return buffer;
+}
 
 esp_err_t modem_a7670_send_command_locked(
     const char *command,
@@ -177,6 +189,7 @@ bool modem_a7670_uart_control_blocked_locked(void);
 static void modem_a7670_task(void *arg);
 static void modem_a7670_parse_cbc_locked(const char *line);
 static void modem_a7670_parse_imei_response_locked(const char *response);
+static void modem_a7670_parse_sms_storage_response_locked(const char *response);
 static esp_err_t modem_a7670_mqtt_subscribe_locked(
     const char *topic,
     char *response,
@@ -563,22 +576,24 @@ static void modem_a7670_reset_mqtt_rx_locked(void) {
     s_mqtt_rx_payload_bytes = 0U;
     s_mqtt_rx_overflow = false;
     s_mqtt_rx_topic[0] = '\0';
-    s_mqtt_rx_payload[0] = '\0';
+    if (s_mqtt_rx_payload) {
+        s_mqtt_rx_payload[0] = '\0';
+    }
 }
 
 static void modem_a7670_reset_uart_parse_fragment_locked(void) {
-    s_runtime_scratch.parse_fragment[0] = '\0';
+    s_runtime_scratch->parse_fragment[0] = '\0';
 }
 
 static void modem_a7670_reset_pending_ussd_response_locked(void) {
-    s_runtime_scratch.ussd_response_buffer[0] = '\0';
-    s_runtime_scratch.ussd_response_pending = false;
-    s_runtime_scratch.ussd_response_session_active = false;
+    s_runtime_scratch->ussd_response_buffer[0] = '\0';
+    s_runtime_scratch->ussd_response_pending = false;
+    s_runtime_scratch->ussd_response_session_active = false;
 }
 
 void modem_a7670_clear_ussd_request_locked(void) {
-    s_runtime_scratch.ussd_request_active = false;
-    s_runtime_scratch.ussd_request_deadline_ms = 0U;
+    s_runtime_scratch->ussd_request_active = false;
+    s_runtime_scratch->ussd_request_deadline_ms = 0U;
 }
 
 void modem_a7670_arm_ussd_request_locked(uint32_t timeout_ms) {
@@ -588,15 +603,15 @@ void modem_a7670_arm_ussd_request_locked(uint32_t timeout_ms) {
         effective_timeout_ms = 1000U;
     }
 
-    s_runtime_scratch.ussd_request_active = true;
-    s_runtime_scratch.ussd_request_deadline_ms = unified_tick_now_ms() + effective_timeout_ms;
+    s_runtime_scratch->ussd_request_active = true;
+    s_runtime_scratch->ussd_request_deadline_ms = unified_tick_now_ms() + effective_timeout_ms;
 }
 
 static bool modem_a7670_mqtt_rx_capture_active_locked(void) {
     return s_mqtt_rx_expect_topic ||
            s_mqtt_rx_expect_payload ||
            s_mqtt_rx_topic[0] != '\0' ||
-           s_mqtt_rx_payload[0] != '\0';
+           (s_mqtt_rx_payload && s_mqtt_rx_payload[0] != '\0');
 }
 
 static size_t modem_a7670_parse_cmqttrx_length(const char *line) {
@@ -736,7 +751,7 @@ static void modem_a7670_queue_mqtt_message_locked(const char *topic, const char 
     size_t topic_len = topic ? strlen(topic) : 0U;
     size_t payload_len = payload ? strlen(payload) : 0U;
 
-    if (!topic || topic[0] == '\0') {
+    if (!s_mqtt_queue || !topic || topic[0] == '\0') {
         return;
     }
     if (topic_len >= sizeof(s_mqtt_queue[0].topic) ||
@@ -773,7 +788,7 @@ static void modem_a7670_queue_mqtt_message_locked(const char *topic, const char 
 static void modem_a7670_trim_mqtt_json_payload_locked(void) {
     char *json_end = NULL;
 
-    if (s_mqtt_rx_payload[0] != '{') {
+    if (!s_mqtt_rx_payload || s_mqtt_rx_payload[0] != '{') {
         return;
     }
 
@@ -810,7 +825,7 @@ static void modem_a7670_queue_completed_mqtt_rx_locked(void) {
     }
 
     modem_a7670_trim_mqtt_json_payload_locked();
-    if (s_mqtt_rx_topic[0] != '\0' && s_mqtt_rx_payload[0] != '\0') {
+    if (s_mqtt_rx_payload && s_mqtt_rx_topic[0] != '\0' && s_mqtt_rx_payload[0] != '\0') {
         modem_a7670_queue_mqtt_message_locked(s_mqtt_rx_topic, s_mqtt_rx_payload);
     }
     modem_a7670_reset_mqtt_rx_locked();
@@ -1023,12 +1038,12 @@ static void modem_a7670_parse_ussd_result_locked(const char *line) {
         return;
     }
 
-    s_runtime_scratch.ussd_response_pending = true;
-    s_runtime_scratch.ussd_response_session_active = (session_state == 1);
+    s_runtime_scratch->ussd_response_pending = true;
+    s_runtime_scratch->ussd_response_session_active = (session_state == 1);
     if (*payload_start != '\0') {
         modem_a7670_append_fragment(
-            s_runtime_scratch.ussd_response_buffer,
-            sizeof(s_runtime_scratch.ussd_response_buffer),
+            s_runtime_scratch->ussd_response_buffer,
+            sizeof(s_runtime_scratch->ussd_response_buffer),
             payload_start
         );
     }
@@ -1246,6 +1261,34 @@ static void modem_a7670_parse_imei_response_locked(const char *response) {
     }
 }
 
+static void modem_a7670_parse_sms_storage_response_locked(const char *response) {
+    const char *line = NULL;
+    char store[sizeof(s_status.sms_storage_name)] = {0};
+    int used = 0;
+    int total = 0;
+
+    if (!response) {
+        return;
+    }
+
+    line = strstr(response, "+CPMS:");
+    if (!line) {
+        return;
+    }
+
+    if (sscanf(line, "+CPMS: \"%7[^\"]\",%d,%d", store, &used, &total) != 3 ||
+        used < 0 ||
+        used > UINT16_MAX ||
+        total < 0 ||
+        total > UINT16_MAX) {
+        return;
+    }
+
+    snprintf(s_status.sms_storage_name, sizeof(s_status.sms_storage_name), "%s", store);
+    s_status.sms_storage_used = (uint16_t)used;
+    s_status.sms_storage_total = (uint16_t)total;
+}
+
 static void modem_a7670_parse_line_locked(const char *line) {
     int registration_n = -1;
     int registration_stat = -1;
@@ -1256,7 +1299,7 @@ static void modem_a7670_parse_line_locked(const char *line) {
 
     s_status.urc_count++;
 
-    if (s_runtime_scratch.ussd_response_pending) {
+    if (s_runtime_scratch->ussd_response_pending) {
         const char *closing_quote = strchr(line, '"');
 
         if (closing_quote) {
@@ -1264,40 +1307,40 @@ static void modem_a7670_parse_line_locked(const char *line) {
 
             if (closing_quote > line) {
                 snprintf(final_fragment, sizeof(final_fragment), "%.*s", (int)(closing_quote - line), line);
-                if (s_runtime_scratch.ussd_response_buffer[0] != '\0') {
+                if (s_runtime_scratch->ussd_response_buffer[0] != '\0') {
                     modem_a7670_append_fragment(
-                        s_runtime_scratch.ussd_response_buffer,
-                        sizeof(s_runtime_scratch.ussd_response_buffer),
+                        s_runtime_scratch->ussd_response_buffer,
+                        sizeof(s_runtime_scratch->ussd_response_buffer),
                         "\n"
                     );
                 }
                 modem_a7670_append_fragment(
-                    s_runtime_scratch.ussd_response_buffer,
-                    sizeof(s_runtime_scratch.ussd_response_buffer),
+                    s_runtime_scratch->ussd_response_buffer,
+                    sizeof(s_runtime_scratch->ussd_response_buffer),
                     final_fragment
                 );
             }
 
             modem_a7670_queue_ussd_payload_locked(
-                s_runtime_scratch.ussd_response_session_active,
+                s_runtime_scratch->ussd_response_session_active,
                 NULL,
-                s_runtime_scratch.ussd_response_buffer
+                s_runtime_scratch->ussd_response_buffer
             );
             modem_a7670_reset_pending_ussd_response_locked();
             modem_a7670_clear_ussd_request_locked();
             return;
         }
 
-        if (s_runtime_scratch.ussd_response_buffer[0] != '\0') {
+        if (s_runtime_scratch->ussd_response_buffer[0] != '\0') {
             modem_a7670_append_fragment(
-                s_runtime_scratch.ussd_response_buffer,
-                sizeof(s_runtime_scratch.ussd_response_buffer),
+                s_runtime_scratch->ussd_response_buffer,
+                sizeof(s_runtime_scratch->ussd_response_buffer),
                 "\n"
             );
         }
         modem_a7670_append_fragment(
-            s_runtime_scratch.ussd_response_buffer,
-            sizeof(s_runtime_scratch.ussd_response_buffer),
+            s_runtime_scratch->ussd_response_buffer,
+            sizeof(s_runtime_scratch->ussd_response_buffer),
             line
         );
         return;
@@ -1361,7 +1404,7 @@ static void modem_a7670_parse_line_locked(const char *line) {
             modem_a7670_queue_completed_mqtt_rx_locked();
         } else {
             if (s_mqtt_rx_topic[0] != '\0' ||
-                s_mqtt_rx_payload[0] != '\0' ||
+                (s_mqtt_rx_payload && s_mqtt_rx_payload[0] != '\0') ||
                 s_mqtt_rx_expected_topic_len > 0U ||
                 s_mqtt_rx_expected_payload_len > 0U) {
                 ESP_LOGW(
@@ -1401,7 +1444,8 @@ static void modem_a7670_parse_line_locked(const char *line) {
     }
 
     if (s_mqtt_rx_expect_payload) {
-        if (!modem_a7670_append_fragment(s_mqtt_rx_payload, sizeof(s_mqtt_rx_payload), line)) {
+        if (!s_mqtt_rx_payload ||
+            !modem_a7670_append_fragment(s_mqtt_rx_payload, MODEM_A7670_MQTT_PAYLOAD_LEN, line)) {
             s_mqtt_rx_overflow = true;
         }
         return;
@@ -1604,7 +1648,7 @@ bool modem_a7670_uart_control_blocked_locked(void) {
 }
 
 static esp_err_t modem_a7670_probe_uart_sideband(bool refresh_data_session) {
-    modem_a7670_runtime_scratch_t *scratch = &s_runtime_scratch;
+    modem_a7670_runtime_scratch_t *scratch = s_runtime_scratch;
     char *response = scratch->probe_response;
     char *urc_buffer = scratch->probe_urc_buffer;
     esp_err_t err = ESP_OK;
@@ -1868,6 +1912,17 @@ static esp_err_t modem_a7670_probe_uart_sideband(bool refresh_data_session) {
                     CONFIG_UNIFIED_MODEM_AT_TIMEOUT_MS
                 ) == ESP_OK;
             }
+            if (metadata_ok &&
+                modem_a7670_command(
+                    "AT+CPMS?",
+                    response,
+                    sizeof(scratch->probe_response),
+                    CONFIG_UNIFIED_MODEM_AT_TIMEOUT_MS
+                ) == ESP_OK &&
+                xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+                modem_a7670_parse_sms_storage_response_locked(response);
+                xSemaphoreGive(s_lock);
+            }
             if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
                 s_last_metadata_refresh_ms = metadata_ok ? now_ms : 0U;
                 if (metadata_ok) {
@@ -1945,7 +2000,7 @@ static esp_err_t modem_a7670_probe_uart_sideband(bool refresh_data_session) {
 }
 
 static esp_err_t modem_a7670_refresh_data_session_locked(uint32_t timeout_ms) {
-    modem_a7670_runtime_scratch_t *scratch = &s_runtime_scratch;
+    modem_a7670_runtime_scratch_t *scratch = s_runtime_scratch;
     state_mgr_snapshot_t snapshot = {0};
     char *response = scratch->data_session_response;
     char *ip_address = scratch->data_session_ip_address;
@@ -2008,7 +2063,7 @@ static esp_err_t modem_a7670_refresh_data_session_locked(uint32_t timeout_ms) {
 }
 
 void modem_a7670_parse_response_locked(const char *response) {
-    modem_a7670_runtime_scratch_t *scratch = &s_runtime_scratch;
+    modem_a7670_runtime_scratch_t *scratch = s_runtime_scratch;
     char *fragment = scratch->parse_fragment;
     size_t fragment_len = sizeof(scratch->parse_fragment);
     size_t response_len = 0U;
@@ -2075,7 +2130,7 @@ void modem_a7670_parse_response_locked(const char *response) {
             } else {
                 remaining_expected = s_mqtt_rx_payload_fragment_remaining;
                 dest = s_mqtt_rx_payload;
-                dest_len = sizeof(s_mqtt_rx_payload);
+                dest_len = MODEM_A7670_MQTT_PAYLOAD_LEN;
                 captured_bytes = &s_mqtt_rx_payload_bytes;
             }
 
@@ -2437,7 +2492,7 @@ esp_err_t modem_a7670_prepare_command(char *buffer, size_t buffer_len, const cha
 }
 
 static void modem_a7670_task(void *arg) {
-    modem_a7670_runtime_scratch_t *scratch = &s_runtime_scratch;
+    modem_a7670_runtime_scratch_t *scratch = s_runtime_scratch;
     char *urc_buffer = scratch->task_urc_buffer;
     uart_event_t uart_event = {0};
     bool probe_due = false;
@@ -2533,10 +2588,27 @@ esp_err_t modem_a7670_init(void) {
         return ESP_ERR_NO_MEM;
     }
 
+    s_mqtt_queue = modem_a7670_alloc_zeroed(
+        sizeof(*s_mqtt_queue) * MODEM_A7670_MQTT_QUEUE_DEPTH
+    );
+    if (!s_mqtt_queue) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_mqtt_rx_payload = modem_a7670_alloc_zeroed(MODEM_A7670_MQTT_PAYLOAD_LEN);
+    if (!s_mqtt_rx_payload) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_runtime_scratch = modem_a7670_alloc_zeroed(sizeof(*s_runtime_scratch));
+    if (!s_runtime_scratch) {
+        return ESP_ERR_NO_MEM;
+    }
+
     memset(&s_status, 0, sizeof(s_status));
     memset(&s_public_status, 0, sizeof(s_public_status));
     memset(s_sms_index_queue, 0, sizeof(s_sms_index_queue));
-    memset(s_mqtt_queue, 0, sizeof(s_mqtt_queue));
+    memset(s_mqtt_queue, 0, sizeof(*s_mqtt_queue) * MODEM_A7670_MQTT_QUEUE_DEPTH);
     memset(s_ussd_queue, 0, sizeof(s_ussd_queue));
     memset(s_last_ussd_code, 0, sizeof(s_last_ussd_code));
     s_at_echo_disabled = false;
@@ -3329,12 +3401,12 @@ bool modem_a7670_pop_ussd_result(unified_ussd_payload_t *out_payload) {
 static void modem_a7670_handle_ussd_request_timeout_locked(void) {
     uint32_t now_ms = 0U;
 
-    if (!s_runtime_scratch.ussd_request_active) {
+    if (!s_runtime_scratch->ussd_request_active) {
         return;
     }
 
     now_ms = unified_tick_now_ms();
-    if ((int32_t)(now_ms - s_runtime_scratch.ussd_request_deadline_ms) < 0) {
+    if ((int32_t)(now_ms - s_runtime_scratch->ussd_request_deadline_ms) < 0) {
         return;
     }
 

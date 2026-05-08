@@ -39,6 +39,9 @@ typedef struct {
     char imei[UNIFIED_TEXT_SHORT_LEN];
     char subscriber_number[UNIFIED_TEXT_SHORT_LEN];
     char data_ip_address[UNIFIED_IPV4_ADDR_LEN];
+    char sms_storage_name[8];
+    uint16_t sms_storage_used;
+    uint16_t sms_storage_total;
     char last_response[UNIFIED_TEXT_MEDIUM_LEN];
 } modem_a7670_status_t;
 

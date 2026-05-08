@@ -15,6 +15,8 @@ const BOARD_CATALOG = {
             family: 'ESP32-S3 + A7670E',
             chip: 'ESP32-S3',
             cpu: 'Xtensa LX7 dual-core up to 240 MHz',
+            staticRam: '512 KB',
+            rom: '384 KB',
             flash: '16 MB',
             psram: '8 MB',
             notes: 'Primary dashboard reference board'
