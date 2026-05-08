@@ -88,13 +88,26 @@ function inferDeviceListType(row = {}, live = {}, caps = {}) {
         live?.platform,
         live?.device?.platform,
         live?.device?.bridge,
+        live?.bridge,
+        live?.bridge_type,
+        live?.app,
         caps.bridge,
         caps.bridge_type,
         caps.platform,
+        caps.app,
         caps.board,
         row.board,
         row.type
     ].map(normalizeDeviceTypeToken).filter(Boolean);
+
+    if (tokens.some(token =>
+        token === 'httpsms'
+        || token === 'httpsms-bridge'
+        || token.includes('httpsms')
+        || (token.includes('http') && token.includes('sms'))
+    )) {
+        return 'httpSMS';
+    }
 
     const firmwareHints = [
         live?.activePath,
@@ -205,8 +218,23 @@ function normalizePublicBaseUrl(req) {
 }
 
 function classifyDeviceLane(device = {}) {
-    const type = String(device.type || device.board || device.id || '').trim().toLowerCase();
-    if (type.includes('android') || (type.includes('http') && type.includes('sms'))) return 'android';
+    const caps = parseProvisioningCapabilities(device);
+    const tokens = [
+        device.type,
+        device.board,
+        device.id,
+        caps.bridge,
+        caps.bridge_type,
+        caps.app,
+        caps.platform
+    ].map(value => String(value || '').trim().toLowerCase()).filter(Boolean);
+    if (tokens.some(token =>
+        token === 'httpsms'
+        || token === 'httpsms-bridge'
+        || token.includes('httpsms')
+        || (token.includes('http') && token.includes('sms'))
+    )) return 'httpSMS';
+    if (tokens.some(token => token.includes('android'))) return 'android';
     return 'esp32';
 }
 
@@ -2821,6 +2849,29 @@ function buildAndroidProvisioningSummary(payload, apiKeyName = '') {
     };
 }
 
+function buildHttpSmsProvisioningSummary({ device, serverUrl, apiKeyName = '' }) {
+    return {
+        transport_mode: 'http',
+        device_id: device.id,
+        server_url: serverUrl,
+        api_path: '/v1',
+        app: 'httpSMS',
+        api_key_name: apiKeyName,
+        encryption_note: 'Use the existing message lock key from the phone app if encrypted messages are enabled.'
+    };
+}
+
+function buildHttpSmsCopyText({ serverUrl, apiKey, apiKeyName = '' }) {
+    return [
+        'httpSMS app setup',
+        `Dashboard link: ${serverUrl}`,
+        'API path: /v1',
+        `API key: ${apiKey}`,
+        apiKeyName ? `API key name: ${apiKeyName}` : '',
+        'Encryption key: keep the existing message lock key from the phone app if already configured'
+    ].filter(Boolean).join('\n');
+}
+
 // GET /api/devices/:id/provisioning-qr - recovery QR for Android onboarding gaps
 router.get('/:id/provisioning-qr', requireDeviceAccess('id'), async (req, res) => {
     try {
@@ -2863,6 +2914,46 @@ router.get('/:id/provisioning-qr', requireDeviceAccess('id'), async (req, res) =
                 qr_content_type: 'text/plain',
                 setup_token: token,
                 summary: buildAndroidProvisioningSummary(payload, apiKeyName)
+            });
+        }
+
+        if (lane === 'httpSMS') {
+            let apiKey = '';
+            let apiKeyName = '';
+            const userId = req.session?.user?.id || req.user?.id;
+            if (userId) {
+                apiKeyName = `httpSMS ${device.name || device.id} settings`;
+                const provisionedKey = await createDeviceProvisioningApiKey(db, {
+                    userId,
+                    name: apiKeyName,
+                    deviceId: device.id,
+                    scopes: 'write',
+                    rateLimitRpm: 120,
+                    apiKeyPrefix: 'pk_'
+                });
+                apiKey = provisionedKey.key;
+            }
+            const qrDataUrl = apiKey ? await QRCode.toDataURL(apiKey, {
+                errorCorrectionLevel: 'M',
+                margin: 1,
+                width: 180
+            }) : '';
+            const summary = buildHttpSmsProvisioningSummary({ device, serverUrl, apiKeyName });
+
+            return res.json({
+                success: true,
+                lane,
+                device_id: device.id,
+                qr_data_url: qrDataUrl,
+                qr_content_type: 'text/plain',
+                qr_content: apiKey,
+                copy_text: buildHttpSmsCopyText({ serverUrl, apiKey, apiKeyName }),
+                setup: {
+                    base_url: serverUrl,
+                    api_path: '/v1',
+                    api_key: apiKey
+                },
+                summary
             });
         }
 

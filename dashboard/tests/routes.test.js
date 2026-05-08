@@ -1961,6 +1961,50 @@ describe('GET /api/devices', () => {
         }));
     });
 
+    test('keeps official httpSMS app devices on the httpsms lane even with HTTP live status', async () => {
+        global.modemService = {
+            getStatus: jest.fn().mockReturnValue({
+                online: true,
+                activePath: 'http',
+                bridge: 'httpsms',
+                app: 'httpSMS',
+                lastSeen: '2026-05-08T10:18:53.000Z'
+            })
+        };
+
+        const db = makeDbMock({
+            all: jest.fn().mockResolvedValue([
+                {
+                    id: 'httpsms-1',
+                    name: 'httpSMS',
+                    type: 'httpsms-bridge',
+                    board: 'httpsms-bridge',
+                    capabilities: JSON.stringify({
+                        bridge: 'httpsms',
+                        sms: true,
+                        http: true,
+                        mqtt: false
+                    }),
+                    created_at: '2026-05-08T00:00:00.000Z',
+                    assigned_users: 1
+                }
+            ])
+        });
+
+        const router = require('../routes/devices');
+        const app = buildApp(router, '/api/devices', { id: 1, role: 'admin', username: 'admin' }, db);
+
+        const res = await request(app).get('/api/devices?device=httpsms-1');
+
+        expect(res.status).toBe(200);
+        expect(res.body.devices[0]).toEqual(expect.objectContaining({
+            id: 'httpsms-1',
+            type: 'httpsms',
+            deviceType: 'httpsms',
+            activePath: 'http'
+        }));
+    });
+
     test('active device falls back to the first accessible registered device even when offline', async () => {
         global.modemService = {
             isDeviceOnline: jest.fn().mockReturnValue(false),

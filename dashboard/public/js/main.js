@@ -2921,6 +2921,33 @@ function getActiveDeviceTypeContext() {
     return String(value || '').trim().toLowerCase();
 }
 
+function normalizeSidebarDeviceTypeAlias(value) {
+    const token = String(value || '').trim().toLowerCase();
+    if (!token) return '';
+    if (
+        token === 'httpsms'
+        || token === 'httpsms-bridge'
+        || token.includes('httpsms')
+        || (token.includes('http') && token.includes('sms'))
+    ) {
+        return 'httpsms';
+    }
+    if (token === 'android' || token.includes('android')) {
+        return 'android';
+    }
+    if (token === 'esp32' || token.includes('esp32') || token.includes('a7670') || token === 'firmware') {
+        return 'esp32';
+    }
+    return token;
+}
+
+function sidebarDeviceTypeMatches(activeType, candidateType) {
+    const active = normalizeSidebarDeviceTypeAlias(activeType);
+    const candidate = normalizeSidebarDeviceTypeAlias(candidateType);
+    if (!active || !candidate) return false;
+    return active === candidate || active.includes(candidate) || candidate.includes(active);
+}
+
 function matchesSidebarDeviceType(el) {
     if (!el) return true;
 
@@ -2935,14 +2962,14 @@ function matchesSidebarDeviceType(el) {
         .filter(Boolean);
 
     if (showTypes.length) {
-        return Boolean(activeType) && showTypes.includes(activeType);
+        return Boolean(activeType) && showTypes.some(type => sidebarDeviceTypeMatches(activeType, type));
     }
 
     if (!activeType) {
         return true;
     }
 
-    return !hideTypes.includes(activeType);
+    return !hideTypes.some(type => sidebarDeviceTypeMatches(activeType, type));
 }
 
 function refreshSidebarDeviceNavigation() {

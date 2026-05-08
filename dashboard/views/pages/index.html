@@ -109,23 +109,28 @@
     const activeHomeDevice = Array.isArray(allDevices)
         ? (allDevices.find(d => String(d.id || '') === String(deviceId || '')) || {})
         : {};
-    const activeHomeTypeText = String(activeHomeDevice.type || deviceStatus.type || activeHomeDevice.board || deviceId || '').toLowerCase();
-    homeDeviceLane = activeHomeTypeText.includes('android') || (activeHomeTypeText.includes('http') && activeHomeTypeText.includes('sms'))
-        ? 'android'
-        : 'esp32';
-    const homeLaneLabel = homeDeviceLane === 'android' ? 'Android Bridge device' : 'ESP32 device';
+    const activeHomeTypeText = String(activeHomeDevice.type || activeHomeDevice.deviceType || deviceStatus.type || deviceStatus.bridge || deviceStatus.app || activeHomeDevice.board || deviceId || '').toLowerCase();
+    homeDeviceLane = activeHomeTypeText.includes('httpsms') || (activeHomeTypeText.includes('http') && activeHomeTypeText.includes('sms'))
+        ? 'httpSMS'
+        : (activeHomeTypeText.includes('android') ? 'android' : 'esp32');
+    const homeLaneLabel = {
+        esp32: 'ESP32 device',
+        android: 'Android Bridge device',
+        httpSMS: 'httpSMS device'
+    }[homeDeviceLane];
     const homeReportedModelLabel = deviceStatus.model
         ? [deviceStatus.manufacturer, deviceStatus.model].filter(Boolean).join(' ').trim()
         : '';
     const homeModelLabel = homeReportedModelLabel
-        || (homeDeviceLane === 'esp32' ? 'ESP32' : null)
+        || (homeDeviceLane === 'esp32' ? 'ESP32' : (homeDeviceLane === 'httpSMS' ? 'httpSMS' : null))
         || deviceStatus.deviceName
         || 'Not reported by device';
     const homeShowModelDetail = homeDeviceLane !== 'esp32';
     const homeDetailColumnClass = homeShowModelDetail ? 'col-6 col-md-2' : 'col-6 col-md-3';
     const homeOfflineAlertText = {
         esp32: 'Check power, MQTT broker, Wi-Fi/APN, SIM/modem path, and device firmware heartbeat.',
-        android: 'Open the Android Bridge app and check transport mode, background service, SMS permissions, and battery restrictions.'
+        android: 'Open the Android Bridge app and check transport mode, background service, SMS permissions, and battery restrictions.',
+        httpSMS: 'Open the httpSMS app, confirm the dashboard link and app key, allow SMS permissions, and keep background service enabled.'
     }[homeDeviceLane];
     const homeTroubleshooting = {
         esp32: {
@@ -155,6 +160,21 @@
                 'If using HTTP API, confirm the server URL and device API key were provisioned',
                 'Check dashboard connection status and recent device activity',
                 'Use the Android recovery QR from Device Settings when needed'
+            ]
+        },
+        httpSMS: {
+            device: [
+                'Open the httpSMS app on the phone',
+                'Confirm the dashboard link points to this public server',
+                'Confirm the app key was copied or scanned from onboarding',
+                'Allow SMS and notification permissions',
+                'Keep background service and battery permission enabled'
+            ],
+            server: [
+                'Use a public HTTPS dashboard link for the phone app',
+                'Check Device Settings for the httpSMS setup details',
+                'Confirm SMS queue rows are pending for this device',
+                'Use Queue Manager to inspect outgoing SMS waiting for pickup'
             ]
         }
     }[homeDeviceLane];
@@ -464,7 +484,7 @@
                     <%= healthScore %>%
                     <i class="dashboard-heart-icon bi bi-heart-pulse ms-1"></i>
                     <% } else { %>
-                    <%= homeOfflinePlaceholder %>
+                    N/A
                     <% } %>
                 </div>
             </div>

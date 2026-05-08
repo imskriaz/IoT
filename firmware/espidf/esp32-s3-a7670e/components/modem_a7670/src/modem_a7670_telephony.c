@@ -21,6 +21,7 @@
 #define MODEM_A7670_SMS_UCS2_NUMBER_LEN        (UNIFIED_TEXT_SHORT_LEN * 4U + 1U)
 #define MODEM_A7670_SMS_UCS2_TEXT_LEN          (UNIFIED_SMS_TEXT_MAX_LEN * 4U + 1U)
 #define MODEM_A7670_SMS_PDU_MAX_HEX_LEN        512U
+#define MODEM_A7670_SMS_INDEX_SCAN_ATTEMPTS      24U
 #define MODEM_A7670_SMS_TEXT_FO_DEFAULT          17U
 #define MODEM_A7670_SMS_TEXT_FO_STATUS_REPORT    49U
 #define MODEM_A7670_SMS_TEXT_VP_DEFAULT         167U
@@ -1024,16 +1025,19 @@ static esp_err_t modem_a7670_consume_sms_by_index_scan_locked(
     const uint16_t safe_total = total > 512U ? 512U : total;
     uint16_t attempts = 0U;
     uint16_t index = s_sms_storage_scan_next_index;
+    uint16_t max_attempts = safe_total < MODEM_A7670_SMS_INDEX_SCAN_ATTEMPTS
+        ? safe_total
+        : MODEM_A7670_SMS_INDEX_SCAN_ATTEMPTS;
     esp_err_t last_err = ESP_ERR_NOT_FOUND;
 
     if (!out_payload || !response || response_len == 0U || safe_total == 0U) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (index >= safe_total) {
-        index = 0U;
+    if (index == 0U || index > safe_total) {
+        index = 1U;
     }
 
-    while (attempts < safe_total) {
+    while (attempts < max_attempts) {
         uint32_t remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
         if (remaining_timeout_ms == 0U) {
             return ESP_ERR_TIMEOUT;
@@ -1041,7 +1045,7 @@ static esp_err_t modem_a7670_consume_sms_by_index_scan_locked(
 
         response[0] = '\0';
         last_err = modem_a7670_read_sms_locked((int)index, out_payload, response, response_len, deadline_us, true);
-        s_sms_storage_scan_next_index = (uint16_t)((index + 1U) % safe_total);
+        s_sms_storage_scan_next_index = index >= safe_total ? 1U : (uint16_t)(index + 1U);
         if (last_err == ESP_OK) {
             return ESP_OK;
         }
@@ -2036,15 +2040,6 @@ esp_err_t modem_a7670_consume_pending_sms(unified_sms_payload_t *out_payload, ui
         if (err == ESP_ERR_NOT_FOUND) {
             err = modem_a7670_consume_sms_by_stat_locked(
                 "REC UNREAD",
-                out_payload,
-                response,
-                MODEM_A7670_SMS_READ_RESPONSE_LEN,
-                deadline_us
-            );
-        }
-        if (err == ESP_ERR_NOT_FOUND) {
-            err = modem_a7670_consume_sms_by_stat_locked(
-                "REC READ",
                 out_payload,
                 response,
                 MODEM_A7670_SMS_READ_RESPONSE_LEN,

@@ -621,6 +621,27 @@ describe('sidebar navigation coverage', () => {
         expect(aboutIndex).toBeGreaterThan(queueIndex);
     });
 
+    test('hides unsupported dashboard links when the active lane is the official httpSMS app', () => {
+        const sidebarHtml = renderSidebar();
+        const mainJs = fs.readFileSync(mainJsPath, 'utf8');
+        const indexHtml = fs.readFileSync(indexPath, 'utf8');
+
+        expect(sidebarHtml).toContain('href="/sms"');
+        expect(sidebarHtml).toContain('href="/devices/settings"');
+        expect(sidebarHtml).toContain('href="/devices/queue"');
+        expect(sidebarHtml).toContain('href="/devices/about"');
+        expect(sidebarHtml).toContain('href="/contacts" class="nav-link');
+        expect(sidebarHtml).toContain('data-hide-device-type="httpsms"');
+        expect(sidebarHtml).toContain('href="/console"');
+        expect(sidebarHtml).toContain('href="/devices/capabilities"');
+        expect(mainJs).toContain('function normalizeSidebarDeviceTypeAlias(value)');
+        expect(mainJs).toContain("return 'httpsms';");
+        expect(mainJs).toContain('showTypes.some(type => sidebarDeviceTypeMatches(activeType, type))');
+        expect(mainJs).toContain('hideTypes.some(type => sidebarDeviceTypeMatches(activeType, type))');
+        expect(indexHtml).toContain("httpsms: 'httpSMS device'");
+        expect(indexHtml).toContain('Open the httpSMS app, confirm the dashboard link and app key');
+    });
+
     test('queue manager uses the shared appConfirm flow instead of an undefined legacy helper', () => {
         const html = fs.readFileSync(queueManagerPath, 'utf8');
 

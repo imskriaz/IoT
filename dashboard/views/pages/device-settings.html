@@ -198,15 +198,20 @@
         </div>
 
         <div class="col-12 col-xl-4">
-            <div class="card mb-4 app-hidden" id="deviceSettingsProvisioningCard" data-lane-visible="android">
+            <div class="card mb-4 app-hidden" id="deviceSettingsProvisioningCard" data-lane-visible="android,httpSMS">
                 <div class="card-header bg-body py-3 d-flex justify-content-between align-items-center">
                     <h5 class="mb-0"><i class="bi bi-qr-code me-2"></i>Recovery QR</h5>
                     <span class="badge bg-secondary" id="deviceSettingsProvisioningLane">App</span>
                 </div>
                 <div class="card-body">
                     <p class="small text-muted mb-3" id="deviceSettingsProvisioningText">Load device app recovery details.</p>
-                    <div class="mb-3">
-                        <img id="deviceSettingsProvisioningImage" class="img-fluid w-100 rounded border bg-white p-1 app-hidden" alt="Device recovery QR">
+                    <div class="mb-3 text-center">
+                        <div class="device-settings-qr-wrap app-hidden" id="deviceSettingsProvisioningQrWrap">
+                            <img id="deviceSettingsProvisioningImage" class="img-fluid rounded border bg-white p-1" alt="Device recovery QR">
+                            <button type="button" class="btn btn-sm btn-dark device-settings-qr-copy" id="deviceSettingsProvisioningCopyBtn" onclick="copyDeviceSettingsProvisioningData()" title="Copy setup data">
+                                <i class="bi bi-clipboard"></i>
+                            </button>
+                        </div>
                     </div>
                     <div class="small font-monospace text-break mb-3 app-hidden" id="deviceSettingsProvisioningSummary"></div>
                     <div class="alert alert-warning py-2 px-3 small mt-3 mb-0 app-hidden" id="deviceSettingsProvisioningWarning"></div>
@@ -374,8 +379,19 @@ function deviceRuntimeConfigNeedsFirmwareUpdate(data = {}) {
 }
 
 function classifyDeviceSettingsLane(device = {}) {
-    const text = String(device.type || device.board || device.id || '').toLowerCase();
-    if (text.includes('android') || (text.includes('http') && text.includes('sms'))) return 'android';
+    const caps = parseDeviceSettingsCapabilities(device.capabilities);
+    const tokens = [
+        device.type,
+        device.deviceType,
+        device.board,
+        device.id,
+        caps.bridge,
+        caps.bridge_type,
+        caps.app,
+        caps.platform
+    ].map(value => String(value || '').trim().toLowerCase()).filter(Boolean);
+    if (tokens.some(token => token === 'httpsms' || token === 'httpsms-bridge' || token.includes('httpsms') || (token.includes('http') && token.includes('sms')))) return 'httpSMS';
+    if (tokens.some(token => token.includes('android'))) return 'android';
     return 'esp32';
 }
 
@@ -423,6 +439,13 @@ function renderDeviceSettingsLane(device = {}) {
             hint: 'Android phone device. Dashboard provisioning is changed here; app permissions and OS controls stay in Android.',
             description: 'Stored for this Android device. The recovery QR and copied code both carry the same secure setup package for the selected transport.',
             apply: 'Save updates dashboard-side Android provisioning. Scan the recovery QR on the right if setup details were missed.'
+        },
+        httpSMS: {
+            label: 'httpSMS',
+            cls: 'badge bg-success fs-6',
+            hint: 'Official httpSMS phone app. SMS send/receive, status events, heartbeats, and missed-call events are available over HTTP.',
+            description: 'Stored for this httpSMS phone lane. Use the QR or copy button to put the dashboard link and phone API key back into the app.',
+            apply: 'Save updates dashboard-side httpSMS metadata. The app uses the QR/API key shown on the right.'
         }
     };
     const meta = labels[lane] || labels.esp32;
@@ -459,7 +482,9 @@ function deviceSettingsProvisioningElements() {
         card: document.getElementById('deviceSettingsProvisioningCard'),
         lane: document.getElementById('deviceSettingsProvisioningLane'),
         text: document.getElementById('deviceSettingsProvisioningText'),
+        wrap: document.getElementById('deviceSettingsProvisioningQrWrap'),
         image: document.getElementById('deviceSettingsProvisioningImage'),
+        copy: document.getElementById('deviceSettingsProvisioningCopyBtn'),
         summary: document.getElementById('deviceSettingsProvisioningSummary'),
         button: document.getElementById('deviceSettingsProvisioningGenerateBtn'),
         warning: document.getElementById('deviceSettingsProvisioningWarning')
@@ -475,13 +500,19 @@ function setDeviceSettingsProvisioningVisible(el, visible, displayValue) {
 
 function resetDeviceSettingsProvisioningCard(lane) {
     const els = deviceSettingsProvisioningElements();
-    if (els.card) setDeviceSettingsProvisioningVisible(els.card, lane === 'android');
+    const isHttpSms = lane === 'httpSMS';
+    if (els.card) setDeviceSettingsProvisioningVisible(els.card, lane === 'android' || isHttpSms);
     if (els.lane) {
-        els.lane.textContent = 'Android';
-        els.lane.className = 'badge bg-success';
+        els.lane.textContent = isHttpSms ? 'httpSMS' : 'Android';
+        els.lane.className = isHttpSms ? 'badge bg-success' : 'badge bg-success';
     }
-    if (els.text) els.text.textContent = 'Loading recovery details...';
-    if (els.image) setDeviceSettingsProvisioningVisible(els.image, false);
+    if (els.text) els.text.textContent = isHttpSms ? 'Loading httpSMS app key...' : 'Loading recovery details...';
+    if (els.wrap) setDeviceSettingsProvisioningVisible(els.wrap, false, 'inline-block');
+    if (els.image) els.image.removeAttribute('src');
+    if (els.copy) {
+        els.copy.dataset.copyText = '';
+        els.copy.setAttribute('aria-label', 'Copy setup data');
+    }
     if (els.summary) setDeviceSettingsProvisioningVisible(els.summary, false);
     if (els.warning) setDeviceSettingsProvisioningVisible(els.warning, false);
 }
@@ -491,7 +522,8 @@ async function loadDeviceSettingsProvisioningCard(device = {}) {
     const lane = classifyDeviceSettingsLane(device);
     const els = deviceSettingsProvisioningElements();
     const isOffline = !Boolean(device.online);
-    if (!id || lane !== 'android' || !isOffline) {
+    const shouldShow = lane === 'httpSMS' || (lane === 'android' && isOffline);
+    if (!id || !shouldShow) {
         if (els.card) setDeviceSettingsProvisioningVisible(els.card, false);
         return;
     }
@@ -520,7 +552,10 @@ async function loadDeviceSettingsProvisioningCard(device = {}) {
             }
             if (els.image) {
                 els.image.src = payload.qr_data_url || '';
-                setDeviceSettingsProvisioningVisible(els.image, Boolean(payload.qr_data_url));
+                if (els.wrap) setDeviceSettingsProvisioningVisible(els.wrap, Boolean(payload.qr_data_url), 'inline-block');
+            }
+            if (els.copy) {
+                els.copy.dataset.copyText = payload.setup_token || '';
             }
             if (els.summary) {
                 const summaryLines = [
@@ -543,8 +578,62 @@ async function loadDeviceSettingsProvisioningCard(device = {}) {
             if (els.warning) setDeviceSettingsProvisioningVisible(els.warning, false);
             return;
         }
+        if (payload.lane === 'httpSMS') {
+            const summary = payload.summary || {};
+            const setup = payload.setup || {};
+            if (els.text) {
+                els.text.textContent = 'Scan this in the httpSMS app key field, or copy the setup data from the QR.';
+            }
+            if (els.image) {
+                els.image.src = payload.qr_data_url || '';
+                if (els.wrap) setDeviceSettingsProvisioningVisible(els.wrap, Boolean(payload.qr_data_url), 'inline-block');
+            }
+            if (els.copy) {
+                els.copy.dataset.copyText = payload.copy_text || setup.api_key || payload.qr_content || '';
+            }
+            if (els.summary) {
+                const summaryLines = [
+                    'Transport: HTTP API',
+                    `Device: ${summary.device_id || payload.device_id || id}`,
+                    `Dashboard link: ${summary.server_url || setup.base_url || 'Not configured'}`,
+                    `API path: ${summary.api_path || setup.api_path || '/v1'}`,
+                    summary.api_key_name ? `API key: ${summary.api_key_name}` : 'API key: generated for this phone lane',
+                    'Secret: QR contains the pk_ phone app key'
+                ];
+                els.summary.textContent = summaryLines.join('\n');
+                setDeviceSettingsProvisioningVisible(els.summary, true);
+            }
+            if (els.warning) {
+                els.warning.textContent = summary.encryption_note || 'If encrypted messages are enabled, keep using the same message lock key already saved in the phone app.';
+                setDeviceSettingsProvisioningVisible(els.warning, true);
+            }
+            return;
+        }
     } catch (error) {
         if (els.text) els.text.textContent = error.message || 'Failed to load recovery QR.';
+    }
+}
+
+async function copyDeviceSettingsProvisioningData() {
+    const text = document.getElementById('deviceSettingsProvisioningCopyBtn')?.dataset.copyText || '';
+    if (!text) {
+        showToast('No setup data available to copy', 'warning');
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(text);
+        showToast('Setup data copied', 'success');
+    } catch (_) {
+        const fallback = document.createElement('textarea');
+        fallback.value = text;
+        fallback.setAttribute('readonly', 'readonly');
+        fallback.style.position = 'fixed';
+        fallback.style.opacity = '0';
+        document.body.appendChild(fallback);
+        fallback.select();
+        document.execCommand('copy');
+        fallback.remove();
+        showToast('Setup data copied', 'success');
     }
 }
 
@@ -1684,5 +1773,29 @@ document.addEventListener('DOMContentLoaded', loadDeviceSettingsPicker);
 
 .settings-device-page .form-label {
     margin-bottom: 0.35rem;
+}
+
+.device-settings-qr-wrap {
+    position: relative;
+    max-width: 180px;
+    width: 100%;
+}
+
+.device-settings-qr-wrap img {
+    max-width: 180px;
+    width: 100%;
+}
+
+.device-settings-qr-copy {
+    position: absolute;
+    top: 0.35rem;
+    right: 0.35rem;
+    opacity: 0.15;
+    transition: opacity 0.15s ease;
+}
+
+.device-settings-qr-wrap:hover .device-settings-qr-copy,
+.device-settings-qr-copy:focus {
+    opacity: 1;
 }
 </style>

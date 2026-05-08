@@ -521,7 +521,8 @@ describe('MQTTHandlers SMS storage', () => {
                 null,
                 null,
                 null,
-                null
+                null,
+                0
             ]
         );
         expect(smsCache.increment).toHaveBeenCalledWith('test-device-1');
@@ -674,7 +675,8 @@ describe('MQTTHandlers SMS storage', () => {
                 '44',
                 2,
                 3,
-                'multipart:test-device-1:incoming:3=:24;82=8<3=86<2:41:0:44:3'
+                'multipart:test-device-1:incoming:3=:24;82=8<3=86<2:41:0:44:3',
+                0
             ]
         );
         expect(room.emit).toHaveBeenCalledWith(

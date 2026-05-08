@@ -26,9 +26,9 @@
         </div>
         <div class="d-flex justify-content-between mt-2">
             <span class="step-dot active" data-step="1" title="Connect">1</span>
-            <span class="step-dot" data-step="2" title="Read Device">2</span>
+            <span class="step-dot" data-step="2" title="Check Device">2</span>
             <span class="step-dot" data-step="3" title="Device Details">3</span>
-            <span class="step-dot" data-step="4" title="Send Config">4</span>
+            <span class="step-dot" data-step="4" title="Save Device">4</span>
             <span class="step-dot" data-step="5" title="Done">5</span>
         </div>
     </div>
@@ -48,27 +48,27 @@
                     <span class="onboard-device-icon"><i class="bi bi-cpu"></i></span>
                     <span class="onboard-device-copy">
                         <span class="onboard-device-title">ESP32 S3</span>
-                        <span class="onboard-device-label">Current firmware setup</span>
+                        <span class="onboard-device-label">Set up this ESP32 device</span>
                     </span>
                 </button>
                 <button type="button" class="onboard-device-type" id="typeAndroid" onclick="chooseDeviceType('android')">
                     <span class="onboard-device-icon"><i class="bi bi-phone"></i></span>
                     <span class="onboard-device-copy">
                         <span class="onboard-device-title">Android</span>
-                        <span class="onboard-device-label">Native Device Bridge app with automatic dashboard connection</span>
+                        <span class="onboard-device-label">Use our Android phone app</span>
                     </span>
                 </button>
                 <button type="button" class="onboard-device-type" id="typeHttpSms" onclick="chooseDeviceType('httpsms')">
                     <span class="onboard-device-icon"><i class="bi bi-chat-dots"></i></span>
                     <span class="onboard-device-copy">
                         <span class="onboard-device-title">httpSMS</span>
-                        <span class="onboard-device-label">Use the public httpSMS Android app through dashboard-compatible API endpoints</span>
+                        <span class="onboard-device-label">Use the public httpSMS phone app</span>
                     </span>
                 </button>
             </div>
 
             <div id="esp32ConnectionFlow" style="display:none;">
-                <p class="text-muted mb-3">Choose how to connect to your ESP32 device for initial configuration.</p>
+                <p class="text-muted mb-3">Choose how to connect to your ESP32 device for first setup.</p>
 
             <div class="row g-3 mb-4">
                 <!-- USB / Serial card -->
@@ -78,13 +78,13 @@
                             <div class="mb-3">
                                 <i class="bi bi-usb-drive-fill text-primary" style="font-size:3rem;"></i>
                             </div>
-                            <h5 class="card-title">USB / Serial</h5>
-                            <p class="card-text text-muted small">Connect using a USB cable. Supports ESP32 boards with USB-Serial.</p>
+                            <h5 class="card-title">USB Cable</h5>
+                            <p class="card-text text-muted small">Plug the device into this computer with a USB cable.</p>
                             <button class="btn btn-primary" id="btnSerial" onclick="connectSerial()">
                                 <i class="bi bi-usb-symbol me-1"></i>Connect via USB
                             </button>
                             <div id="serialUnsupported" class="alert alert-warning mt-2 mb-0 py-2 small" style="display:none;">
-                                <i class="bi bi-exclamation-triangle me-1"></i>Web Serial not supported in this browser.
+                                <i class="bi bi-exclamation-triangle me-1"></i>USB setup is not supported in this browser.
                             </div>
                         </div>
                     </div>
@@ -97,12 +97,12 @@
                                 <i class="bi bi-bluetooth text-primary" style="font-size:3rem;"></i>
                             </div>
                             <h5 class="card-title">Bluetooth</h5>
-                            <p class="card-text text-muted small">Connect wirelessly via BLE. The device advertises with a device-derived setup name in provisioning mode. If prompted, use the device-derived 6-digit passkey shown by the device setup output.</p>
+                            <p class="card-text text-muted small">Connect wirelessly. If asked, enter the 6-digit code shown by the device.</p>
                             <button class="btn btn-outline-primary" id="btnBluetooth" onclick="connectBluetooth()">
                                 <i class="bi bi-bluetooth me-1"></i>Scan for Devices
                             </button>
                             <div id="bleUnsupported" class="alert alert-warning mt-2 mb-0 py-2 small" style="display:none;">
-                                <i class="bi bi-exclamation-triangle me-1"></i>Web Bluetooth not supported in this browser.
+                                <i class="bi bi-exclamation-triangle me-1"></i>Bluetooth setup is not supported in this browser.
                             </div>
                         </div>
                     </div>
@@ -114,9 +114,9 @@
                             <div class="mb-3">
                                 <i class="bi bi-wifi text-primary" style="font-size:3rem;"></i>
                             </div>
-                            <h5 class="card-title">WiFi AP</h5>
+                            <h5 class="card-title">WiFi Setup</h5>
                             <p class="card-text text-muted small">
-                                Device broadcasts <strong><%= setupApLabel %></strong> WiFi.
+                                Device shows <strong><%= setupApLabel %></strong> in your WiFi list.
                                 Connect your computer to that network, then click below.
                             </p>
                             <button class="btn btn-outline-primary" id="btnWifi" onclick="connectWifi()">
@@ -134,18 +134,18 @@
 
             <!-- WiFi instructions (shown when WiFi selected) -->
             <div id="wifiInstructions" class="alert alert-info py-2 small mb-3" style="display:none;">
-                <strong><i class="bi bi-list-ol me-1"></i>WiFi AP steps:</strong>
+                <strong><i class="bi bi-list-ol me-1"></i>WiFi steps:</strong>
                 <ol class="mb-0 mt-1 ps-3">
                     <li>Power on your ESP32 (first boot / factory reset).</li>
-                    <li>On your computer, open WiFi settings and connect to <strong><%= setupApLabel %></strong>. The current firmware starts this setup AP open unless you later change the policy.</li>
-                    <li>Come back here and click <strong>Connect via WiFi</strong>. This server will reach the device at <code><%= setupApIp %></code> and send the same config the portal would apply.</li>
+                    <li>On your computer, open WiFi settings and connect to <strong><%= setupApLabel %></strong>.</li>
+                    <li>Come back here and click <strong>Connect via WiFi</strong>.</li>
                 </ol>
             </div>
 
             <div class="alert alert-info py-2 small mb-3" id="browserReqNote">
                 <i class="bi bi-info-circle me-1"></i>
-                <strong>USB / Bluetooth</strong> require <strong>Chrome</strong> or <strong>Edge</strong> (v89+).
-                <strong>WiFi AP</strong> works in any browser — no cable needed.
+                <strong>USB / Bluetooth</strong> work best in <strong>Chrome</strong> or <strong>Edge</strong>.
+                <strong>WiFi setup</strong> works in any browser — no cable needed.
             </div>
 
             <div id="step1Status" class="alert py-2 small" style="display:none;"></div>
@@ -158,21 +158,21 @@
 <div class="wizard-step" id="step2" style="display:none;">
     <div class="card">
         <div class="card-header">
-            <i class="bi bi-cpu me-1"></i>Step 2 — Reading Device Info
+            <i class="bi bi-cpu me-1"></i>Step 2 — Checking Device
         </div>
         <div class="card-body text-center py-5">
             <div id="step2Spinner">
                 <div class="spinner-border text-primary mb-3" role="status">
                     <span class="visually-hidden">Reading...</span>
                 </div>
-                <h5 id="step2Message">Communicating with device...</h5>
-                <p class="text-muted small" id="step2Sub">Sending identification request and waiting for response.</p>
-                <p class="text-muted small mt-2"><i class="bi bi-info-circle me-1"></i>Fresh (unflashed) device? It won't respond — use <strong>Skip</strong> below.</p>
+                <h5 id="step2Message">Checking device...</h5>
+                <p class="text-muted small" id="step2Sub">Waiting for the device to answer.</p>
+                <p class="text-muted small mt-2"><i class="bi bi-info-circle me-1"></i>New device? It may not answer yet — use <strong>Skip</strong> below.</p>
             </div>
 
             <div id="step2Result" style="display:none;">
                 <i class="bi bi-check-circle-fill text-success mb-3" style="font-size:3rem;display:block;"></i>
-                <h5>Device Detected</h5>
+                <h5>Device Found</h5>
                 <div class="card text-start mx-auto mt-3" style="max-width:420px;">
                     <div class="card-body py-2 px-3">
                         <table class="table table-sm mb-0">
@@ -187,7 +187,7 @@
 
             <div id="step2Error" style="display:none;">
                 <i class="bi bi-exclamation-circle-fill text-warning mb-3" style="font-size:3rem;display:block;"></i>
-                <h5>Could Not Read Device</h5>
+                <h5>Could Not Check Device</h5>
                 <p class="text-muted small" id="step2ErrorMsg"></p>
                 <div class="d-flex gap-2 justify-content-center mt-3">
                     <button class="btn btn-outline-secondary" onclick="goToStep(1)">
@@ -213,7 +213,7 @@
                 <div class="row g-3">
                     <!-- Device ID -->
                     <div class="col-md-6" data-onboard-scope="device-id">
-                        <label class="form-label">Device ID <span class="text-danger">*</span></label>
+                        <label class="form-label">Device code <span class="text-danger">*</span></label>
                         <div class="input-group">
                             <input type="text" class="form-control" id="fDeviceId" required
                                    placeholder="esp-32dg3-dgds32-fg2335"
@@ -221,14 +221,14 @@
                                    maxlength="64">
                             <button class="btn btn-outline-secondary" type="button" id="btnGenerateId" onclick="generateDeviceId()">
                                 <i class="bi bi-shuffle"></i>
-                                <span class="visually-hidden">Generate device ID</span>
+                                    <span class="visually-hidden">Generate device code</span>
                             </button>
                             <button class="btn btn-outline-secondary" type="button" id="btnCheckId" onclick="checkDeviceId()">
                                 <span id="checkIdIcon"><i class="bi bi-search"></i></span>
                                 <span class="visually-hidden">Check availability</span>
                             </button>
                         </div>
-                        <div class="form-text" id="deviceIdFeedback">Use a unique lowercase ID. ESP devices use esp-, Android devices use android-, httpSMS devices use httpsms-.</div>
+                        <div class="form-text" id="deviceIdFeedback">Use a unique lowercase code. ESP codes start with esp-, Android codes start with android-, httpSMS codes start with httpsms-.</div>
                         <div class="invalid-feedback">Only letters, numbers, hyphens and underscores allowed.</div>
                     </div>
 
@@ -264,14 +264,14 @@
 
                     <!-- APN -->
                     <div class="col-md-6" data-onboard-scope="esp32">
-                        <label class="form-label">APN</label>
+                        <label class="form-label">SIM internet name</label>
                         <input type="text" class="form-control" id="fApn" maxlength="100" placeholder="internet" value="internet">
-                        <div class="form-text">Cellular APN for your SIM card.</div>
+                            <div class="form-text">Use the internet name from your SIM provider.</div>
                     </div>
 
                     <div class="col-md-6" data-onboard-scope="esp32">
-                        <label class="form-label">WiFi SSID <small class="text-muted">(optional)</small></label>
-                        <input type="text" class="form-control" id="fWifiSsid" maxlength="64" placeholder="Local WiFi name for setup access">
+                            <label class="form-label">WiFi name <small class="text-muted">(optional)</small></label>
+                            <input type="text" class="form-control" id="fWifiSsid" maxlength="64" placeholder="Local WiFi name">
                     </div>
 
                     <div class="col-md-6" data-onboard-scope="esp32">
@@ -279,13 +279,13 @@
                         <input type="password" class="form-control" id="fWifiPass" maxlength="64" autocomplete="new-password" placeholder="Local WiFi password">
                     </div>
 
-                    <!-- Firmware -->
+                    <!-- Device software -->
                     <div class="col-12" data-onboard-scope="esp32">
-                        <label class="form-label">Firmware <small class="text-muted">(optional)</small></label>
+                        <label class="form-label">Device software <small class="text-muted">(optional)</small></label>
                         <div class="row g-2 align-items-start">
                             <div class="col-lg-6">
                                 <select class="form-select" id="fFirmwareFile">
-                                    <option value="">No firmware selected</option>
+                                    <option value="">No device software selected</option>
                                 </select>
                             </div>
                             <div class="col-lg-2 d-grid">
@@ -300,7 +300,7 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="form-text" id="firmwareHelp">Upload or select a firmware `.bin` so it is ready for OTA after the device comes online.</div>
+                        <div class="form-text" id="firmwareHelp">Upload or select a .bin file so it is ready after the device comes online.</div>
                     </div>
                 </div>
 
@@ -321,10 +321,10 @@
 <div class="wizard-step" id="step4" style="display:none;">
     <div class="card">
         <div class="card-header">
-            <i class="bi bi-send me-1"></i>Step 4 — Send Configuration
+            <i class="bi bi-send me-1"></i>Step 4 — Save Device
         </div>
         <div class="card-body">
-            <p class="text-muted mb-3">Review the configuration that will be sent to your device and registered in the dashboard.</p>
+            <p class="text-muted mb-3">Review the details before saving this device.</p>
 
             <!-- Summary table -->
             <div class="card bg-light border-0 mb-4">
@@ -345,7 +345,7 @@
                         <i class="bi bi-arrow-left me-1"></i>Back
                     </button>
                     <button type="button" class="btn btn-primary ms-auto" id="btnSendConfig" onclick="sendConfig()">
-                        <i class="bi bi-send me-1"></i>Send Configuration &amp; Register
+                        <i class="bi bi-send me-1"></i>Save Device
                     </button>
                 </div>
             </div>
@@ -353,7 +353,7 @@
             <div id="step4Progress" style="display:none;">
                 <div class="d-flex align-items-center gap-3 mb-3">
                     <div class="spinner-border spinner-border-sm text-primary flex-shrink-0" role="status"></div>
-                    <span id="step4ProgressMsg" class="fw-semibold">Sending configuration...</span>
+                    <span id="step4ProgressMsg" class="fw-semibold">Saving device...</span>
                 </div>
                 <div class="progress" style="height:6px;">
                     <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" id="step4Bar"
@@ -622,9 +622,9 @@ const DEVICE_TYPE_MODELS = Object.freeze({
 const STEP_LABELS = [
     '', // 0 unused
     'Step 1 of 5 — Select Device Type',
-    'Step 2 of 5 — Reading Device Info',
+    'Step 2 of 5 — Checking Device',
     'Step 3 of 5 — Device Details',
-    'Step 4 of 5 — Send Configuration',
+    'Step 4 of 5 — Save Device',
     'Step 5 of 5 — Done'
 ];
 const STEP_PERCENTS = ['', '20', '40', '60', '80', '100'];
@@ -792,8 +792,8 @@ async function connectWifi() {
     const btn = document.getElementById('btnWifi');
     const instructions = document.getElementById('wifiInstructions');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Probing...';
-    setStep1Status(`Checking if the device setup AP is reachable at ${SETUP_AP_IP} (server-side)...`, 'info');
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Checking...';
+    setStep1Status('Checking the device WiFi connection...', 'info');
     try {
         const res = await fetch('/api/onboard/wifi-probe');
         const data = await res.json();
@@ -801,7 +801,7 @@ async function connectWifi() {
             wizardState.connectionType = 'wifi';
             document.getElementById('cardWifi').classList.add('selected');
             instructions.style.display = 'none';
-            setStep1Status('<i class="bi bi-check-circle me-1"></i>Device setup WiFi is reachable. Proceeding to device details...', 'success');
+            setStep1Status('<i class="bi bi-check-circle me-1"></i>Device WiFi is ready. Continuing to device details...', 'success');
             setTimeout(() => goToStep(3), 800);
         } else {
             instructions.style.display = '';
@@ -844,8 +844,8 @@ async function readDeviceInfo() {
         let rawResponse = null;
 
         if (wizardState.connectionType === 'serial') {
-            document.getElementById('step2Message').textContent = 'Sending identification request over Serial...';
-            document.getElementById('step2Sub').textContent = 'Sending AT command and listening for JSON response.';
+            document.getElementById('step2Message').textContent = 'Checking over USB...';
+            document.getElementById('step2Sub').textContent = 'Waiting for the device to answer.';
 
             const encoder = new TextEncoder();
             await wizardState.writer.write(encoder.encode('{"cmd":"identify"}\n'));
@@ -854,7 +854,7 @@ async function readDeviceInfo() {
 
             // If no JSON, try AT probe
             if (!rawResponse || !rawResponse.trim().startsWith('{')) {
-                document.getElementById('step2Sub').textContent = 'No JSON response — trying AT probe...';
+                document.getElementById('step2Sub').textContent = 'No answer yet. Trying one more check...';
                 await wizardState.writer.write(encoder.encode('AT\r\n'));
                 const atResp = await readSerialLineWithTimeout(3000);
                 if (atResp && atResp.includes('OK')) {
@@ -862,13 +862,13 @@ async function readDeviceInfo() {
                 }
             }
         } else if (wizardState.connectionType === 'ble') {
-            document.getElementById('step2Message').textContent = 'Sending identification request over BLE...';
-            document.getElementById('step2Sub').textContent = 'Writing identify command to Nordic UART service.';
+            document.getElementById('step2Message').textContent = 'Checking over Bluetooth...';
+            document.getElementById('step2Sub').textContent = 'Waiting for the device to answer.';
 
             // Set up notifications
             await wizardState.rxChar.startNotifications();
             rawResponse = await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => reject(new Error('BLE response timeout (5s)')), 5000);
+                const timeout = setTimeout(() => reject(new Error('Bluetooth check timed out.')), 5000);
                 let buffer = '';
                 wizardState.rxChar.addEventListener('characteristicvaluechanged', function handler(event) {
                     const chunk = new TextDecoder().decode(event.target.value);
@@ -924,7 +924,7 @@ function showStep2Success(info) {
             <td class="small fw-semibold">${escHtml(String(v))}</td>
         </tr>`).join('');
     document.getElementById('deviceInfoTable').innerHTML = rows ||
-        '<tr><td colspan="2" class="text-muted small">Device responded (no structured data)</td></tr>';
+        '<tr><td colspan="2" class="text-muted small">Device answered.</td></tr>';
 }
 
 function showStep2Error(msg) {
@@ -1061,15 +1061,15 @@ async function loadFirmwareOptions() {
     const help = document.getElementById('firmwareHelp');
     const currentValue = select.value;
 
-    select.innerHTML = '<option value="">Loading firmware list...</option>';
+    select.innerHTML = '<option value="">Loading device software list...</option>';
     try {
         const res = await fetch('/api/ota/list');
         const data = await res.json();
         if (!res.ok || !data.success) {
-            throw new Error(data.message || 'Failed to load firmware files');
+            throw new Error(data.message || 'Failed to load device software files');
         }
 
-        const options = ['<option value="">No firmware selected</option>'];
+        const options = ['<option value="">No device software selected</option>'];
         for (const file of data.data || []) {
             const size = file.size ? ` (${formatBytes(file.size)})` : '';
             options.push(`<option value="${escHtml(file.filename)}">${escHtml(file.filename)}${size}</option>`);
@@ -1079,11 +1079,11 @@ async function loadFirmwareOptions() {
             select.value = currentValue;
         }
         help.textContent = (data.data || []).length
-            ? 'Select firmware now so OTA is ready once the device connects.'
-            : 'No firmware uploaded yet. Upload a .bin file to make it available here.';
+            ? 'Select device software now so it is ready once the device connects.'
+            : 'No device software uploaded yet. Upload a .bin file to make it available here.';
     } catch (error) {
-        select.innerHTML = '<option value="">No firmware selected</option>';
-        help.textContent = error.message || 'Firmware list is unavailable right now.';
+        select.innerHTML = '<option value="">No device software selected</option>';
+        help.textContent = error.message || 'Device software list is unavailable right now.';
     }
 }
 
@@ -1093,7 +1093,7 @@ async function uploadFirmwareFromWizard() {
     const file = input.files[0];
 
     if (!file) {
-        help.textContent = 'Choose a .bin firmware file first.';
+        help.textContent = 'Choose a .bin file first.';
         return;
     }
 
@@ -1108,16 +1108,16 @@ async function uploadFirmwareFromWizard() {
         });
         const data = await res.json();
         if (!res.ok || !data.success) {
-            throw new Error(data.message || 'Firmware upload failed');
+            throw new Error(data.message || 'Device software upload failed');
         }
         input.value = '';
         await loadFirmwareOptions();
         if (data.data?.filename) {
             document.getElementById('fFirmwareFile').value = data.data.filename;
-            help.textContent = `Firmware uploaded: ${data.data.filename}`;
+            help.textContent = `Device software uploaded: ${data.data.filename}`;
         }
     } catch (error) {
-        help.textContent = error.message || 'Firmware upload failed';
+        help.textContent = error.message || 'Device software upload failed';
     }
 }
 
@@ -1142,11 +1142,11 @@ function prefillStep3() {
         note.innerHTML = wizardState.deviceType === 'httpsms' ? `
             <div class="d-flex align-items-start gap-2">
                 <i class="bi bi-chat-dots mt-1"></i>
-                <span>Register this lane, then use the generated base URL and API key inside the httpSMS app.</span>
+                <span>Save this phone lane, then copy the details into the httpSMS app.</span>
             </div>
         ` : `
             <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2">
-                <span><i class="bi bi-phone me-1"></i>Install the app, register this bridge, then scan the generated QR in the phone app.</span>
+                <span><i class="bi bi-phone me-1"></i>Install the phone app, save this device, then scan the code in the app.</span>
                 ${androidAppDownloadMenu('btn-sm flex-shrink-0')}
             </div>
         `;
@@ -1164,7 +1164,7 @@ function prefillStep3() {
                        : 'esp32-s3-a7670e';
         modelSel.value = modelVal;
     }
-    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase ID. ESP devices use esp-, Android devices use android-, httpSMS devices use httpsms-.';
+    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase code. ESP codes start with esp-, Android codes start with android-, httpSMS codes start with httpsms-.';
     document.getElementById('deviceIdFeedback').className = 'form-text';
 }
 
@@ -1204,10 +1204,10 @@ async function checkDeviceId() {
         const res = await fetch('/api/onboard/check-id/' + encodeURIComponent(id));
         const data = await res.json();
         if (data.exists) {
-            fb.textContent = 'This ID is already registered. Saving will update the existing device record.';
+            fb.textContent = 'This code is already registered. Saving will update the existing device record.';
             fb.className = 'form-text text-warning';
         } else {
-            fb.textContent = 'ID is available.';
+            fb.textContent = 'Code is available.';
             fb.className = 'form-text text-success';
         }
     } catch (_) {
@@ -1349,32 +1349,32 @@ async function registerAndroidBridge() {
 // ==================== Step 4: Config summary & send ====================
 function populateConfigSummary() {
     const fd = wizardState.formData;
-    const connType = wizardState.connectionType === 'serial' ? 'USB Serial'
-        : wizardState.connectionType === 'ble' ? 'Bluetooth BLE'
-        : wizardState.connectionType === 'wifi' ? `WiFi AP (${SETUP_AP_IP})`
-        : 'No physical connection (register only)';
+    const connType = wizardState.connectionType === 'serial' ? 'USB cable'
+        : wizardState.connectionType === 'ble' ? 'Bluetooth'
+        : wizardState.connectionType === 'wifi' ? 'WiFi setup'
+        : 'Save only';
 
     let rows = [
-        ['Device ID', `<code>${escHtml(fd.device_id)}</code>`],
+        ['Device code', `<code>${escHtml(fd.device_id)}</code>`],
         ['Name', escHtml(fd.name)],
         ['Location', escHtml(fd.location || '—')],
-        ['Board Model', escHtml(fd.model)],
-        ['APN', fd.apn ? escHtml(fd.apn) : '<span class="text-muted">-</span>'],
-        ['Dashboard Connection', '<span class="text-muted">Managed by dashboard settings</span>'],
-        ['WiFi SSID', fd.wifi_ssid ? escHtml(fd.wifi_ssid) : '<span class="text-muted">-</span>'],
-        ['Firmware', fd.firmware_file ? escHtml(fd.firmware_file) : '<span class="text-muted">Not selected</span>'],
-        ['Device Type', escHtml(fd.bridge_type || wizardState.deviceType || 'esp32-s3')],
+        ['Device model', escHtml(fd.model)],
+        ['SIM internet name', fd.apn ? escHtml(fd.apn) : '<span class="text-muted">-</span>'],
+        ['Dashboard link', '<span class="text-muted">Managed by dashboard settings</span>'],
+        ['WiFi name', fd.wifi_ssid ? escHtml(fd.wifi_ssid) : '<span class="text-muted">-</span>'],
+        ['Device software', fd.firmware_file ? escHtml(fd.firmware_file) : '<span class="text-muted">Not selected</span>'],
+        ['Device type', escHtml(fd.bridge_type || wizardState.deviceType || 'esp32-s3')],
         ['Connection', escHtml(connType)]
     ];
 
     const bridgeDevice = isBridgeDeviceType();
     rows = rows.filter(([key]) => {
-        if (key === 'Board Model') return false;
-        if (bridgeDevice && ['APN', 'WiFi SSID', 'Firmware'].includes(key)) return false;
+        if (key === 'Device model') return false;
+        if (bridgeDevice && ['SIM internet name', 'WiFi name', 'Device software'].includes(key)) return false;
         return true;
     });
     rows = rows.map(([key, value]) =>
-        key === 'Device Type' ? [key, escHtml(selectedDeviceTypeLabel())] : [key, value]
+        key === 'Device type' ? [key, escHtml(selectedDeviceTypeLabel())] : [key, value]
     );
     document.getElementById('configSummaryTable').innerHTML = rows.map(([k, v]) =>
         `<tr><td class="text-muted small pe-3" style="white-space:nowrap;">${k}</td><td class="small fw-semibold">${v}</td></tr>`
@@ -1385,15 +1385,15 @@ function populateConfigSummary() {
     if (wizardState.connectionType) {
         connInfo.style.display = '';
         if (wizardState.connectionType === 'wifi') {
-            connInfoText.textContent = `Config will be sent to the device over the setup WiFi AP (${SETUP_AP_IP}). Keep your computer connected to the ${SETUP_AP_LABEL} network until this step completes.`;
+            connInfoText.textContent = `Details will be saved over WiFi. Keep your computer connected to the ${SETUP_AP_LABEL} network until this step completes.`;
         } else {
-            connInfoText.textContent = `Config will be sent to the device over ${connType} and the device will reboot to apply it.`;
+            connInfoText.textContent = `Details will be saved over ${connType} and the device will restart.`;
         }
     } else {
         connInfo.style.display = 'none';
     }
 
-    document.getElementById('btnSendConfig').innerHTML = '<i class="bi bi-send me-1"></i>Send Configuration &amp; Register';
+    document.getElementById('btnSendConfig').innerHTML = '<i class="bi bi-send me-1"></i>Save Device';
 }
 
 async function sendConfig() {
@@ -1416,15 +1416,15 @@ async function sendConfig() {
 
     try {
         // Step 1: register in dashboard DB
-        setProgress(20, 'Registering device in dashboard...');
+        setProgress(20, 'Saving device in dashboard...');
         const fd = wizardState.formData;
         await registerDashboardDevice();
 
-        setProgress(50, 'Device registered. Sending config to hardware...');
+        setProgress(50, 'Device saved. Sending details to the device...');
 
         // Step 2: send config to device if connected
         if (wizardState.connectionType) {
-            setProgress(65, 'Sending configuration to device...');
+            setProgress(65, 'Saving details to device...');
 
             if (wizardState.connectionType === 'serial') {
                 const enc = new TextEncoder();
@@ -1435,7 +1435,7 @@ async function sendConfig() {
                 const configPayload = buildSerialConfigCommand(fd);
                 await wizardState.txChar.writeValue(enc.encode(configPayload + '\n'));
             } else if (wizardState.connectionType === 'wifi') {
-                setProgress(65, `Sending configuration to the setup WiFi AP (${SETUP_AP_IP})...`);
+                setProgress(65, 'Saving details over WiFi...');
                 const wifiRes = await fetch('/api/onboard/wifi-send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1451,13 +1451,13 @@ async function sendConfig() {
                     })
                 });
                 const wifiData = await wifiRes.json();
-                if (!wifiData.success) throw new Error(wifiData.message || 'Failed to send config to device');
+                if (!wifiData.success) throw new Error(wifiData.message || 'Failed to save details to device');
             }
 
-            setProgress(85, 'Config sent! Device is rebooting...');
+            setProgress(85, 'Details saved. Device is restarting...');
             await delay(1200);
         } else {
-            setProgress(85, 'Skipping device communication (no connection).');
+            setProgress(85, 'Saving without a live device connection.');
             await delay(400);
         }
 
@@ -1486,7 +1486,7 @@ function showDone() {
     if (wizardState.deviceType === 'android') capabilities.push({ label: 'Android', cls: 'bg-success' });
     if (wizardState.deviceType === 'android') capabilities.push({ label: 'Smart Link', cls: 'bg-info text-dark' });
     if (wizardState.deviceType === 'httpsms') capabilities.push({ label: 'httpSMS', cls: 'bg-success' });
-    if (wizardState.deviceType === 'httpsms') capabilities.push({ label: 'HTTP API', cls: 'bg-info text-dark' });
+    if (wizardState.deviceType === 'httpsms') capabilities.push({ label: 'Phone app', cls: 'bg-info text-dark' });
     if (info.modem || info.a7670e || fd.model?.includes('a7670')) capabilities.push({ label: 'Modem / 4G', cls: 'bg-primary' });
     if (info.sms || fd.model?.includes('sms')) capabilities.push({ label: 'SMS', cls: 'bg-primary' });
     if (info.gps) capabilities.push({ label: 'GPS', cls: 'bg-success' });
@@ -1505,7 +1505,7 @@ function showDone() {
     }
 
     if (fd.firmware_file) {
-        document.getElementById('firmwareHelp').textContent = `Firmware selected: ${fd.firmware_file}. You can trigger OTA after the device comes online.`;
+        document.getElementById('firmwareHelp').textContent = `Device software selected: ${fd.firmware_file}. You can update the device after it comes online.`;
     }
 }
 
@@ -1525,28 +1525,28 @@ function renderProvisioningPanel() {
         content.innerHTML = `
             <div class="row g-4 align-items-start">
                 <div class="col-lg-5 text-center">
-                    <h5 class="mb-2">Device Bridge App Setup</h5>
-                    <p class="text-muted small mb-3">Open the Device Bridge app on the phone and scan this QR. It carries the same secure setup code shown on the right.</p>
+                    <h5 class="mb-2">Phone App Setup</h5>
+                    <p class="text-muted small mb-3">Open the Device Bridge app on the phone and scan this code. You can also copy the setup code shown on the right.</p>
                     <img src="${provisioning.qr_data_url}" alt="Device Bridge setup QR" class="img-fluid border rounded p-2 bg-white" style="max-width:280px;">
                     <div class="alert alert-primary small text-start mt-3 mb-0">
                         <div class="fw-semibold mb-1"><i class="bi bi-phone me-1"></i>Phone-side order</div>
                         <ol class="mb-0 ps-3">
-                            <li>Open Device Bridge on the installed phone.</li>
-                            <li>Tap Scan dashboard QR or paste the setup code.</li>
+                            <li>Open Device Bridge on the phone.</li>
+                            <li>Tap scan or paste the setup code.</li>
                             <li>Grant the missing SMS, Wi-Fi, and notification permissions.</li>
-                            <li>Start the bridge and keep battery optimization disabled.</li>
+                            <li>Start the phone link and allow it to run in the background.</li>
                         </ol>
                     </div>
                 </div>
                 <div class="col-lg-7">
-                    <h6 class="mb-2">Provisioning summary</h6>
+                    <h6 class="mb-2">Setup summary</h6>
                     <table class="table table-sm align-middle mb-3">
                         <tbody>
-                            <tr><td class="text-muted">Device ID</td><td><code>${escHtml(summary.device_id || '')}</code></td></tr>
+                            <tr><td class="text-muted">Device code</td><td><code>${escHtml(summary.device_id || '')}</code></td></tr>
                         </tbody>
                     </table>
                     <div class="alert alert-light border small mb-3">
-                        Raw connection credentials are not shown here. Use the secure setup code below or the QR scanner in the Device Bridge app.
+                        Private connection details are not shown here. Use the setup code below or scan the code in the Device Bridge app.
                     </div>
                     <label class="form-label small text-muted">Secure setup code</label>
                     <textarea class="form-control font-monospace" id="androidSetupToken" rows="8" readonly>${escHtml(provisioning.setup_token || '')}</textarea>
@@ -1570,14 +1570,13 @@ function renderProvisioningPanel() {
         const summary = provisioning.summary || {};
         const setup = provisioning.setup || {};
         const baseUrl = summary.server_url || setup.base_url || '';
-        const apiBaseUrl = summary.api_base_url || setup.api_base_url || (baseUrl ? `${baseUrl.replace(/\/+$/, '')}/v1` : '');
         const apiKey = setup.api_key || '';
         const encryptionKey = setup.encryption_key || summary.encryption_key || '';
         const isHttpsBaseUrl = /^https:\/\//i.test(baseUrl);
         const routableWarning = isHttpsBaseUrl ? '' : `
             <div class="alert alert-warning small mb-3">
-                <div class="fw-semibold mb-1"><i class="bi bi-exclamation-triangle me-1"></i>Phone app requires HTTPS</div>
-                <div>The installed httpSMS app will reject local or plain HTTP URLs. Use your public HTTPS dashboard root URL, then register again or copy that HTTPS Server URL into the app.</div>
+                <div class="fw-semibold mb-1"><i class="bi bi-exclamation-triangle me-1"></i>Use a secure public link</div>
+                <div>The httpSMS app needs the public dashboard link. Use that link, then save this device again.</div>
             </div>
         `;
         content.innerHTML = `
@@ -1585,31 +1584,31 @@ function renderProvisioningPanel() {
                 <div class="col-lg-5 text-center">
                     <h5 class="mb-2">httpSMS App Setup</h5>
                     ${provisioning.qr_data_url ? `
-                        <p class="text-muted small mb-3">In the httpSMS app, tap the API key field or QR icon, then scan this code.</p>
-                        <img src="${provisioning.qr_data_url}" alt="httpSMS API key QR" class="img-fluid border rounded p-2 bg-white" style="max-width:280px;">
+                        <p class="text-muted small mb-3">In the httpSMS app, tap the key field or QR icon, then scan this code.</p>
+                        <img src="${provisioning.qr_data_url}" alt="httpSMS app key QR" class="img-fluid border rounded p-2 bg-white" style="max-width:280px;">
                     ` : `
-                        <div class="alert alert-warning small mb-3">No API key was generated for this session.</div>
+                        <div class="alert alert-warning small mb-3">No app key is available yet.</div>
                     `}
                     <div class="alert alert-primary small text-start mt-3 mb-0">
                         <div class="fw-semibold mb-1"><i class="bi bi-chat-dots me-1"></i>Phone-side order</div>
                         <ol class="mb-0 ps-3">
                             <li>Open the installed httpSMS app.</li>
-                            <li>Set Server URL to the HTTPS dashboard root shown on the right.</li>
-                            <li>Tap the API key field or QR icon and scan this QR.</li>
-                            <li>Set Encryption key to the generated key if you want encrypted message content.</li>
+                            <li>Copy the dashboard link shown on the right into the app.</li>
+                            <li>Tap the key field or QR icon and scan this code.</li>
+                            <li>Copy the message lock key into the app if you want private message content.</li>
                             <li>Confirm your SIM phone number, grant SMS and notification permissions, then log in.</li>
-                            <li>Keep background/battery optimization disabled so FCM can wake the app for queued SMS.</li>
+                            <li>Allow the app to run in the background so queued SMS can send on time.</li>
                         </ol>
                     </div>
                 </div>
                 <div class="col-lg-7">
                     ${routableWarning}
-                    <h6 class="mb-2">Connection details</h6>
+                    <h6 class="mb-2">App setup details</h6>
                     <table class="table table-sm align-middle mb-3">
                         <tbody>
-                            <tr><td class="text-muted">Device ID</td><td><code>${escHtml(summary.device_id || setup.device_id || '')}</code></td></tr>
+                            <tr><td class="text-muted">Device code</td><td><code>${escHtml(summary.device_id || setup.device_id || '')}</code></td></tr>
                             <tr>
-                                <td class="text-muted">Server URL</td>
+                                <td class="text-muted">Dashboard link</td>
                                 <td>
                                     <div class="input-group input-group-sm">
                                         <input class="form-control font-monospace" id="httpSmsBaseUrl" value="${escHtml(baseUrl)}" readonly>
@@ -1619,27 +1618,23 @@ function renderProvisioningPanel() {
                                     </div>
                                 </td>
                             </tr>
-                            <tr><td class="text-muted">API path used by app</td><td><code>${escHtml(apiBaseUrl)}</code></td></tr>
-                            <tr><td class="text-muted">API key</td><td><textarea class="form-control font-monospace" id="httpSmsApiKey" rows="3" readonly>${escHtml(apiKey)}</textarea></td></tr>
-                            <tr><td class="text-muted">Encryption key</td><td><textarea class="form-control font-monospace" id="httpSmsEncryptionKey" rows="2" readonly>${escHtml(encryptionKey)}</textarea></td></tr>
+                            <tr><td class="text-muted">App key</td><td><textarea class="form-control font-monospace" id="httpSmsApiKey" rows="3" readonly>${escHtml(apiKey)}</textarea></td></tr>
+                            <tr><td class="text-muted">Message lock key</td><td><textarea class="form-control font-monospace" id="httpSmsEncryptionKey" rows="2" readonly>${escHtml(encryptionKey)}</textarea></td></tr>
                         </tbody>
                     </table>
                     <div class="d-flex flex-wrap gap-2">
                         <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyHttpSmsApiKey()">
-                            <i class="bi bi-clipboard me-1"></i>Copy API key
+                            <i class="bi bi-clipboard me-1"></i>Copy app key
                         </button>
                         <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyHttpSmsBaseUrl()">
-                            <i class="bi bi-link-45deg me-1"></i>Copy Server URL
+                            <i class="bi bi-link-45deg me-1"></i>Copy dashboard link
                         </button>
                         <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyHttpSmsEncryptionKey()">
-                            <i class="bi bi-key me-1"></i>Copy encryption key
+                            <i class="bi bi-key me-1"></i>Copy message lock key
                         </button>
                         <a class="btn btn-sm btn-outline-secondary" href="/devices/settings?device=${encodeURIComponent(summary.device_id || setup.device_id || '')}">
                             <i class="bi bi-gear me-1"></i>Open device settings
                         </a>
-                    </div>
-                    <div class="alert alert-light border small mt-3 mb-0">
-                        The QR contains only the API key because the public httpSMS app scans into that field. Enter the Server URL separately as <code>${escHtml(baseUrl)}</code>; do not add <code>/v1</code> because the app adds it automatically. The encryption key is shown once here and is not stored by the dashboard.
                     </div>
                 </div>
             </div>
@@ -1712,48 +1707,48 @@ function copyAndroidSetupCode() {
 function copyHttpSmsApiKey() {
     const token = document.getElementById('httpSmsApiKey')?.value || '';
     if (!token) {
-        showToast('No API key is available yet.', 'warning');
+        showToast('No app key is available yet.', 'warning');
         return;
     }
     navigator.clipboard.writeText(token)
-        .then(() => showToast('API key copied.', 'success'))
+        .then(() => showToast('App key copied.', 'success'))
         .catch(() => {
             const field = document.getElementById('httpSmsApiKey');
             field?.focus();
             field?.select();
-            showToast('Select and copy the API key manually.', 'warning');
+            showToast('Select and copy the app key manually.', 'warning');
         });
 }
 
 function copyHttpSmsBaseUrl() {
     const url = document.getElementById('httpSmsBaseUrl')?.value || '';
     if (!url) {
-        showToast('No Server URL is available yet.', 'warning');
+        showToast('No dashboard link is available yet.', 'warning');
         return;
     }
     navigator.clipboard.writeText(url)
-        .then(() => showToast('Server URL copied.', 'success'))
+        .then(() => showToast('Dashboard link copied.', 'success'))
         .catch(() => {
             const field = document.getElementById('httpSmsBaseUrl');
             field?.focus();
             field?.select();
-            showToast('Select and copy the Server URL manually.', 'warning');
+            showToast('Select and copy the dashboard link manually.', 'warning');
         });
 }
 
 function copyHttpSmsEncryptionKey() {
     const key = document.getElementById('httpSmsEncryptionKey')?.value || '';
     if (!key) {
-        showToast('No encryption key is available yet.', 'warning');
+        showToast('No message lock key is available yet.', 'warning');
         return;
     }
     navigator.clipboard.writeText(key)
-        .then(() => showToast('Encryption key copied.', 'success'))
+        .then(() => showToast('Message lock key copied.', 'success'))
         .catch(() => {
             const field = document.getElementById('httpSmsEncryptionKey');
             field?.focus();
             field?.select();
-            showToast('Select and copy the encryption key manually.', 'warning');
+            showToast('Select and copy the message lock key manually.', 'warning');
         });
 }
 
@@ -1812,8 +1807,8 @@ function resetWizard() {
     document.getElementById('fFirmwareFile').value = '';
     document.getElementById('fFirmwareUpload').value = '';
     document.getElementById('fDeviceId').value = generateDeviceIdValue();
-    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase ID. ESP devices use esp-, Android devices use android-, httpSMS devices use httpsms-.';
-    document.getElementById('firmwareHelp').textContent = 'Upload or select a firmware `.bin` so it is ready for OTA after the device comes online.';
+    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase code. ESP codes start with esp-, Android codes start with android-, httpSMS codes start with httpsms-.';
+    document.getElementById('firmwareHelp').textContent = 'Upload or select a .bin file so it is ready after the device comes online.';
     applyStep3FieldVisibility();
     loadFirmwareOptions();
 

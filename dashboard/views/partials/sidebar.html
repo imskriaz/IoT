@@ -58,7 +58,7 @@
                 <span>Calls</span>
             </a>
         </li>
-        <li class="nav-item" data-device-nav="true" data-nav-section="communication">
+        <li class="nav-item" data-device-nav="true" data-nav-section="communication" data-hide-device-type="httpsms">
             <a href="/contacts" class="nav-link <%= title === 'Contact Management' ? 'active' : '' %>">
                 <i class="bi bi-person-lines-fill"></i>
                 <span>Contacts</span>
@@ -157,13 +157,13 @@
         <li class="nav-item mt-3">
             <small class="text-muted text-uppercase fw-bold px-2">Tools</small>
         </li>
-        <li class="nav-item" data-device-nav="true">
+        <li class="nav-item" data-device-nav="true" data-hide-device-type="httpsms">
             <a href="/automation" class="nav-link <%= title === 'Automation' ? 'active' : '' %>">
                 <i class="bi bi-diagram-3"></i>
                 <span>Automation</span>
             </a>
         </li>
-        <li class="nav-item" data-device-nav="true">
+        <li class="nav-item" data-device-nav="true" data-hide-device-type="httpsms">
             <a href="/console" class="nav-link <%= title === 'Console' ? 'active' : '' %>">
                 <i class="bi bi-terminal"></i>
                 <span>Console</span>
@@ -241,7 +241,7 @@
                 <span>Device About</span>
             </a>
         </li>
-        <li class="nav-item" data-device-nav="true" data-nav-section="device">
+        <li class="nav-item" data-device-nav="true" data-nav-section="device" data-hide-device-type="httpsms">
             <a href="/devices/capabilities" data-device-aware-href="/devices/capabilities" class="nav-link <%= title === 'Capability Editor' ? 'active' : '' %>">
                 <i class="bi bi-toggles"></i>
                 <span>Capabilities</span>

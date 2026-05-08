@@ -29,6 +29,8 @@
 #define SMS_SERVICE_MULTIPART_SEND_TIMEOUT_MS  60000U
 #define SMS_SERVICE_EVENT_MODEM_TIMEOUT_MS  1000U
 #define SMS_SERVICE_BACKGROUND_MODEM_TIMEOUT_MS  2500U
+#define SMS_SERVICE_PULL_ATTEMPT_TIMEOUT_MS  8000U
+#define SMS_SERVICE_PULL_RESPONSE_RESERVE_MS  5000U
 #define SMS_SERVICE_MODEM_RESPONSE_LEN  1024U
 
 static const char *TAG = "sms_service";
@@ -56,6 +58,26 @@ static void sms_service_free(void *buffer) {
 
 static uint32_t sms_service_requested_timeout_ms(uint32_t timeout_ms) {
     return timeout_ms > 0U ? timeout_ms : CONFIG_UNIFIED_TELEPHONY_ACTION_TIMEOUT_MS;
+}
+
+static uint32_t sms_service_timeout_remaining_ms(int64_t deadline_us) {
+    int64_t now_us = esp_timer_get_time();
+
+    if (deadline_us <= now_us) {
+        return 0U;
+    }
+
+    return (uint32_t)((deadline_us - now_us + 999LL) / 1000LL);
+}
+
+static uint32_t sms_service_pull_attempt_timeout_ms(uint32_t remaining_ms) {
+    if (remaining_ms == 0U) {
+        return 0U;
+    }
+
+    return remaining_ms < SMS_SERVICE_PULL_ATTEMPT_TIMEOUT_MS
+        ? remaining_ms
+        : SMS_SERVICE_PULL_ATTEMPT_TIMEOUT_MS;
 }
 
 static bool sms_service_requires_unicode_timeout(const char *text) {
@@ -693,7 +715,13 @@ unified_action_response_t sms_service_pull_pending(uint32_t timeout_ms, uint32_t
     modem_a7670_status_t modem_status = {0};
     unified_sms_payload_t *payload = NULL;
     const uint32_t effective_timeout_ms = sms_service_requested_timeout_ms(timeout_ms);
+    const uint32_t work_timeout_ms = effective_timeout_ms > SMS_SERVICE_PULL_RESPONSE_RESERVE_MS
+        ? (effective_timeout_ms - SMS_SERVICE_PULL_RESPONSE_RESERVE_MS)
+        : effective_timeout_ms;
+    const int64_t deadline_us = esp_timer_get_time() + ((int64_t)work_timeout_ms * 1000LL);
     uint32_t synced_count = 0U;
+    uint32_t remaining_ms = 0U;
+    uint32_t attempt_timeout_ms = 0U;
     esp_err_t err = ESP_OK;
 
     if (out_synced_count) {
@@ -731,10 +759,23 @@ unified_action_response_t sms_service_pull_pending(uint32_t timeout_ms, uint32_t
         );
     }
 
-    while ((err = modem_a7670_consume_pending_sms(payload, effective_timeout_ms)) == ESP_OK) {
+    while ((remaining_ms = sms_service_timeout_remaining_ms(deadline_us)) > 0U) {
+        attempt_timeout_ms = sms_service_pull_attempt_timeout_ms(remaining_ms);
+        if (attempt_timeout_ms == 0U) {
+            err = ESP_ERR_TIMEOUT;
+            break;
+        }
+
+        err = modem_a7670_consume_pending_sms(payload, attempt_timeout_ms);
+        if (err != ESP_OK) {
+            break;
+        }
         sms_service_emit_incoming(payload, "incoming_sms_pull");
         synced_count++;
         memset(payload, 0, sizeof(*payload));
+    }
+    if (remaining_ms == 0U && err == ESP_OK) {
+        err = ESP_ERR_TIMEOUT;
     }
 
     sms_service_free(payload);
