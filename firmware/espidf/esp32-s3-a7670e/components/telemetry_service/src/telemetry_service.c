@@ -250,6 +250,13 @@ static void telemetry_service_task(void *arg) {
         stable_publish_interval_ms = watch_policy.active
             ? telemetry_stable_publish_interval_ms(telemetry_configured_status_interval_ms())
             : watch_policy.idle_interval_ms;
+        fingerprint = 0U;
+        mqtt_reconnected = false;
+        force_publish = false;
+        changed = false;
+        should_publish = false;
+        publish_reason = "unchanged";
+        err = ESP_OK;
 
         if (!mqtt.connected) {
             s_last_mqtt_connected = false;

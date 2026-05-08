@@ -1,6 +1,8 @@
 #include "mqtt_mgr.h"
 
 #include <inttypes.h>
+#include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -153,7 +155,6 @@ static TickType_t mqtt_mgr_compute_loop_delay(
     uint32_t pending_action_sequence,
     uint32_t last_action_sequence
 );
-static bool mqtt_mgr_wifi_primary_absent(const wifi_mgr_status_t *wifi);
 static bool mqtt_mgr_wifi_primary_usable(const wifi_mgr_status_t *wifi);
 static bool mqtt_mgr_modem_fallback_ready(
     const config_mgr_data_t *config,
@@ -305,28 +306,11 @@ static bool mqtt_mgr_should_wait_for_wifi_primary(
         return false;
     }
 
-    if (mqtt_mgr_wifi_primary_absent(wifi)) {
-        return false;
-    }
-
-    return wifi->connect_attempt_count < 3U;
-}
-
-static bool mqtt_mgr_wifi_primary_absent(const wifi_mgr_status_t *wifi) {
-    if (!wifi) {
-        return false;
-    }
-
-    if (wifi->last_disconnect_reason == WIFI_REASON_NO_AP_FOUND) {
-        return true;
-    }
-
-    /* Once a scan has completed and the configured target is still absent,
-     * prefer modem fallback instead of burning more Wi-Fi-only wait cycles. */
-    if (wifi->last_scan_elapsed_ms > 0U && !wifi->last_scan_target_visible) {
-        return true;
-    }
-
+    /* Wi-Fi remains the preferred path only after it is actually usable.
+     * While it is disconnected, do not hold MQTT offline for startup scans,
+     * absent-AP retries, or credential/auth retries. The Wi-Fi manager keeps
+     * reconnecting in the background and this task promotes Wi-Fi after it has
+     * IP plus a stability hold. */
     return false;
 }
 
@@ -610,6 +594,25 @@ static void mqtt_mgr_copy_json_string(char *dest, size_t dest_len, const char *s
     dest[write_index] = '\0';
 }
 
+static esp_err_t mqtt_mgr_format_json(char *dest, size_t dest_len, const char *format, ...) {
+    va_list args;
+    int written = 0;
+
+    if (!dest || dest_len == 0U || !format) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    va_start(args, format);
+    written = vsnprintf(dest, dest_len, format, args);
+    va_end(args);
+
+    if (written < 0 || (size_t)written >= dest_len) {
+        dest[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return ESP_OK;
+}
+
 static esp_err_t mqtt_mgr_build_topic_locked(const char *suffix, char *topic, size_t topic_len) {
     if (!suffix || !topic || topic_len == 0) {
         return ESP_ERR_INVALID_ARG;
@@ -667,8 +670,10 @@ static esp_err_t mqtt_mgr_parse_broker_uri(const char *uri, char *host, size_t h
     const char *start = uri;
     const char *host_end = NULL;
     const char *port_start = NULL;
+    char *port_parse_end = NULL;
     char port_text[8] = {0};
     int written = 0;
+    unsigned long parsed_port = 0UL;
 
     if (!uri || !host || host_len == 0U || !port) {
         return ESP_ERR_INVALID_ARG;
@@ -687,6 +692,9 @@ static esp_err_t mqtt_mgr_parse_broker_uri(const char *uri, char *host, size_t h
     if (!host_end) {
         host_end = start + strlen(start);
     }
+    if (host_end == start) {
+        return ESP_ERR_INVALID_ARG;
+    }
     written = snprintf(host, host_len, "%.*s", (int)(host_end - start), start);
     if (written <= 0 || (size_t)written >= host_len) {
         return ESP_ERR_INVALID_SIZE;
@@ -701,11 +709,15 @@ static esp_err_t mqtt_mgr_parse_broker_uri(const char *uri, char *host, size_t h
         }
 
         port_start = host_end + 1;
-        snprintf(port_text, sizeof(port_text), "%.*s", (int)port_len, port_start);
-        *port = (uint16_t)strtoul(port_text, NULL, 10);
-        if (*port == 0U) {
+        written = snprintf(port_text, sizeof(port_text), "%.*s", (int)port_len, port_start);
+        if (written <= 0 || (size_t)written >= sizeof(port_text)) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        parsed_port = strtoul(port_text, &port_parse_end, 10);
+        if (!port_parse_end || *port_parse_end != '\0' || parsed_port == 0UL || parsed_port > UINT16_MAX) {
             return ESP_ERR_INVALID_ARG;
         }
+        *port = (uint16_t)parsed_port;
     }
 
     return ESP_OK;
@@ -716,6 +728,7 @@ static esp_err_t mqtt_mgr_publish_text(const char *suffix, const char *payload) 
     int publish_id = -1;
     char response[MQTT_MGR_MODEM_RESPONSE_LEN] = {0};
     esp_err_t err = ESP_OK;
+    esp_err_t topic_err = ESP_OK;
 
     if (!suffix || !payload || !s_lock) {
         return ESP_ERR_INVALID_ARG;
@@ -727,9 +740,13 @@ static esp_err_t mqtt_mgr_publish_text(const char *suffix, const char *payload) 
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
-    if (mqtt_mgr_build_topic_locked(suffix, topic, sizeof(topic)) != ESP_OK) {
+    topic_err = mqtt_mgr_build_topic_locked(suffix, topic, sizeof(topic));
+    if (topic_err != ESP_OK) {
+        s_status.publish_failures++;
+        s_status.runtime.last_error = topic_err;
+        snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "mqtt_topic_build_failed");
         xSemaphoreGive(s_lock);
-        return ESP_ERR_INVALID_SIZE;
+        return topic_err;
     }
     if (!s_status.connected) {
         xSemaphoreGive(s_lock);
@@ -773,15 +790,21 @@ static void mqtt_mgr_process_modem_messages(void) {
         return;
     }
 
-    memset(s_modem_rx_topic, 0, sizeof(s_modem_rx_topic));
-    memset(s_modem_rx_payload, 0, CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN);
+    while (true) {
+        bool has_message = false;
 
-    while (modem_a7670_pop_mqtt_message(
-        s_modem_rx_topic,
-        sizeof(s_modem_rx_topic),
-        s_modem_rx_payload,
-        CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN
-    )) {
+        memset(s_modem_rx_topic, 0, sizeof(s_modem_rx_topic));
+        memset(s_modem_rx_payload, 0, CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN);
+        has_message = modem_a7670_pop_mqtt_message(
+            s_modem_rx_topic,
+            sizeof(s_modem_rx_topic),
+            s_modem_rx_payload,
+            CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN
+        );
+        if (!has_message) {
+            break;
+        }
+
         ESP_LOGI(
             TAG,
             "processing modem mqtt topic=%s payload_len=%u",
@@ -1679,7 +1702,7 @@ esp_err_t mqtt_mgr_publish_sms_incoming(const unified_sms_payload_t *payload) {
     mqtt_mgr_copy_json_string(scratch->detail, sizeof(scratch->detail), payload->detail);
     mqtt_mgr_copy_json_string(scratch->multipart_ref, sizeof(scratch->multipart_ref), payload->multipart_ref);
     if (payload->multipart_part_count > 1U || scratch->multipart_ref[0] != '\0') {
-        snprintf(
+        err = mqtt_mgr_format_json(
             scratch->json,
             sizeof(scratch->json),
             "{\"type\":\"sms_incoming\",\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp\":%" PRIu32 ",\"multipart_ref\":\"%s\",\"multipart_part_index\":%u,\"multipart_part_count\":%u}",
@@ -1693,7 +1716,7 @@ esp_err_t mqtt_mgr_publish_sms_incoming(const unified_sms_payload_t *payload) {
             (unsigned)payload->multipart_part_count
         );
     } else {
-        snprintf(
+        err = mqtt_mgr_format_json(
             scratch->json,
             sizeof(scratch->json),
             "{\"type\":\"sms_incoming\",\"from\":\"%s\",\"text\":\"%s\",\"detail\":\"%s\",\"sim_slot\":%u,\"timestamp\":%" PRIu32 "}",
@@ -1704,7 +1727,9 @@ esp_err_t mqtt_mgr_publish_sms_incoming(const unified_sms_payload_t *payload) {
             payload->timestamp_ms
         );
     }
-    err = mqtt_mgr_publish_text("sms/incoming", scratch->json);
+    if (err == ESP_OK) {
+        err = mqtt_mgr_publish_text("sms/incoming", scratch->json);
+    }
     heap_caps_free(scratch);
     return err;
 }
@@ -1720,7 +1745,7 @@ esp_err_t mqtt_mgr_publish_sms_delivery(const unified_sms_delivery_payload_t *pa
 
     mqtt_mgr_copy_json_string(to, sizeof(to), payload->to);
     mqtt_mgr_copy_json_string(raw, sizeof(raw), payload->raw);
-    snprintf(
+    esp_err_t err = mqtt_mgr_format_json(
         json,
         sizeof(json),
         "{\"type\":\"sms_delivery\",\"to\":\"%s\",\"message_reference\":%u,\"status_report_status\":%u,\"sim_slot\":%u,\"timestamp\":%" PRIu32 ",\"raw_report\":\"%s\"}",
@@ -1731,6 +1756,9 @@ esp_err_t mqtt_mgr_publish_sms_delivery(const unified_sms_delivery_payload_t *pa
         payload->timestamp_ms,
         raw
     );
+    if (err != ESP_OK) {
+        return err;
+    }
     return mqtt_mgr_publish_text("sms/delivery", json);
 }
 
@@ -1745,7 +1773,7 @@ esp_err_t mqtt_mgr_publish_call_event(const unified_call_payload_t *payload) {
 
     mqtt_mgr_copy_json_string(number, sizeof(number), payload->number);
     mqtt_mgr_copy_json_string(state, sizeof(state), payload->state);
-    snprintf(
+    esp_err_t err = mqtt_mgr_format_json(
         json,
         sizeof(json),
         "{\"type\":\"call_event\",\"number\":\"%s\",\"state\":\"%s\",\"sim_slot\":%u,\"timestamp\":%" PRIu32 "}",
@@ -1754,6 +1782,9 @@ esp_err_t mqtt_mgr_publish_call_event(const unified_call_payload_t *payload) {
         (unsigned)payload->sim_slot,
         payload->timestamp_ms
     );
+    if (err != ESP_OK) {
+        return err;
+    }
     (void)storage_mgr_append_call(payload);
     return mqtt_mgr_publish_text("call/events", json);
 }
@@ -1771,7 +1802,7 @@ esp_err_t mqtt_mgr_publish_ussd_result(const unified_ussd_payload_t *payload) {
     mqtt_mgr_copy_json_string(code, sizeof(code), payload->code);
     mqtt_mgr_copy_json_string(status, sizeof(status), payload->status);
     mqtt_mgr_copy_json_string(response, sizeof(response), payload->response);
-    snprintf(
+    esp_err_t err = mqtt_mgr_format_json(
         json,
         sizeof(json),
         "{\"type\":\"ussd_result\",\"code\":\"%s\",\"status\":\"%s\",\"response\":\"%s\",\"session_active\":%s,\"sim_slot\":%u,\"timestamp\":%" PRIu32 "}",
@@ -1782,6 +1813,9 @@ esp_err_t mqtt_mgr_publish_ussd_result(const unified_ussd_payload_t *payload) {
         (unsigned)payload->sim_slot,
         payload->timestamp_ms
     );
+    if (err != ESP_OK) {
+        return err;
+    }
     return mqtt_mgr_publish_text("ussd/result", json);
 }
 

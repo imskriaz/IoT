@@ -134,6 +134,20 @@ function isWifiConnectObserved(status, targetSsid) {
     return wifiOnline;
 }
 
+function getLiveDeviceStatusSnapshot(deviceId) {
+    const liveStatus = global.modemService?.getDeviceStatus?.(deviceId);
+    if (liveStatus && typeof liveStatus === 'object') {
+        return liveStatus;
+    }
+
+    const cachedEntry = global.mqttService?.deviceStatus?.get(deviceId);
+    return cachedEntry?.lastStatus || cachedEntry || null;
+}
+
+function getLiveWifiSsid(status) {
+    return normalizeSsid(status?.wifi_ssid || status?.wifi?.ssid || status?.wifiSsid);
+}
+
 async function persistWifiConfigToDevice(deviceId, ssid, password) {
     try {
         await runQueuedDeviceOperation(deviceId, () => publishWifiConfigPersistence({
@@ -309,13 +323,20 @@ async function runHeaderModuleAction(req, deviceId, moduleKey) {
     switch (moduleKey) {
         case 'wifi': {
             const storedProfile = await readStoredWifiProfile(req, deviceId);
-            if (!storedProfile.desiredSsid) {
-                const error = new Error('No saved Wi-Fi profile is stored for this device. Update Device Settings first.');
+            const liveStatus = getLiveDeviceStatusSnapshot(deviceId);
+            const liveWifiSsid = getLiveWifiSsid(liveStatus);
+            const targetSsid = storedProfile.desiredSsid || liveWifiSsid;
+            const useDeviceLastKnownWifi = !storedProfile.desiredPasswordSet
+                && !!liveWifiSsid
+                && targetSsid === liveWifiSsid;
+
+            if (!targetSsid) {
+                const error = new Error('No saved or live last-known Wi-Fi profile is available for this device.');
                 error.statusCode = 409;
                 throw error;
             }
-            if (!storedProfile.desiredPasswordSet) {
-                const error = new Error(`Saved Wi-Fi profile ${storedProfile.desiredSsid} is missing a password in Device Settings.`);
+            if (!storedProfile.desiredPasswordSet && !useDeviceLastKnownWifi) {
+                const error = new Error(`Saved Wi-Fi profile ${targetSsid} is missing a password in Device Settings.`);
                 error.statusCode = 409;
                 throw error;
             }
@@ -324,27 +345,39 @@ async function runHeaderModuleAction(req, deviceId, moduleKey) {
                 'status',
                 deviceId,
                 15000,
-                (payload) => isWifiConnectObserved(payload, storedProfile.desiredSsid)
+                (payload) => isWifiConnectObserved(payload, targetSsid)
             ).catch(() => null);
 
-            await runQueuedDeviceOperation(deviceId, () => publishWifiConnectSequence({
-                mqttService: global.mqttService,
-                deviceId,
-                ssid: storedProfile.desiredSsid,
-                password: storedProfile.desiredPassword,
-                waitForResponse: false,
-                timeoutMs: 10000,
-                commandOptionsFactory: (command, options = {}) => buildStatusCommandOptions(command, options)
-            }));
+            await runQueuedDeviceOperation(deviceId, () => (
+                useDeviceLastKnownWifi
+                    ? global.mqttService.publishCommand(
+                        deviceId,
+                        'wifi-reconnect',
+                        {},
+                        false,
+                        10000,
+                        buildStatusCommandOptions('wifi-reconnect', { skipPersistentQueue: true })
+                    )
+                    : publishWifiConnectSequence({
+                        mqttService: global.mqttService,
+                        deviceId,
+                        ssid: targetSsid,
+                        password: storedProfile.desiredPassword,
+                        waitForResponse: false,
+                        timeoutMs: 10000,
+                        commandOptionsFactory: (command, options = {}) => buildStatusCommandOptions(command, options)
+                    })
+            ));
 
             const observedStatus = await statusProbe;
-            if (isWifiConnectObserved(observedStatus, storedProfile.desiredSsid)) {
-                await persistWifiConfigToDevice(deviceId, storedProfile.desiredSsid, storedProfile.desiredPassword);
+            const observedWifiConnected = isWifiConnectObserved(observedStatus, targetSsid);
+            if (observedWifiConnected && !useDeviceLastKnownWifi) {
+                await persistWifiConfigToDevice(deviceId, targetSsid, storedProfile.desiredPassword);
             }
             return {
-                message: isWifiConnectObserved(observedStatus, storedProfile.desiredSsid)
-                    ? `Saved Wi-Fi profile ${storedProfile.desiredSsid} is active.`
-                    : `Requested Wi-Fi reconnect using saved profile ${storedProfile.desiredSsid}.`
+                message: observedWifiConnected
+                    ? `${useDeviceLastKnownWifi ? 'Last-known' : 'Saved'} Wi-Fi profile ${targetSsid} is active.`
+                    : `Requested Wi-Fi reconnect using ${useDeviceLastKnownWifi ? 'last-known' : 'saved'} profile ${targetSsid}.`
             };
         }
 

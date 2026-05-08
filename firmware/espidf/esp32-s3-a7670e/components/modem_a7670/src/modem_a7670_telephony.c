@@ -324,6 +324,7 @@ static esp_err_t modem_a7670_sms_set_charset_locked(
     uint32_t timeout_ms
 ) {
     char command[32] = {0};
+    int written = 0;
 
     if (!charset || !response || response_len == 0U) {
         return ESP_ERR_INVALID_ARG;
@@ -335,8 +336,12 @@ static esp_err_t modem_a7670_sms_set_charset_locked(
         return ESP_OK;
     }
 
-    if (snprintf(command, sizeof(command), "AT+CSCS=\"%s\"", charset) < 0) {
+    written = snprintf(command, sizeof(command), "AT+CSCS=\"%s\"", charset);
+    if (written < 0) {
         return ESP_FAIL;
+    }
+    if ((size_t)written >= sizeof(command)) {
+        return ESP_ERR_INVALID_SIZE;
     }
 
     esp_err_t err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
@@ -361,6 +366,7 @@ static esp_err_t modem_a7670_sms_set_text_mode_params_locked(
     uint32_t timeout_ms
 ) {
     char command[40] = {0};
+    int written = 0;
 
     if (!response || response_len == 0U) {
         return ESP_ERR_INVALID_ARG;
@@ -375,8 +381,12 @@ static esp_err_t modem_a7670_sms_set_text_mode_params_locked(
         return ESP_OK;
     }
 
-    if (snprintf(command, sizeof(command), "AT+CSMP=%u,%u,%u,%u", fo, vp, pid, dcs) < 0) {
+    written = snprintf(command, sizeof(command), "AT+CSMP=%u,%u,%u,%u", fo, vp, pid, dcs);
+    if (written < 0) {
         return ESP_FAIL;
+    }
+    if ((size_t)written >= sizeof(command)) {
+        return ESP_ERR_INVALID_SIZE;
     }
 
     esp_err_t err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
@@ -547,6 +557,7 @@ static esp_err_t modem_a7670_send_sms_pdu_payload_locked(
     const uint8_t ctrl_z = 0x1AU;
     char command[32] = {0};
     esp_err_t err = ESP_OK;
+    int written = 0;
     uint32_t remaining_timeout_ms = 0U;
 
     if (!response || response_len == 0U) {
@@ -564,8 +575,12 @@ static esp_err_t modem_a7670_send_sms_pdu_payload_locked(
         return ESP_ERR_TIMEOUT;
     }
 
-    if (snprintf(command, sizeof(command), "AT+CMGS=%u", (unsigned int)pdu_length) < 0) {
+    written = snprintf(command, sizeof(command), "AT+CMGS=%u", (unsigned int)pdu_length);
+    if (written < 0) {
         return ESP_FAIL;
+    }
+    if ((size_t)written >= sizeof(command)) {
+        return ESP_ERR_INVALID_SIZE;
     }
 
     remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);
@@ -1219,6 +1234,7 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
     char *encoded_segment = NULL;
     char *segment_buffer = NULL;
     const char *destination_number = number;
+    int written = 0;
     uint32_t remaining_timeout_ms = 0U;
 
     if (total_segments < 2U || total_segments > MODEM_A7670_SMS_MAX_SEGMENTS) {
@@ -1293,7 +1309,7 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
             segment_text = encoded_segment;
         }
 
-        if (snprintf(
+        written = snprintf(
                 command,
                 sizeof(command),
                 "AT+CMGSEX=\"%s\",%u,%u,%u,%u",
@@ -1301,8 +1317,13 @@ static esp_err_t modem_a7670_send_sms_multipart_locked(
                 (unsigned int)destination_type,
                 (unsigned int)message_reference,
                 (unsigned int)(segment_index + 1U),
-                (unsigned int)total_segments) < 0) {
+                (unsigned int)total_segments);
+        if (written < 0) {
             err = ESP_FAIL;
+            break;
+        }
+        if ((size_t)written >= sizeof(command)) {
+            err = ESP_ERR_INVALID_SIZE;
             break;
         }
 
@@ -1405,6 +1426,7 @@ esp_err_t modem_a7670_send_sms_with_options(
     const char *message_text = text;
     const char *destination_number = number;
     int64_t deadline_us = 0;
+    int written = 0;
     uint32_t remaining_timeout_ms = 0U;
 
     if (!response || response_len == 0 ||
@@ -1500,13 +1522,20 @@ esp_err_t modem_a7670_send_sms_with_options(
             }
         }
         if (err == ESP_OK) {
-            err = snprintf(
+            written = snprintf(
                 command,
                 sizeof(command),
                 "AT+CMGS=\"%s\",%u",
                 destination_number,
                 (unsigned int)destination_type
-            ) < 0 ? ESP_FAIL : ESP_OK;
+            );
+            if (written < 0) {
+                err = ESP_FAIL;
+            } else if ((size_t)written >= sizeof(command)) {
+                err = ESP_ERR_INVALID_SIZE;
+            } else {
+                err = ESP_OK;
+            }
         }
         if (err == ESP_OK) {
             remaining_timeout_ms = modem_a7670_timeout_remaining_ms(deadline_us);

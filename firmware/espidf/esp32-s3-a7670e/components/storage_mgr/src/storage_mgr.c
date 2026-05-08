@@ -1253,6 +1253,7 @@ esp_err_t storage_mgr_list_files_json(const char *relative_path, uint16_t max_en
     struct stat path_stat = {0};
     DIR *dir = NULL;
     struct dirent *entry = NULL;
+    size_t header_len = 0U;
     size_t written = 0U;
     uint16_t count = 0U;
     bool truncated = false;
@@ -1298,6 +1299,7 @@ esp_err_t storage_mgr_list_files_json(const char *relative_path, uint16_t max_en
         buffer[0] = '\0';
         return ESP_ERR_INVALID_SIZE;
     }
+    header_len = written;
 
     while ((entry = readdir(dir)) != NULL) {
         char child_relative[STORAGE_SD_PATH_LEN] = {0};
@@ -1344,7 +1346,7 @@ esp_err_t storage_mgr_list_files_json(const char *relative_path, uint16_t max_en
 
     closedir(dir);
     {
-        const size_t old_header_len = written;
+        const size_t old_header_len = header_len;
         int header_result = snprintf(
             buffer,
             buffer_len,
@@ -1358,6 +1360,11 @@ esp_err_t storage_mgr_list_files_json(const char *relative_path, uint16_t max_en
             return ESP_ERR_INVALID_SIZE;
         }
         if ((size_t)header_result != old_header_len) {
+            if ((size_t)header_result > old_header_len &&
+                written + ((size_t)header_result - old_header_len) >= buffer_len) {
+                buffer[0] = '\0';
+                return ESP_ERR_INVALID_SIZE;
+            }
             memmove(
                 buffer + (size_t)header_result,
                 buffer + old_header_len,

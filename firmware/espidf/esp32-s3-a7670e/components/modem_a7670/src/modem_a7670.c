@@ -1,5 +1,6 @@
 #include "modem_a7670.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -100,6 +101,7 @@ static size_t s_mqtt_rx_topic_fragment_remaining;
 static size_t s_mqtt_rx_payload_fragment_remaining;
 static size_t s_mqtt_rx_topic_bytes;
 static size_t s_mqtt_rx_payload_bytes;
+static bool s_mqtt_rx_overflow;
 static char s_mqtt_rx_topic[MODEM_A7670_MQTT_TOPIC_LEN];
 static char s_mqtt_rx_payload[CONFIG_UNIFIED_API_BRIDGE_PAYLOAD_LEN];
 static unified_ussd_payload_t s_ussd_queue[CONFIG_UNIFIED_MODEM_EVENT_QUEUE_DEPTH];
@@ -155,7 +157,7 @@ static void modem_a7670_handle_ussd_request_timeout_locked(void);
 static bool modem_a7670_mqtt_rx_capture_active_locked(void);
 static size_t modem_a7670_parse_cmqttrx_length(const char *line);
 static bool modem_a7670_parse_cmqttrx_start_lengths(const char *line, size_t *topic_len, size_t *payload_len);
-static void modem_a7670_append_fragment(char *dest, size_t dest_len, const char *fragment);
+static bool modem_a7670_append_fragment(char *dest, size_t dest_len, const char *fragment);
 static bool modem_a7670_mqtt_topic_is_command(const char *topic);
 static bool modem_a7670_infer_mqtt_topic_from_payload_locked(char *topic, size_t topic_len, const char *payload);
 static void modem_a7670_queue_mqtt_message_locked(const char *topic, const char *payload);
@@ -209,6 +211,61 @@ static bool modem_a7670_response_has_prompt(const char *response) {
 
 static bool modem_a7670_response_has_phrase(const char *response, const char *phrase) {
     return response && phrase && strstr(response, phrase) != NULL;
+}
+
+static esp_err_t modem_a7670_format_command(char *command, size_t command_len, const char *format, ...) {
+    va_list args;
+    int written = 0;
+
+    if (!command || command_len == 0U || !format) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    va_start(args, format);
+    written = vsnprintf(command, command_len, format, args);
+    va_end(args);
+
+    if (written < 0 || (size_t)written >= command_len) {
+        command[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t modem_a7670_append_response_chunk(
+    char *response,
+    size_t response_len,
+    size_t *used,
+    const char *chunk
+) {
+    size_t chunk_len = 0U;
+    size_t available = 0U;
+
+    if (!response || response_len == 0U || !used || !chunk) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (*used >= response_len) {
+        response[response_len - 1U] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    chunk_len = strlen(chunk);
+    available = response_len - 1U - *used;
+    if (chunk_len > available) {
+        if (available > 0U) {
+            memcpy(response + *used, chunk, available);
+            *used += available;
+        }
+        response[*used] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (chunk_len > 0U) {
+        memcpy(response + *used, chunk, chunk_len);
+        *used += chunk_len;
+    }
+    response[*used] = '\0';
+    return ESP_OK;
 }
 
 static bool modem_a7670_response_has_mqtt_start_ready(const char *response) {
@@ -323,6 +380,9 @@ static bool modem_a7670_parse_cmqttrecv_line(
     if (!topic_end) {
         return false;
     }
+    if ((size_t)(topic_end - (topic_start + 1)) >= topic_len) {
+        return false;
+    }
 
     cursor = topic_end + 1;
     while (*cursor == ' ' || *cursor == ',') {
@@ -356,7 +416,7 @@ static bool modem_a7670_parse_cmqttrecv_line(
         copy_len = available_payload_len;
     }
     if (copy_len >= payload_len) {
-        copy_len = payload_len - 1U;
+        return false;
     }
     memcpy(payload, payload_start, copy_len);
     payload[copy_len] = '\0';
@@ -501,6 +561,7 @@ static void modem_a7670_reset_mqtt_rx_locked(void) {
     s_mqtt_rx_payload_fragment_remaining = 0U;
     s_mqtt_rx_topic_bytes = 0U;
     s_mqtt_rx_payload_bytes = 0U;
+    s_mqtt_rx_overflow = false;
     s_mqtt_rx_topic[0] = '\0';
     s_mqtt_rx_payload[0] = '\0';
 }
@@ -581,23 +642,24 @@ static bool modem_a7670_parse_cmqttrx_start_lengths(const char *line, size_t *to
     return true;
 }
 
-static void modem_a7670_append_fragment(char *dest, size_t dest_len, const char *fragment) {
+static bool modem_a7670_append_fragment(char *dest, size_t dest_len, const char *fragment) {
     size_t used = 0U;
     size_t fragment_len = 0U;
     size_t copy_len = 0U;
 
     if (!dest || dest_len == 0U || !fragment || fragment[0] == '\0') {
-        return;
+        return false;
     }
 
     used = strnlen(dest, dest_len);
     if (used >= (dest_len - 1U)) {
-        return;
+        return false;
     }
     fragment_len = strlen(fragment);
     copy_len = fragment_len < ((dest_len - 1U) - used) ? fragment_len : ((dest_len - 1U) - used);
     memcpy(dest + used, fragment, copy_len);
     dest[used + copy_len] = '\0';
+    return copy_len == fragment_len;
 }
 
 static bool modem_a7670_mqtt_topic_is_command(const char *topic) {
@@ -616,6 +678,7 @@ static bool modem_a7670_infer_mqtt_topic_from_payload_locked(char *topic, size_t
     board_bsp_identity_t identity = {0};
     char device_id_override[CONFIG_MGR_DEVICE_ID_LEN] = {0};
     char mqtt_topic_prefix[CONFIG_MGR_TOPIC_PREFIX] = {0};
+    esp_err_t format_err = ESP_OK;
 
     if (!topic || topic_len == 0U || !payload || payload[0] == '\0') {
         return false;
@@ -630,8 +693,17 @@ static bool modem_a7670_infer_mqtt_topic_from_payload_locked(char *topic, size_t
     if (!end || end <= start) {
         return false;
     }
+    if ((size_t)(end - start) >= sizeof(command)) {
+        ESP_LOGW(TAG, "cannot infer MQTT command topic; command name too long");
+        s_status.timeout_count++;
+        snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "mqtt_topic_overflow");
+        return false;
+    }
 
-    snprintf(command, sizeof(command), "%.*s", (int)(end - start), start);
+    format_err = modem_a7670_format_command(command, sizeof(command), "%.*s", (int)(end - start), start);
+    if (format_err != ESP_OK) {
+        return false;
+    }
     for (size_t index = 0U; command[index] != '\0'; ++index) {
         if (command[index] == '_') {
             command[index] = '-';
@@ -641,7 +713,7 @@ static bool modem_a7670_infer_mqtt_topic_from_payload_locked(char *topic, size_t
     board_bsp_get_identity(&identity);
     config_mgr_get_device_id_override(device_id_override, sizeof(device_id_override));
     config_mgr_get_mqtt_topic_prefix(mqtt_topic_prefix, sizeof(mqtt_topic_prefix));
-    snprintf(
+    format_err = modem_a7670_format_command(
         topic,
         topic_len,
         "%s/%s/command/%s",
@@ -649,14 +721,34 @@ static bool modem_a7670_infer_mqtt_topic_from_payload_locked(char *topic, size_t
         device_id_override[0] ? device_id_override : identity.device_id,
         command
     );
+    if (format_err != ESP_OK) {
+        ESP_LOGW(TAG, "cannot infer MQTT command topic; generated topic too long");
+        s_status.timeout_count++;
+        snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "mqtt_topic_overflow");
+        return false;
+    }
     return true;
 }
 
 static void modem_a7670_queue_mqtt_message_locked(const char *topic, const char *payload) {
     size_t write_index = 0;
     void (*listener)(void) = NULL;
+    size_t topic_len = topic ? strlen(topic) : 0U;
+    size_t payload_len = payload ? strlen(payload) : 0U;
 
     if (!topic || topic[0] == '\0') {
+        return;
+    }
+    if (topic_len >= sizeof(s_mqtt_queue[0].topic) ||
+        payload_len >= sizeof(s_mqtt_queue[0].payload)) {
+        ESP_LOGW(
+            TAG,
+            "dropping oversized modem mqtt message topic_len=%u payload_len=%u",
+            (unsigned)topic_len,
+            (unsigned)payload_len
+        );
+        s_status.timeout_count++;
+        snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "mqtt_rx_overflow");
         return;
     }
 
@@ -669,9 +761,9 @@ static void modem_a7670_queue_mqtt_message_locked(const char *topic, const char 
         s_status.timeout_count++;
     }
 
-    snprintf(s_mqtt_queue[write_index].topic, sizeof(s_mqtt_queue[write_index].topic), "%s", topic);
-    unified_copy_cstr(s_mqtt_queue[write_index].payload, sizeof(s_mqtt_queue[write_index].payload), payload);
-    ESP_LOGI(TAG, "mqtt queued topic=%s payload_len=%u depth=%u", topic, (unsigned)strlen(payload ? payload : ""), (unsigned)s_mqtt_count);
+    unified_copy_cstr(s_mqtt_queue[write_index].topic, sizeof(s_mqtt_queue[write_index].topic), topic);
+    unified_copy_cstr(s_mqtt_queue[write_index].payload, sizeof(s_mqtt_queue[write_index].payload), payload ? payload : "");
+    ESP_LOGI(TAG, "mqtt queued topic=%s payload_len=%u depth=%u", topic, (unsigned)payload_len, (unsigned)s_mqtt_count);
     listener = s_mqtt_event_listener;
     if (listener) {
         listener();
@@ -693,6 +785,21 @@ static void modem_a7670_trim_mqtt_json_payload_locked(void) {
 }
 
 static void modem_a7670_queue_completed_mqtt_rx_locked(void) {
+    if (s_mqtt_rx_overflow) {
+        ESP_LOGW(
+            TAG,
+            "dropping oversized CMQTTRX frame topic=%u/%u payload=%u/%u",
+            (unsigned)s_mqtt_rx_topic_bytes,
+            (unsigned)s_mqtt_rx_expected_topic_len,
+            (unsigned)s_mqtt_rx_payload_bytes,
+            (unsigned)s_mqtt_rx_expected_payload_len
+        );
+        s_status.timeout_count++;
+        snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "mqtt_rx_overflow");
+        modem_a7670_reset_mqtt_rx_locked();
+        return;
+    }
+
     if (!modem_a7670_mqtt_topic_is_command(s_mqtt_rx_topic)) {
         s_mqtt_rx_topic[0] = '\0';
         (void)modem_a7670_infer_mqtt_topic_from_payload_locked(
@@ -1287,12 +1394,16 @@ static void modem_a7670_parse_line_locked(const char *line) {
     }
 
     if (s_mqtt_rx_expect_topic) {
-        modem_a7670_append_fragment(s_mqtt_rx_topic, sizeof(s_mqtt_rx_topic), line);
+        if (!modem_a7670_append_fragment(s_mqtt_rx_topic, sizeof(s_mqtt_rx_topic), line)) {
+            s_mqtt_rx_overflow = true;
+        }
         return;
     }
 
     if (s_mqtt_rx_expect_payload) {
-        modem_a7670_append_fragment(s_mqtt_rx_payload, sizeof(s_mqtt_rx_payload), line);
+        if (!modem_a7670_append_fragment(s_mqtt_rx_payload, sizeof(s_mqtt_rx_payload), line)) {
+            s_mqtt_rx_overflow = true;
+        }
         return;
     }
 
@@ -1978,6 +2089,16 @@ void modem_a7670_parse_response_locked(const char *response) {
                     memcpy(dest + stored, fragment + data_start, store_len);
                     dest[stored + store_len] = '\0';
                 }
+                if (store_len < consumed) {
+                    s_mqtt_rx_overflow = true;
+                    ESP_LOGW(
+                        TAG,
+                        "CMQTTRX %s exceeded buffer captured=%u expected=%u",
+                        capture_topic ? "topic" : "payload",
+                        (unsigned)(*captured_bytes + consumed),
+                        (unsigned)(capture_topic ? s_mqtt_rx_expected_topic_len : s_mqtt_rx_expected_payload_len)
+                    );
+                }
                 *captured_bytes += consumed;
                 if (capture_topic) {
                     s_mqtt_rx_topic_fragment_remaining -= consumed;
@@ -2072,6 +2193,7 @@ static esp_err_t modem_a7670_read_until_quiet_bounded_locked(
         ? esp_timer_get_time() + ((int64_t)max_total_ms * 1000LL)
         : 0LL;
     char read_buffer[96] = {0};
+    esp_err_t append_err = ESP_OK;
 
     if (!response || response_len == 0) {
         return ESP_ERR_INVALID_ARG;
@@ -2080,8 +2202,6 @@ static esp_err_t modem_a7670_read_until_quiet_bounded_locked(
     response[0] = '\0';
     while (esp_timer_get_time() < deadline_us && used < (response_len - 1U)) {
         int64_t now_us = esp_timer_get_time();
-        size_t remaining = response_len - used;
-        int appended = 0;
 
         if (max_deadline_us > 0LL && now_us >= max_deadline_us) {
             break;
@@ -2098,12 +2218,10 @@ static esp_err_t modem_a7670_read_until_quiet_bounded_locked(
         }
 
         read_buffer[bytes] = '\0';
-        appended = snprintf(response + used, remaining, "%s", read_buffer);
-        if (appended < 0) {
-            return ESP_FAIL;
+        append_err = modem_a7670_append_response_chunk(response, response_len, &used, read_buffer);
+        if (append_err != ESP_OK) {
+            break;
         }
-
-        used += (size_t)appended < remaining ? (size_t)appended : (remaining - 1U);
         deadline_us = esp_timer_get_time() + ((int64_t)quiet_ms * 1000LL);
         if (max_deadline_us > 0LL && deadline_us > max_deadline_us) {
             deadline_us = max_deadline_us;
@@ -2115,6 +2233,9 @@ static esp_err_t modem_a7670_read_until_quiet_bounded_locked(
     }
 
     modem_a7670_parse_response_locked(response);
+    if (append_err != ESP_OK) {
+        return append_err;
+    }
     return ESP_OK;
 }
 
@@ -2128,6 +2249,7 @@ esp_err_t modem_a7670_read_response_locked(
     size_t used = 0;
     int64_t deadline_us = 0;
     char read_buffer[96] = {0};
+    esp_err_t append_err = ESP_OK;
 
     if (!response || response_len == 0) {
         return ESP_ERR_INVALID_ARG;
@@ -2137,9 +2259,6 @@ esp_err_t modem_a7670_read_response_locked(
     deadline_us = esp_timer_get_time() + ((int64_t)timeout_ms * 1000LL);
 
     while (esp_timer_get_time() < deadline_us && used < (response_len - 1U)) {
-        size_t remaining = response_len - used;
-        int appended = 0;
-
         bytes = uart_read_bytes(
             (uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT,
             read_buffer,
@@ -2151,11 +2270,10 @@ esp_err_t modem_a7670_read_response_locked(
         }
 
         read_buffer[bytes] = '\0';
-        appended = snprintf(response + used, remaining, "%s", read_buffer);
-        if (appended < 0) {
-            return ESP_FAIL;
+        append_err = modem_a7670_append_response_chunk(response, response_len, &used, read_buffer);
+        if (append_err != ESP_OK) {
+            break;
         }
-        used += (size_t)appended < remaining ? (size_t)appended : (remaining - 1U);
 
         if (modem_a7670_response_has_success(response) ||
             modem_a7670_response_has_error(response) ||
@@ -2165,6 +2283,13 @@ esp_err_t modem_a7670_read_response_locked(
     }
 
     modem_a7670_parse_response_locked(response);
+
+    if (append_err != ESP_OK &&
+        !modem_a7670_response_has_success(response) &&
+        !modem_a7670_response_has_error(response) &&
+        !(wait_for_prompt && modem_a7670_response_has_prompt(response))) {
+        return append_err;
+    }
 
     if (wait_for_prompt) {
         return modem_a7670_response_has_prompt(response) ? ESP_OK : ESP_ERR_TIMEOUT;
@@ -2187,6 +2312,7 @@ static esp_err_t modem_a7670_read_response_until_phrase_locked(
     size_t used = 0;
     int64_t deadline_us = 0;
     char read_buffer[96] = {0};
+    esp_err_t append_err = ESP_OK;
 
     if (!response || response_len == 0U) {
         return ESP_ERR_INVALID_ARG;
@@ -2196,9 +2322,6 @@ static esp_err_t modem_a7670_read_response_until_phrase_locked(
     deadline_us = esp_timer_get_time() + ((int64_t)timeout_ms * 1000LL);
 
     while (esp_timer_get_time() < deadline_us && used < (response_len - 1U)) {
-        size_t remaining = response_len - used;
-        int appended = 0;
-
         bytes = uart_read_bytes(
             (uart_port_t)CONFIG_UNIFIED_MODEM_UART_PORT,
             read_buffer,
@@ -2210,11 +2333,10 @@ static esp_err_t modem_a7670_read_response_until_phrase_locked(
         }
 
         read_buffer[bytes] = '\0';
-        appended = snprintf(response + used, remaining, "%s", read_buffer);
-        if (appended < 0) {
-            return ESP_FAIL;
+        append_err = modem_a7670_append_response_chunk(response, response_len, &used, read_buffer);
+        if (append_err != ESP_OK) {
+            break;
         }
-        used += (size_t)appended < remaining ? (size_t)appended : (remaining - 1U);
 
         if (phrase && strstr(response, phrase) != NULL) {
             modem_a7670_parse_response_locked(response);
@@ -2227,6 +2349,12 @@ static esp_err_t modem_a7670_read_response_until_phrase_locked(
     }
 
     modem_a7670_parse_response_locked(response);
+    if (append_err != ESP_OK &&
+        !(phrase && strstr(response, phrase) != NULL) &&
+        !modem_a7670_response_has_success(response) &&
+        !modem_a7670_response_has_error(response)) {
+        return append_err;
+    }
     if (phrase && strstr(response, phrase) != NULL) {
         return ESP_OK;
     }
@@ -2600,7 +2728,10 @@ static esp_err_t modem_a7670_mqtt_subscribe_locked(
     /* Prefer the vendor-documented two-step subscription flow. On this board,
      * direct CMQTTSUB acks can look healthy while inbound publishes never
      * surface as CMQTTRX frames afterwards. */
-    snprintf(command, sizeof(command), "AT+CMQTTSUBTOPIC=0,%u,1", (unsigned)strlen(topic));
+    err = modem_a7670_format_command(command, sizeof(command), "AT+CMQTTSUBTOPIC=0,%u,1", (unsigned)strlen(topic));
+    if (err != ESP_OK) {
+        return err;
+    }
     err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
     if (err == ESP_OK) {
         response[0] = '\0';
@@ -2611,8 +2742,7 @@ static esp_err_t modem_a7670_mqtt_subscribe_locked(
         }
     }
     if (err == ESP_OK) {
-        snprintf(command, sizeof(command), "%s", "AT+CMQTTSUB=0");
-        err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
+        err = modem_a7670_send_command_locked("AT+CMQTTSUB=0", response, response_len, timeout_ms, false);
     }
     if (err == ESP_OK && !modem_a7670_response_has_phrase(response, "+CMQTTSUB:")) {
         err = modem_a7670_read_response_until_phrase_locked(response, response_len, timeout_ms, "+CMQTTSUB:");
@@ -2630,7 +2760,10 @@ static esp_err_t modem_a7670_mqtt_subscribe_locked(
             response[0] ? response : "<empty>"
         );
         response[0] = '\0';
-        snprintf(command, sizeof(command), "AT+CMQTTSUB=0,%u,1", (unsigned)strlen(topic));
+        err = modem_a7670_format_command(command, sizeof(command), "AT+CMQTTSUB=0,%u,1", (unsigned)strlen(topic));
+        if (err != ESP_OK) {
+            return err;
+        }
         err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
         if (err == ESP_OK) {
             response[0] = '\0';
@@ -2765,7 +2898,12 @@ esp_err_t modem_a7670_mqtt_connect(
     }
     s_mqtt_service_started = true;
 
-    snprintf(command, sizeof(command), "AT+CMQTTACCQ=0,\"%s\",0", client_id);
+    err = modem_a7670_format_command(command, sizeof(command), "AT+CMQTTACCQ=0,\"%s\",0", client_id);
+    if (err != ESP_OK) {
+        (void)modem_a7670_mqtt_shutdown_locked(response, response_len, timeout_ms);
+        xSemaphoreGive(s_lock);
+        return err;
+    }
     err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
     if (err != ESP_OK &&
         !modem_a7670_response_has_phrase(response, "+CMQTTACCQ:") &&
@@ -2795,7 +2933,7 @@ esp_err_t modem_a7670_mqtt_connect(
     }
 
     if (username && username[0] != '\0' && password && password[0] != '\0') {
-        snprintf(
+        err = modem_a7670_format_command(
             command,
             sizeof(command),
             "AT+CMQTTCONNECT=0,\"tcp://%s:%u\",60,1,\"%s\",\"%s\"",
@@ -2805,7 +2943,12 @@ esp_err_t modem_a7670_mqtt_connect(
             password
         );
     } else {
-        snprintf(command, sizeof(command), "AT+CMQTTCONNECT=0,\"tcp://%s:%u\",60,1", host, (unsigned)port);
+        err = modem_a7670_format_command(command, sizeof(command), "AT+CMQTTCONNECT=0,\"tcp://%s:%u\",60,1", host, (unsigned)port);
+    }
+    if (err != ESP_OK) {
+        (void)modem_a7670_mqtt_shutdown_locked(response, response_len, timeout_ms);
+        xSemaphoreGive(s_lock);
+        return err;
     }
 
     err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
@@ -2908,7 +3051,10 @@ static esp_err_t modem_a7670_mqtt_publish_legacy_locked(
         return ESP_ERR_INVALID_ARG;
     }
 
-    snprintf(command, sizeof(command), "AT+CMQTTTOPIC=0,%u", (unsigned)strlen(topic));
+    err = modem_a7670_format_command(command, sizeof(command), "AT+CMQTTTOPIC=0,%u", (unsigned)strlen(topic));
+    if (err != ESP_OK) {
+        return err;
+    }
     err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
     if (err == ESP_OK) {
         response[0] = '\0';
@@ -2922,7 +3068,10 @@ static esp_err_t modem_a7670_mqtt_publish_legacy_locked(
         return err;
     }
 
-    snprintf(command, sizeof(command), "AT+CMQTTPAYLOAD=0,%u", (unsigned)strlen(payload));
+    err = modem_a7670_format_command(command, sizeof(command), "AT+CMQTTPAYLOAD=0,%u", (unsigned)strlen(payload));
+    if (err != ESP_OK) {
+        return err;
+    }
     err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, true);
     if (err == ESP_OK) {
         response[0] = '\0';
@@ -2936,7 +3085,10 @@ static esp_err_t modem_a7670_mqtt_publish_legacy_locked(
         return err;
     }
 
-    snprintf(command, sizeof(command), "AT+CMQTTPUB=0,%d,60", qos < 0 ? 0 : qos);
+    err = modem_a7670_format_command(command, sizeof(command), "AT+CMQTTPUB=0,%d,60", qos < 0 ? 0 : qos);
+    if (err != ESP_OK) {
+        return err;
+    }
     err = modem_a7670_send_command_locked(command, response, response_len, timeout_ms, false);
     if (err == ESP_OK && !modem_a7670_response_has_phrase(response, "+CMQTTPUB:")) {
         err = modem_a7670_read_response_until_phrase_locked(response, response_len, timeout_ms, "+CMQTTPUB:");
@@ -3027,6 +3179,8 @@ void modem_a7670_reset_mqtt_rx_state(void) {
 bool modem_a7670_pop_mqtt_message(char *topic, size_t topic_len, char *payload, size_t payload_len) {
     char urc_response[512] = {0};
     bool has_value = false;
+    size_t queued_topic_len = 0U;
+    size_t queued_payload_len = 0U;
 
     if (!topic || topic_len == 0U || !payload || payload_len == 0U || !s_lock) {
         return false;
@@ -3037,12 +3191,33 @@ bool modem_a7670_pop_mqtt_message(char *topic, size_t topic_len, char *payload, 
 
     (void)modem_a7670_read_until_quiet_locked(urc_response, sizeof(urc_response), 50);
 
-    if (s_mqtt_count > 0U) {
-        snprintf(topic, topic_len, "%s", s_mqtt_queue[s_mqtt_head].topic);
-        snprintf(payload, payload_len, "%s", s_mqtt_queue[s_mqtt_head].payload);
+    while (s_mqtt_count > 0U) {
+        queued_topic_len = strlen(s_mqtt_queue[s_mqtt_head].topic);
+        queued_payload_len = strlen(s_mqtt_queue[s_mqtt_head].payload);
+        if (queued_topic_len >= topic_len || queued_payload_len >= payload_len) {
+            ESP_LOGW(
+                TAG,
+                "dropping modem mqtt message too large for caller topic_len=%u/%u payload_len=%u/%u",
+                (unsigned)queued_topic_len,
+                (unsigned)topic_len,
+                (unsigned)queued_payload_len,
+                (unsigned)payload_len
+            );
+            topic[0] = '\0';
+            payload[0] = '\0';
+            s_status.timeout_count++;
+            snprintf(s_status.runtime.last_error_text, sizeof(s_status.runtime.last_error_text), "%s", "mqtt_pop_overflow");
+            s_mqtt_head = (s_mqtt_head + 1U) % MODEM_A7670_MQTT_QUEUE_DEPTH;
+            s_mqtt_count--;
+            continue;
+        } else {
+            unified_copy_cstr(topic, topic_len, s_mqtt_queue[s_mqtt_head].topic);
+            unified_copy_cstr(payload, payload_len, s_mqtt_queue[s_mqtt_head].payload);
+            has_value = true;
+        }
         s_mqtt_head = (s_mqtt_head + 1U) % MODEM_A7670_MQTT_QUEUE_DEPTH;
         s_mqtt_count--;
-        has_value = true;
+        break;
     }
 
     xSemaphoreGive(s_lock);
@@ -3200,9 +3375,13 @@ esp_err_t modem_a7670_open_data_session(char *response, size_t response_len, uin
         char cgdcont_cmd[96] = {0};
         config_mgr_get_modem_apn(modem_apn, sizeof(modem_apn));
         if (modem_apn[0] != '\0') {
-            snprintf(cgdcont_cmd, sizeof(cgdcont_cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", modem_apn);
+            err = modem_a7670_format_command(cgdcont_cmd, sizeof(cgdcont_cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", modem_apn);
         } else {
-            snprintf(cgdcont_cmd, sizeof(cgdcont_cmd), "AT+CGDCONT=1,\"IP\"");
+            err = modem_a7670_format_command(cgdcont_cmd, sizeof(cgdcont_cmd), "AT+CGDCONT=1,\"IP\"");
+        }
+        if (err != ESP_OK) {
+            xSemaphoreGive(s_lock);
+            return err;
         }
         err = modem_a7670_send_command_locked(cgdcont_cmd, response, response_len, timeout_ms, false);
     }

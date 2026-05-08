@@ -1,6 +1,7 @@
 #include "serial_config.h"
 
 #include <inttypes.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -87,6 +88,28 @@ static void serial_config_emit_line(const char *line) {
 
     printf("%s\r\n", line);
     fflush(stdout);
+}
+
+static void serial_config_emit_scratch_line(serial_config_scratch_t *scratch, const char *fallback_error, const char *format, ...) {
+    va_list args;
+    int written = 0;
+
+    if (!scratch || !format) {
+        serial_config_emit_line(fallback_error ? fallback_error : "cfg_apply ok=no code=line_unavailable");
+        return;
+    }
+
+    va_start(args, format);
+    written = vsnprintf(scratch->line, sizeof(scratch->line), format, args);
+    va_end(args);
+
+    if (written < 0 || (size_t)written >= sizeof(scratch->line)) {
+        scratch->line[0] = '\0';
+        serial_config_emit_line(fallback_error ? fallback_error : "cfg_apply ok=no code=line_too_long");
+        return;
+    }
+
+    serial_config_emit_line(scratch->line);
 }
 
 static void serial_config_emit_status_json(void) {
@@ -254,23 +277,29 @@ static bool serial_config_encode_b64(const char *input, char *output, size_t out
     return true;
 }
 
-static void serial_config_append_field(char *buffer, size_t buffer_len, const char *field) {
+static bool serial_config_append_field(char *buffer, size_t buffer_len, const char *field) {
     size_t used = 0U;
+    int written = 0;
 
     if (!buffer || !field || field[0] == '\0' || buffer_len == 0U) {
-        return;
+        return false;
     }
 
     used = strnlen(buffer, buffer_len);
     if (used >= buffer_len - 1U) {
-        return;
+        return false;
     }
 
     if (used > 0U) {
-        (void)snprintf(buffer + used, buffer_len - used, ",%s", field);
+        written = snprintf(buffer + used, buffer_len - used, ",%s", field);
     } else {
-        (void)snprintf(buffer + used, buffer_len - used, "%s", field);
+        written = snprintf(buffer + used, buffer_len - used, "%s", field);
     }
+    if (written < 0 || (size_t)written >= (buffer_len - used)) {
+        buffer[used] = '\0';
+        return false;
+    }
+    return true;
 }
 
 #if defined(CONFIG_MGR_MQTT_URI_LEN)
@@ -310,9 +339,9 @@ static void serial_config_emit_status(void) {
     (void)serial_config_encode_b64(config.mqtt_username, scratch->status_mqtt_username_b64, sizeof(scratch->status_mqtt_username_b64));
 #endif
 
-    (void)snprintf(
-        scratch->line,
-        sizeof(scratch->line),
+    serial_config_emit_scratch_line(
+        scratch,
+        "cfg_status ok=no code=line_too_long",
 #if defined(CONFIG_MGR_MQTT_URI_LEN)
         "cfg_status ok=yes schema=%" PRIu32 " device_id_override_b64=%s wifi_ssid_b64=%s wifi_password_set=%s modem_apn_b64=%s mqtt_enabled=%s modem_fallback_enabled=%s mqtt_uri_b64=%s mqtt_username_b64=%s mqtt_password_set=%s",
         config_mgr_schema_version(),
@@ -334,7 +363,6 @@ static void serial_config_emit_status(void) {
         scratch->status_modem_apn_b64
 #endif
     );
-    serial_config_emit_line(scratch->line);
 }
 
 static void serial_config_handle_modem_command(const char *encoded_command) {
@@ -367,19 +395,22 @@ static void serial_config_handle_modem_command(const char *encoded_command) {
     }
 
     if (err == ESP_OK) {
-        (void)snprintf(scratch->line, sizeof(scratch->line), "modem_cmd ok=yes response_b64=%s", scratch->modem_response_b64);
-        serial_config_emit_line(scratch->line);
+        serial_config_emit_scratch_line(
+            scratch,
+            "modem_cmd ok=no code=line_too_long",
+            "modem_cmd ok=yes response_b64=%s",
+            scratch->modem_response_b64
+        );
         return;
     }
 
-    (void)snprintf(
-        scratch->line,
-        sizeof(scratch->line),
+    serial_config_emit_scratch_line(
+        scratch,
+        "modem_cmd ok=no code=line_too_long",
         "modem_cmd ok=no code=%s response_b64=%s",
         esp_err_to_name(err),
         scratch->modem_response_b64
     );
-    serial_config_emit_line(scratch->line);
 }
 
 static void serial_config_schedule_reboot(void) {
@@ -439,26 +470,24 @@ static void serial_config_handle_wifi_connect(char *cursor) {
     err = wifi_mgr_request_runtime_connect(scratch->wifi_ssid, scratch->wifi_password);
     (void)serial_config_encode_b64(scratch->wifi_ssid, scratch->wifi_ssid_b64, sizeof(scratch->wifi_ssid_b64));
     if (err != ESP_OK) {
-        (void)snprintf(
-            scratch->line,
-            sizeof(scratch->line),
+        serial_config_emit_scratch_line(
+            scratch,
+            "wifi_connect ok=no code=line_too_long",
             "wifi_connect ok=no code=%s ssid_b64=%s password_set=%s",
             esp_err_to_name(err),
             scratch->wifi_ssid_b64,
             has_password ? "yes" : "no"
         );
-        serial_config_emit_line(scratch->line);
         return;
     }
 
-    (void)snprintf(
-        scratch->line,
-        sizeof(scratch->line),
+    serial_config_emit_scratch_line(
+        scratch,
+        "wifi_connect ok=no code=line_too_long",
         "wifi_connect ok=yes ssid_b64=%s password_set=%s detail=requested",
         scratch->wifi_ssid_b64,
         has_password ? "yes" : "no"
     );
-    serial_config_emit_line(scratch->line);
 }
 
 static void serial_config_handle_set(char *cursor) {
@@ -494,7 +523,10 @@ static void serial_config_handle_set(char *cursor) {
                 serial_config_emit_line("cfg_apply ok=no code=invalid_arg detail=device_id_override");
                 return;
             }
-            serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "device_id_override");
+            if (!serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "device_id_override")) {
+                serial_config_emit_line("cfg_apply ok=no code=line_too_long");
+                return;
+            }
             has_updates = true;
         } else if (strcmp(key, "wifi_ssid_b64") == 0) {
             if (!serial_config_decode_b64(value, scratch->set_decoded, sizeof(scratch->set_decoded)) ||
@@ -502,7 +534,10 @@ static void serial_config_handle_set(char *cursor) {
                 serial_config_emit_line("cfg_apply ok=no code=invalid_arg detail=wifi_ssid");
                 return;
             }
-            serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "wifi_ssid");
+            if (!serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "wifi_ssid")) {
+                serial_config_emit_line("cfg_apply ok=no code=line_too_long");
+                return;
+            }
             has_updates = true;
         } else if (strcmp(key, "wifi_password_b64") == 0) {
             if (!serial_config_decode_b64(value, scratch->set_decoded, sizeof(scratch->set_decoded)) ||
@@ -510,7 +545,10 @@ static void serial_config_handle_set(char *cursor) {
                 serial_config_emit_line("cfg_apply ok=no code=invalid_arg detail=wifi_password");
                 return;
             }
-            serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "wifi_password");
+            if (!serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "wifi_password")) {
+                serial_config_emit_line("cfg_apply ok=no code=line_too_long");
+                return;
+            }
             has_updates = true;
         } else if (strcmp(key, "modem_apn_b64") == 0) {
             if (!serial_config_decode_b64(value, scratch->set_decoded, sizeof(scratch->set_decoded)) ||
@@ -518,7 +556,10 @@ static void serial_config_handle_set(char *cursor) {
                 serial_config_emit_line("cfg_apply ok=no code=invalid_arg detail=modem_apn");
                 return;
             }
-            serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "modem_apn");
+            if (!serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "modem_apn")) {
+                serial_config_emit_line("cfg_apply ok=no code=line_too_long");
+                return;
+            }
             has_updates = true;
 #if defined(CONFIG_MGR_MQTT_URI_LEN)
         } else if (strcmp(key, "mqtt_uri_b64") == 0) {
@@ -527,7 +568,10 @@ static void serial_config_handle_set(char *cursor) {
                 serial_config_emit_line("cfg_apply ok=no code=invalid_arg detail=mqtt_uri");
                 return;
             }
-            serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "mqtt_uri");
+            if (!serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "mqtt_uri")) {
+                serial_config_emit_line("cfg_apply ok=no code=line_too_long");
+                return;
+            }
             has_updates = true;
         } else if (strcmp(key, "mqtt_username_b64") == 0) {
             if (!serial_config_decode_b64(value, scratch->set_decoded, sizeof(scratch->set_decoded)) ||
@@ -535,7 +579,10 @@ static void serial_config_handle_set(char *cursor) {
                 serial_config_emit_line("cfg_apply ok=no code=invalid_arg detail=mqtt_username");
                 return;
             }
-            serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "mqtt_username");
+            if (!serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "mqtt_username")) {
+                serial_config_emit_line("cfg_apply ok=no code=line_too_long");
+                return;
+            }
             has_updates = true;
         } else if (strcmp(key, "mqtt_password_b64") == 0) {
             if (!serial_config_decode_b64(value, scratch->set_decoded, sizeof(scratch->set_decoded)) ||
@@ -543,7 +590,10 @@ static void serial_config_handle_set(char *cursor) {
                 serial_config_emit_line("cfg_apply ok=no code=invalid_arg detail=mqtt_password");
                 return;
             }
-            serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "mqtt_password");
+            if (!serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "mqtt_password")) {
+                serial_config_emit_line("cfg_apply ok=no code=line_too_long");
+                return;
+            }
             has_updates = true;
         } else if (strcmp(key, "mqtt_enabled") == 0) {
             if (!serial_config_parse_bool(value, &bool_value)) {
@@ -551,7 +601,10 @@ static void serial_config_handle_set(char *cursor) {
                 return;
             }
             next.mqtt_enabled = bool_value;
-            serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "mqtt_enabled");
+            if (!serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "mqtt_enabled")) {
+                serial_config_emit_line("cfg_apply ok=no code=line_too_long");
+                return;
+            }
             has_updates = true;
         } else if (strcmp(key, "modem_fallback_enabled") == 0) {
             if (!serial_config_parse_bool(value, &bool_value)) {
@@ -559,7 +612,10 @@ static void serial_config_handle_set(char *cursor) {
                 return;
             }
             next.modem_fallback_enabled = bool_value;
-            serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "modem_fallback_enabled");
+            if (!serial_config_append_field(scratch->set_applied, sizeof(scratch->set_applied), "modem_fallback_enabled")) {
+                serial_config_emit_line("cfg_apply ok=no code=line_too_long");
+                return;
+            }
             has_updates = true;
 #endif
         } else {
@@ -580,13 +636,12 @@ static void serial_config_handle_set(char *cursor) {
     }
 
     if (scratch->set_applied[0] != '\0') {
-        (void)snprintf(
-            scratch->line,
-            sizeof(scratch->line),
+        serial_config_emit_scratch_line(
+            scratch,
+            "cfg_apply ok=no code=line_too_long",
             "cfg_apply ok=yes restart_required=yes applied=%s",
             scratch->set_applied
         );
-        serial_config_emit_line(scratch->line);
     } else {
         serial_config_emit_line("cfg_apply ok=yes restart_required=yes");
     }

@@ -707,6 +707,10 @@ function isWifiConnectObserved(status, targetSsid) {
     return wifiOnline;
 }
 
+function getLiveWifiSsid(status) {
+    return normalizeSsid(status?.wifi_ssid || status?.wifi?.ssid || status?.wifiSsid);
+}
+
 function isWifiCommandChannelHealthy(status) {
     if (!status || typeof status !== 'object') {
         return false;
@@ -1906,19 +1910,22 @@ router.post('/wifi/client/retry', [
 
         const deviceId = resolveRequestDeviceId(req);
         const requestedSsid = normalizeSsid(req.body?.ssid);
+        const currentStatus = getLatestDeviceStatusSnapshot(deviceId);
+        const liveWifiSsid = getLiveWifiSsid(currentStatus);
         const storedProfile = await readStoredWifiProfile(req, deviceId);
         const preferredNetwork = await readPreferredWifiNetwork(req, deviceId).catch(() => null);
-        const retrySsid = requestedSsid || preferredNetwork?.ssid || storedProfile.selectedSsid;
+        const retrySsid = requestedSsid || preferredNetwork?.ssid || storedProfile.selectedSsid || liveWifiSsid;
 
         if (!retrySsid) {
             return res.status(409).json({
                 success: false,
-                message: 'No saved Wi-Fi network is stored for this device yet.'
+                message: 'No saved or live last-known Wi-Fi network is available for this device yet.'
             });
         }
 
         const storedNetwork = await readStoredWifiNetwork(req, deviceId, retrySsid).catch(() => null);
-        if (requestedSsid && !storedNetwork) {
+        const liveProfileMatchesTarget = !!liveWifiSsid && liveWifiSsid === retrySsid;
+        if (requestedSsid && !storedNetwork && !liveProfileMatchesTarget) {
             return res.status(409).json({
                 success: false,
                 message: `No saved Wi-Fi network named ${requestedSsid} was found for this device.`,
@@ -1937,8 +1944,9 @@ router.post('/wifi/client/retry', [
         const resolvedPassword = storedNetwork?.passwordSet
             ? storedNetwork.password
             : (profileMatchesTarget && storedProfile.selectedPasswordSet ? storedProfile.selectedPassword : '');
+        const useDeviceLastKnownWifi = !resolvedPassword && !retryAllowsOpenNetwork && liveProfileMatchesTarget;
 
-        if (!resolvedPassword && !retryAllowsOpenNetwork) {
+        if (!resolvedPassword && !retryAllowsOpenNetwork && !useDeviceLastKnownWifi) {
             return res.status(409).json({
                 success: false,
                 message: `Saved Wi-Fi network ${retrySsid} is missing a password.`,
@@ -1958,29 +1966,32 @@ router.post('/wifi/client/retry', [
             });
         }
 
-        const currentStatus = getLatestDeviceStatusSnapshot(deviceId);
         if (isWifiConnectReadyNow(currentStatus, retrySsid)) {
             await persistKnownWifiNetwork(req, deviceId, {
                 ssid: retrySsid,
                 security: resolvedSecurity,
-                password: resolvedPassword,
+                ...(useDeviceLastKnownWifi ? {} : { password: resolvedPassword }),
                 selected: true,
                 connected: true
             });
             await upsertDeviceProfileFields(req, deviceId, {
                 wifi_ssid: retrySsid,
-                wifi_pass: resolvedPassword
+                ...(useDeviceLastKnownWifi ? {} : { wifi_pass: resolvedPassword })
             });
-            const configPersisted = await persistWifiConfigToDevice(deviceId, retrySsid, resolvedPassword);
+            const configPersisted = useDeviceLastKnownWifi
+                ? false
+                : await persistWifiConfigToDevice(deviceId, retrySsid, resolvedPassword);
 
             return res.json({
                 success: true,
-                message: `Saved Wi-Fi network ${retrySsid} is active.`,
+                message: useDeviceLastKnownWifi
+                    ? `Last-known Wi-Fi network ${retrySsid} is active.`
+                    : `Saved Wi-Fi network ${retrySsid} is active.`,
                 data: {
                     selectedSsid: retrySsid,
-                    selectedPasswordSet: resolvedPassword.length > 0,
+                    selectedPasswordSet: resolvedPassword.length > 0 || useDeviceLastKnownWifi,
                     desiredSsid: retrySsid,
-                    desiredPasswordSet: resolvedPassword.length > 0,
+                    desiredPasswordSet: resolvedPassword.length > 0 || useDeviceLastKnownWifi,
                     openNetwork: retryAllowsOpenNetwork,
                     observedWifiConnected: true,
                     activePath: currentStatus?.activePath || currentStatus?.active_path || 'wifi',
@@ -2001,16 +2012,27 @@ router.post('/wifi/client/retry', [
         let reconnectResponse = null;
         let reconnectError = null;
         try {
-            reconnectResponse = await runQueuedDeviceOperation(deviceId, () => publishWifiConnectSequence({
-                mqttService: global.mqttService,
-                deviceId,
-                ssid: retrySsid,
-                password: resolvedPassword,
-                security: storedNetwork?.security || '',
-                waitForResponse: false,
-                timeoutMs: 10000,
-                commandOptionsFactory: (command, options = {}) => buildModemLiveCommandOptions(command, options)
-            }));
+            reconnectResponse = await runQueuedDeviceOperation(deviceId, () => (
+                useDeviceLastKnownWifi
+                    ? global.mqttService.publishCommand(
+                        deviceId,
+                        'wifi-reconnect',
+                        {},
+                        false,
+                        10000,
+                        buildModemLiveCommandOptions('wifi-reconnect', { skipPersistentQueue: true })
+                    )
+                    : publishWifiConnectSequence({
+                        mqttService: global.mqttService,
+                        deviceId,
+                        ssid: retrySsid,
+                        password: resolvedPassword,
+                        security: storedNetwork?.security || '',
+                        waitForResponse: false,
+                        timeoutMs: 10000,
+                        commandOptionsFactory: (command, options = {}) => buildModemLiveCommandOptions(command, options)
+                    })
+            ));
         } catch (error) {
             reconnectError = error;
         }
@@ -2030,28 +2052,28 @@ router.post('/wifi/client/retry', [
         await persistKnownWifiNetwork(req, deviceId, {
             ssid: retrySsid,
             security: resolvedSecurity,
-            password: resolvedPassword,
+            ...(useDeviceLastKnownWifi ? {} : { password: resolvedPassword }),
             selected: true,
             connected: observedWifiConnected
         });
         await upsertDeviceProfileFields(req, deviceId, {
             wifi_ssid: retrySsid,
-            wifi_pass: resolvedPassword
+            ...(useDeviceLastKnownWifi ? {} : { wifi_pass: resolvedPassword })
         });
-        const configPersisted = observedWifiConnected
+        const configPersisted = observedWifiConnected && !useDeviceLastKnownWifi
             ? await persistWifiConfigToDevice(deviceId, retrySsid, resolvedPassword)
             : false;
 
         return res.json({
             success: true,
             message: observedWifiConnected
-                ? `Saved Wi-Fi network ${retrySsid} is active.`
-                : `Retry requested for saved Wi-Fi network ${retrySsid}. Waiting for the device to switch over.`,
+                ? `${useDeviceLastKnownWifi ? 'Last-known' : 'Saved'} Wi-Fi network ${retrySsid} is active.`
+                : `Retry requested for ${useDeviceLastKnownWifi ? 'last-known' : 'saved'} Wi-Fi network ${retrySsid}. Waiting for the device to switch over.`,
             data: {
                 selectedSsid: retrySsid,
-                selectedPasswordSet: resolvedPassword.length > 0,
+                selectedPasswordSet: resolvedPassword.length > 0 || useDeviceLastKnownWifi,
                 desiredSsid: retrySsid,
-                desiredPasswordSet: resolvedPassword.length > 0,
+                desiredPasswordSet: resolvedPassword.length > 0 || useDeviceLastKnownWifi,
                 openNetwork: retryAllowsOpenNetwork,
                 observedWifiConnected,
                 activePath: observedStatus?.active_path || observedStatus?.activePath || null,

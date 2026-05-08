@@ -1,6 +1,7 @@
 #include "api_bridge.h"
 
 #include <inttypes.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -232,19 +233,40 @@ static bool api_bridge_payload_missing(char *payload, size_t payload_len) {
     return !payload || payload_len == 0U;
 }
 
+static esp_err_t api_bridge_format_payload(char *payload, size_t payload_len, const char *format, ...) {
+    va_list args;
+    int written = 0;
+
+    if (api_bridge_payload_missing(payload, payload_len) || !format) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    va_start(args, format);
+    written = vsnprintf(payload, payload_len, format, args);
+    va_end(args);
+
+    if (written < 0 || (size_t)written >= payload_len) {
+        payload[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return ESP_OK;
+}
+
 static esp_err_t api_bridge_write_response_payload(
     char *payload,
     size_t payload_len,
     const char *response
 ) {
     char escaped_response[512] = {0};
+    int written = 0;
 
     if (api_bridge_payload_missing(payload, payload_len)) {
         return ESP_ERR_INVALID_ARG;
     }
 
     api_bridge_escape_json(response, escaped_response, sizeof(escaped_response));
-    if (snprintf(payload, payload_len, "{\"response\":\"%s\"}", escaped_response) >= (int)payload_len) {
+    written = snprintf(payload, payload_len, "{\"response\":\"%s\"}", escaped_response);
+    if (written < 0 || (size_t)written >= payload_len) {
         payload[0] = '\0';
         return ESP_ERR_INVALID_SIZE;
     }
@@ -350,6 +372,7 @@ static unified_action_response_t api_bridge_execute_modem_at(
     api_bridge_modem_at_scratch_t *scratch = NULL;
     unified_action_response_t response = {0};
     esp_err_t err = ESP_OK;
+    int written = 0;
     const uint32_t timeout_ms = action && action->timeout_ms > 0U ? action->timeout_ms : 10000U;
 
     if (!request || !api_bridge_raw_modem_line_is_valid(request->raw_line) || !payload || payload_len == 0U) {
@@ -376,13 +399,14 @@ static unified_action_response_t api_bridge_execute_modem_at(
     err = modem_a7670_command(request->raw_line, scratch->modem_response, sizeof(scratch->modem_response), timeout_ms);
     api_bridge_escape_json(request->raw_line, scratch->escaped_line, sizeof(scratch->escaped_line));
     api_bridge_escape_json(scratch->modem_response, scratch->escaped_response, sizeof(scratch->escaped_response));
-    if (snprintf(
+    written = snprintf(
             payload,
             payload_len,
             "{\"line\":\"%s\",\"response\":\"%s\"}",
             scratch->escaped_line,
             scratch->escaped_response
-        ) >= (int)payload_len) {
+        );
+    if (written < 0 || (size_t)written >= payload_len) {
         size_t preview_len = 0U;
 
         while (preview_len < API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN &&
@@ -404,13 +428,14 @@ static unified_action_response_t api_bridge_execute_modem_at(
             scratch->escaped_truncated_response,
             sizeof(scratch->escaped_truncated_response)
         );
-        if (snprintf(
+        written = snprintf(
                 payload,
                 payload_len,
                 "{\"line\":\"%s\",\"response\":\"%s\"}",
                 scratch->escaped_line,
                 scratch->escaped_truncated_response
-            ) >= (int)payload_len) {
+            );
+        if (written < 0 || (size_t)written >= payload_len) {
             payload[0] = '\0';
             response = api_bridge_build_response(
                 action,
@@ -453,7 +478,7 @@ static unified_action_response_t api_bridge_execute_storage_info(
     }
 
     storage_mgr_get_status(&storage);
-    if (snprintf(
+    if (api_bridge_format_payload(
             payload,
             payload_len,
             "{\"enabled\":%s,\"media_available\":%s,\"buffered_only\":%s,\"total_bytes\":%" PRIu64 ",\"used_bytes\":%" PRIu64 ",\"free_bytes\":%" PRIu64 ",\"record_count\":%" PRIu32 ",\"dropped_count\":%" PRIu32 ",\"persist_failures\":%" PRIu32 ",\"mount_failures\":%" PRIu32 ",\"sd_write_failures\":%" PRIu32 ",\"sd_flush_count\":%" PRIu32 ",\"runtime\":{\"initialized\":%s,\"running\":%s,\"last_error\":%d,\"state\":%d}}",
@@ -473,8 +498,7 @@ static unified_action_response_t api_bridge_execute_storage_info(
             storage.runtime.running ? "true" : "false",
             (int)storage.runtime.last_error,
             (int)storage.runtime.state
-        ) >= (int)payload_len) {
-        payload[0] = '\0';
+        ) != ESP_OK) {
         return api_bridge_build_response(
             action,
             UNIFIED_ACTION_RESULT_FAILED,
@@ -530,7 +554,7 @@ static esp_err_t api_bridge_write_gpio_payload(
             (unsigned)API_BRIDGE_GPIO_DIAGNOSTIC_PIN
         );
 
-    if (written >= (int)payload_len) {
+    if (written < 0 || (size_t)written >= payload_len) {
         payload[0] = '\0';
         return ESP_ERR_INVALID_SIZE;
     }
@@ -683,6 +707,7 @@ static unified_action_response_t api_bridge_execute_gpio_pulse(
         : ((request && request->interval_ms > 0U) ? request->interval_ms : API_BRIDGE_GPIO_PULSE_DEFAULT_MS);
     esp_err_t err = ESP_OK;
     int final_level = 0;
+    int written = 0;
 
     if (!api_bridge_gpio_pin_is_allowed(pin) || !GPIO_IS_VALID_OUTPUT_GPIO(gpio)) {
         return api_bridge_build_response(
@@ -724,7 +749,7 @@ static unified_action_response_t api_bridge_execute_gpio_pulse(
     }
 
     final_level = gpio_get_level(gpio);
-    if (snprintf(
+    written = snprintf(
             payload,
             payload_len,
             "{\"pin\":%u,\"pulse_ms\":%" PRIu32 ",\"active_value\":%s,\"final_level\":%d,\"allowed_pins\":[%u]}",
@@ -733,7 +758,8 @@ static unified_action_response_t api_bridge_execute_gpio_pulse(
             value ? "true" : "false",
             final_level,
             (unsigned)API_BRIDGE_GPIO_DIAGNOSTIC_PIN
-        ) >= (int)payload_len) {
+        );
+    if (written < 0 || (size_t)written >= payload_len) {
         payload[0] = '\0';
         return api_bridge_build_response(
             action,
@@ -807,8 +833,11 @@ static unified_action_response_t api_bridge_execute_file_delete(
     esp_err_t err = storage_mgr_delete_file(request ? request->path : NULL);
 
     if (err == ESP_OK && payload && payload_len > 0U) {
+        int written = 0;
+
         api_bridge_escape_json(request ? request->path : "", escaped_path, sizeof(escaped_path));
-        if (snprintf(payload, payload_len, "{\"path\":\"%s\",\"deleted\":true}", escaped_path) >= (int)payload_len) {
+        written = snprintf(payload, payload_len, "{\"path\":\"%s\",\"deleted\":true}", escaped_path);
+        if (written < 0 || (size_t)written >= payload_len) {
             payload[0] = '\0';
             err = ESP_ERR_INVALID_SIZE;
         }
@@ -836,13 +865,13 @@ static unified_action_response_t api_bridge_execute_placeholder_lane(
     if (payload && payload_len > 0U) {
         api_bridge_escape_json(lane, escaped_lane, sizeof(escaped_lane));
         api_bridge_escape_json(detail, escaped_detail, sizeof(escaped_detail));
-        if (snprintf(
+        if (api_bridge_format_payload(
                 payload,
                 payload_len,
                 "{\"lane\":\"%s\",\"implemented\":false,\"message\":\"%s\"}",
                 escaped_lane,
                 escaped_detail
-            ) >= (int)payload_len) {
+            ) != ESP_OK) {
             payload[0] = '\0';
         }
     }
@@ -906,15 +935,14 @@ static unified_action_response_t api_bridge_execute_config_set(
 
     api_bridge_escape_json(request->key, escaped_key, sizeof(escaped_key));
     api_bridge_escape_json(sensitive ? "<redacted>" : request->value, escaped_value, sizeof(escaped_value));
-    if (snprintf(
+    if (api_bridge_format_payload(
             payload,
             payload_len,
             "{\"key\":\"%s\",\"value\":\"%s\",\"restart_required\":%s}",
             escaped_key,
             escaped_value,
             restart_required ? "true" : "false"
-        ) >= (int)payload_len) {
-        payload[0] = '\0';
+        ) != ESP_OK) {
         return api_bridge_build_response(action, UNIFIED_ACTION_RESULT_FAILED, ESP_ERR_INVALID_SIZE, UNIFIED_FEATURE_REASON_NONE, "config_payload_failed");
     }
 
@@ -1063,7 +1091,7 @@ static unified_action_response_t api_bridge_execute_wifi_reconnect(
     }
 
     api_bridge_escape_json(wifi.ssid, escaped_ssid, sizeof(escaped_ssid));
-    if (snprintf(
+    if (api_bridge_format_payload(
             payload,
             payload_len,
             "{\"ssid\":\"%s\",\"configured\":%s,\"started\":%s,\"connected\":%s}",
@@ -1125,7 +1153,7 @@ static unified_action_response_t api_bridge_execute_wifi_connect(
 
     wifi_mgr_get_status(&wifi);
     api_bridge_escape_json(wifi.ssid[0] != '\0' ? wifi.ssid : request->ssid, escaped_ssid, sizeof(escaped_ssid));
-    if (snprintf(
+    if (api_bridge_format_payload(
             payload,
             payload_len,
             "{\"ssid\":\"%s\",\"password_set\":%s,\"configured\":%s,\"started\":%s,\"connected\":%s}",
@@ -1134,8 +1162,7 @@ static unified_action_response_t api_bridge_execute_wifi_connect(
             wifi.configured ? "true" : "false",
             wifi.started ? "true" : "false",
             wifi.connected ? "true" : "false"
-        ) >= (int)payload_len) {
-        payload[0] = '\0';
+        ) != ESP_OK) {
         return api_bridge_build_response(
             action,
             UNIFIED_ACTION_RESULT_FAILED,
@@ -1211,7 +1238,7 @@ static unified_action_response_t api_bridge_execute_wifi_toggle(
 
     wifi_mgr_get_status(&wifi);
     api_bridge_escape_json(wifi.ssid, escaped_ssid, sizeof(escaped_ssid));
-    if (snprintf(
+    if (api_bridge_format_payload(
             payload,
             payload_len,
             "{\"ssid\":\"%s\",\"configured\":%s,\"started\":%s,\"connected\":%s,\"reconnect_suppressed\":%s}",
@@ -1220,8 +1247,7 @@ static unified_action_response_t api_bridge_execute_wifi_toggle(
             wifi.started ? "true" : "false",
             wifi.connected ? "true" : "false",
             wifi.reconnect_suppressed ? "true" : "false"
-        ) >= (int)payload_len) {
-        payload[0] = '\0';
+        ) != ESP_OK) {
         return api_bridge_build_response(
             action,
             UNIFIED_ACTION_RESULT_FAILED,
@@ -1282,7 +1308,7 @@ static unified_action_response_t api_bridge_execute_wifi_disconnect(
     }
 
     api_bridge_escape_json(wifi.ssid, escaped_ssid, sizeof(escaped_ssid));
-    if (snprintf(
+    if (api_bridge_format_payload(
             payload,
             payload_len,
             "{\"ssid\":\"%s\",\"configured\":%s,\"started\":%s,\"connected\":%s,\"reconnect_suppressed\":true}",
@@ -1290,8 +1316,7 @@ static unified_action_response_t api_bridge_execute_wifi_disconnect(
             wifi.configured ? "true" : "false",
             wifi.started ? "true" : "false",
             wifi.connected ? "true" : "false"
-        ) >= (int)payload_len) {
-        payload[0] = '\0';
+        ) != ESP_OK) {
         return api_bridge_build_response(
             action,
             UNIFIED_ACTION_RESULT_FAILED,
@@ -1372,7 +1397,7 @@ static unified_action_response_t api_bridge_execute_mobile_toggle(
     }
 
     modem_a7670_get_status(&modem);
-    if (snprintf(
+    if (api_bridge_format_payload(
             payload,
             payload_len,
             "{\"enabled\":%s,\"connected\":%s,\"ip_address\":\"%s\",\"network_registered\":%s}",
@@ -1380,8 +1405,7 @@ static unified_action_response_t api_bridge_execute_mobile_toggle(
             (modem.data_session_open || modem.ip_bearer_ready || modem.data_ip_address[0] != '\0') ? "true" : "false",
             modem.data_ip_address,
             modem.network_registered ? "true" : "false"
-        ) >= (int)payload_len) {
-        payload[0] = '\0';
+        ) != ESP_OK) {
         return api_bridge_build_response(
             action,
             UNIFIED_ACTION_RESULT_FAILED,
@@ -1503,12 +1527,12 @@ static unified_action_response_t api_bridge_execute_wifi_scan(
         goto done;
     }
 
-    used = (size_t)snprintf(
+    int header_written = snprintf(
         payload,
         payload_len,
         "{\"networks\":["
     );
-    if (used >= payload_len) {
+    if (header_written < 0 || (size_t)header_written >= payload_len) {
         payload[0] = '\0';
         response = api_bridge_build_response(
             action,
@@ -1519,6 +1543,7 @@ static unified_action_response_t api_bridge_execute_wifi_scan(
         );
         goto done;
     }
+    used = (size_t)header_written;
 
     for (size_t index = 0U; index < result_count; ++index) {
         int written = 0;
@@ -1559,7 +1584,7 @@ static unified_action_response_t api_bridge_execute_wifi_scan(
         used += (size_t)written;
     }
 
-    if (snprintf(
+    if (api_bridge_format_payload(
             payload + used,
             payload_len - used,
             "],\"report\":{\"total_visible\":%u,\"elapsed_ms\":%" PRIu32 ",\"mode\":\"%s\",\"channel\":%u}}",
@@ -1567,8 +1592,7 @@ static unified_action_response_t api_bridge_execute_wifi_scan(
             scratch->report.elapsed_ms,
             wifi_mgr_scan_mode_name(scratch->report.mode),
             (unsigned int)scratch->report.channel
-        ) >= (int)(payload_len - used)) {
-        payload[0] = '\0';
+        ) != ESP_OK) {
         response = api_bridge_build_response(
             action,
             UNIFIED_ACTION_RESULT_FAILED,
@@ -1651,7 +1675,7 @@ static unified_action_response_t api_bridge_execute_mobile_apn(
     config_mgr_get_modem_apn(modem_apn, sizeof(modem_apn));
     api_bridge_escape_json(modem_apn, escaped_apn, sizeof(escaped_apn));
     api_bridge_escape_json(request->auth[0] != '\0' ? request->auth : "none", escaped_auth, sizeof(escaped_auth));
-    if (snprintf(
+    if (api_bridge_format_payload(
             payload,
             payload_len,
             "{\"apn\":\"%s\",\"username\":\"\",\"password_set\":false,\"auth\":\"%s\",\"reopen_session\":%s,\"restart_required\":%s}",
@@ -1659,8 +1683,7 @@ static unified_action_response_t api_bridge_execute_mobile_apn(
             escaped_auth,
             reopen_session ? "true" : "false",
             restart_required ? "true" : "false"
-        ) >= (int)payload_len) {
-        payload[0] = '\0';
+        ) != ESP_OK) {
         return api_bridge_build_response(
             action,
             UNIFIED_ACTION_RESULT_FAILED,
@@ -1705,13 +1728,21 @@ static unified_action_response_t api_bridge_execute_send_ussd(
     api_bridge_escape_json(request->code, escaped_code, sizeof(escaped_code));
     api_bridge_escape_json(response, escaped_response, sizeof(escaped_response));
     if (payload && payload_len > 0U) {
-        (void)snprintf(
+        if (api_bridge_format_payload(
             payload,
             payload_len,
             "{\"code\":\"%s\",\"response\":\"%s\"}",
             escaped_code,
             escaped_response
-        );
+        ) != ESP_OK) {
+            return api_bridge_build_response(
+                action,
+                UNIFIED_ACTION_RESULT_FAILED,
+                ESP_ERR_INVALID_SIZE,
+                UNIFIED_FEATURE_REASON_NONE,
+                "ussd_payload_failed"
+            );
+        }
     }
 
     if (err != ESP_OK) {
@@ -1781,14 +1812,13 @@ static unified_action_response_t api_bridge_execute_dial_number(
     if (payload && payload_len > 0U) {
         api_bridge_escape_json(request->number, escaped_number, sizeof(escaped_number));
         api_bridge_escape_json(response, escaped_response, sizeof(escaped_response));
-        if (snprintf(
+        if (api_bridge_format_payload(
                 payload,
                 payload_len,
                 "{\"number\":\"%s\",\"response\":\"%s\"}",
                 escaped_number,
                 escaped_response
-            ) >= (int)payload_len) {
-            payload[0] = '\0';
+            ) != ESP_OK) {
             return api_bridge_build_response(
                 action,
                 UNIFIED_ACTION_RESULT_FAILED,
@@ -1885,14 +1915,13 @@ static unified_action_response_t api_bridge_execute_routing_configure(
         failover = request->failover;
     }
 
-    if (snprintf(
+    if (api_bridge_format_payload(
             payload,
             payload_len,
             "{\"failover\":%s,\"load_balancing\":false,\"nat\":false,\"firewall\":false,\"restart_required\":%s}",
             failover ? "true" : "false",
             restart_required ? "true" : "false"
-        ) >= (int)payload_len) {
-        payload[0] = '\0';
+        ) != ESP_OK) {
         return api_bridge_build_response(
             action,
             UNIFIED_ACTION_RESULT_FAILED,
@@ -1985,12 +2014,12 @@ static unified_action_response_t api_bridge_execute_ota_update(
     err = esp_https_ota(&ota_config);
     if (payload && payload_len > 0U) {
         api_bridge_escape_json(request->url, escaped_url, sizeof(escaped_url));
-        if (snprintf(
+        if (api_bridge_format_payload(
                 payload,
                 payload_len,
                 "{\"url\":\"%s\",\"restart\":%s}",
                 escaped_url,
-                err == ESP_OK ? "true" : "false") >= (int)payload_len) {
+                err == ESP_OK ? "true" : "false") != ESP_OK) {
             payload[0] = '\0';
         }
     }
