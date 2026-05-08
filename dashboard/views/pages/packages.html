@@ -24,9 +24,6 @@
             </div>
             <div class="card-body">
                 <div id="packagePlanList" class="d-grid gap-3"></div>
-                <div class="alert alert-info py-2 small mt-3 mb-0" id="packagePaymentHint">
-                    Loading payment gateway...
-                </div>
                 <div class="d-flex gap-2 mt-3">
                     <button class="btn btn-success" type="button" onclick="savePackagePlans()">
                         <i class="bi bi-check-lg me-2"></i>Save Plans
@@ -75,16 +72,6 @@ function escapeHtml(value) {
 function packageCurrency(value) {
     const amount = Number(value || 0);
     return `৳${amount.toLocaleString()}`;
-}
-
-function renderPackagePaymentHint(payment) {
-    const hint = document.getElementById('packagePaymentHint');
-    if (!hint) return;
-    if (!payment) {
-        hint.innerHTML = 'No payment gateway configured yet.';
-        return;
-    }
-    hint.innerHTML = `Primary gateway: <strong>${escapeHtml(payment.method || 'Payment')}</strong> <strong>${escapeHtml(payment.number || '')}</strong>.`;
 }
 
 function renderPackagePlanList() {
@@ -188,7 +175,6 @@ async function savePackagePlans() {
         }
         packageOffers = payload.offers || [];
         renderPackagePlanList();
-        renderPackagePaymentHint(payload.payment || null);
         if (window.showToast) window.showToast('Package plans saved', 'success');
     } catch (error) {
         if (window.showToast) window.showToast(error.message || 'Failed to save package plans', 'danger');
@@ -276,7 +262,6 @@ async function loadPackagesAdmin() {
 
         packageOffers = offerPayload.offers || [];
         renderPackagePlanList();
-        renderPackagePaymentHint(offerPayload.payment || null);
         renderPackageRequests(requestPayload.requests || []);
     } catch (error) {
         const requests = document.getElementById('packageRequestList');

@@ -106,7 +106,7 @@
         <div class="hero-panel mb-4">
             <span class="hero-eyebrow"><i class="bi bi-broadcast-pin"></i> Multi-device SMS, Android Bridge, ESP32</span>
             <h1 class="hero-title">Sell managed device connectivity with per-device plans and dashboard control.</h1>
-            <p class="hero-copy mb-4">Use one dashboard for device setup, SMS workflows, queue control, and package approvals. Device users can register, request a plan, pay by bKash, and wait for admin approval before higher limits apply.</p>
+            <p class="hero-copy mb-4">Use one dashboard for device setup, SMS workflows, queue control, and package approvals. Device users can register, request a plan, pay through the active gateway, and wait for admin approval before higher limits apply.</p>
             <div class="d-flex flex-wrap gap-2">
                 <a class="btn btn-success btn-lg" href="/auth/signup"><i class="bi bi-person-plus me-2"></i>Create Account</a>
                 <a class="btn btn-outline-secondary btn-lg" href="/auth/login"><i class="bi bi-box-arrow-in-right me-2"></i>Open Dashboard</a>
@@ -122,7 +122,7 @@
                                 <div class="text-uppercase text-muted small fw-semibold"><%= offer.code %></div>
                                 <h3 class="h4 mb-0"><%= offer.name %></h3>
                             </div>
-                            <span class="badge bg-warning text-dark"><%= payment?.method || 'Payment' %></span>
+                            <span class="badge bg-warning text-dark">Package</span>
                         </div>
                         <div class="plan-price">৳<%= Number(offer.price_bdt || 0).toLocaleString() %></div>
                         <div class="plan-limit mt-3">SMS / day: <strong><%= Number(offer.limits?.sms_per_day || 0).toLocaleString() %></strong></div>
@@ -144,8 +144,16 @@
             <div class="col-12 col-lg-4">
                 <div class="info-card">
                     <h4 class="h5">Payment</h4>
-                    <p class="text-muted mb-1">Pay via <strong><%= payment?.method || 'bKash' %></strong>:</p>
-                    <div class="fw-semibold"><%= payment?.number || '01628301525' %></div>
+                    <% if ((payment_gateways || []).length) { %>
+                        <% payment_gateways.forEach(function(gateway) { %>
+                            <div class="mb-2">
+                                <div class="fw-semibold"><%= gateway.name || 'Payment' %></div>
+                                <div class="text-muted small"><%= gateway.account_number || 'Account not configured' %></div>
+                            </div>
+                        <% }); %>
+                    <% } else { %>
+                        <p class="text-muted mb-0">No payment gateway is active yet.</p>
+                    <% } %>
                 </div>
             </div>
             <div class="col-12 col-lg-4">

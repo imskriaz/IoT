@@ -3,10 +3,6 @@
 const logger = require('../utils/logger');
 
 const PACKAGE_SETTINGS_KEY = 'device_package_offers';
-const DEFAULT_PACKAGE_PAYMENT = Object.freeze({
-    method: 'bKash',
-    number: '01628301525'
-});
 
 const DEFAULT_PACKAGE_OFFERS = Object.freeze([
     {
@@ -148,14 +144,6 @@ function getPackageOffer(offers, packageCode) {
     return (Array.isArray(offers) ? offers : []).find((offer) => offer.code === normalized) || null;
 }
 
-function buildPaymentInstructions() {
-    return {
-        method: DEFAULT_PACKAGE_PAYMENT.method,
-        number: DEFAULT_PACKAGE_PAYMENT.number,
-        message: `Send the package price to ${DEFAULT_PACKAGE_PAYMENT.number} via bKash, then wait for admin approval.`
-    };
-}
-
 function buildCurrentPackage(row) {
     const code = String(row?.current_package_code || '').trim();
     if (!code) return null;
@@ -180,8 +168,8 @@ function buildPackageRequest(row) {
         package_code: row.package_code,
         package_name: row.package_name,
         price_bdt: Number(row.price_bdt || 0),
-        payment_method: row.payment_method || DEFAULT_PACKAGE_PAYMENT.method,
-        payment_number: row.payment_number || DEFAULT_PACKAGE_PAYMENT.number,
+        payment_method: row.payment_method || '',
+        payment_number: row.payment_number || '',
         payment_reference: row.payment_reference || '',
         notes: row.notes || '',
         status: row.status || 'pending',
@@ -345,7 +333,6 @@ async function assertSmsWithinPackageLimit(db, deviceId, requestedCount = 1, now
 
 module.exports = {
     PACKAGE_SETTINGS_KEY,
-    DEFAULT_PACKAGE_PAYMENT,
     DEFAULT_PACKAGE_OFFERS,
     parseJsonObject,
     normalizeOfferList,
@@ -354,7 +341,6 @@ module.exports = {
     loadPackageOffers,
     savePackageOffers,
     getPackageOffer,
-    buildPaymentInstructions,
     buildCurrentPackage,
     buildPackageRequest,
     loadDevicePackageSnapshot,

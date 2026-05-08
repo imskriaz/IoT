@@ -402,12 +402,12 @@ router.get('/api/users', requireAdmin, async (req, res) => {
 router.get('/api/gateway', requireAdmin, async (req, res) => {
     try {
         const gateways = await paymentGatewayService.loadPaymentGateways(req.app.locals.db);
-        const primary = paymentGatewayService.getPrimaryGateway(gateways);
+        const activeGateways = paymentGatewayService.listActiveGateways(gateways);
         res.json({
             success: true,
             gateways: gateways.map(paymentGatewayService.serializeGateway),
-            primary_gateway_code: primary?.code || '',
-            payment: paymentGatewayService.buildPaymentInstructions(primary)
+            active_gateway_codes: activeGateways.map((gateway) => gateway.code),
+            active_gateways: activeGateways
         });
     } catch (error) {
         logger.error('GET /admin/api/gateway error:', error);
@@ -416,7 +416,7 @@ router.get('/api/gateway', requireAdmin, async (req, res) => {
 });
 
 router.put('/api/gateway', requireAdmin, [
-    body('gateways').isArray({ min: 1 }).withMessage('At least one payment gateway is required')
+    body('gateways').isArray().withMessage('Gateway list must be an array')
 ], async (req, res) => {
     try {
         const errors = validationResult(req);
@@ -429,12 +429,12 @@ router.put('/api/gateway', requireAdmin, [
             req.body.gateways,
             req.session?.user?.id || req.user?.id || null
         );
-        const primary = paymentGatewayService.getPrimaryGateway(gateways);
+        const activeGateways = paymentGatewayService.listActiveGateways(gateways);
         res.json({
             success: true,
             gateways: gateways.map(paymentGatewayService.serializeGateway),
-            primary_gateway_code: primary?.code || '',
-            payment: paymentGatewayService.buildPaymentInstructions(primary)
+            active_gateway_codes: activeGateways.map((gateway) => gateway.code),
+            active_gateways: activeGateways
         });
     } catch (error) {
         logger.error('PUT /admin/api/gateway error:', error);

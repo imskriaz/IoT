@@ -3351,13 +3351,29 @@ describe('Gateway admin routes', () => {
         jest.resetModules();
     });
 
-    test('GET /admin/api/gateway returns configured gateways and primary payment instructions', async () => {
+    test('GET /admin/api/gateway does not prefill unsaved gateways', async () => {
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue(null)
+        });
+        const router = require('../routes/users');
+        const app = buildApp(router, '/admin', { id: 1, role: 'admin', username: 'admin' }, db);
+
+        const res = await request(app).get('/admin/api/gateway');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.gateways).toEqual([]);
+        expect(res.body.active_gateway_codes).toEqual([]);
+        expect(res.body.active_gateways).toEqual([]);
+        expect(res.body).not.toHaveProperty('payment');
+    });
+
+    test('GET /admin/api/gateway returns configured gateways and active gateway list', async () => {
         const configured = JSON.stringify([
             {
                 code: 'bkash',
                 name: 'bKash',
                 enabled: true,
-                primary: false,
                 account_number: '01628301525',
                 account_type: 'Personal',
                 instructions: 'Use bKash.'
@@ -3366,7 +3382,6 @@ describe('Gateway admin routes', () => {
                 code: 'nagad',
                 name: 'Nagad',
                 enabled: true,
-                primary: true,
                 account_number: '01700000000',
                 account_type: 'Merchant',
                 instructions: 'Use Nagad.'
@@ -3383,13 +3398,16 @@ describe('Gateway admin routes', () => {
         expect(res.status).toBe(200);
         expect(res.body.success).toBe(true);
         expect(res.body.gateways).toHaveLength(2);
-        expect(res.body.primary_gateway_code).toBe('nagad');
-        expect(res.body.payment).toEqual(expect.objectContaining({
-            code: 'nagad',
-            method: 'Nagad',
-            number: '01700000000',
-            message: 'Use Nagad.'
+        expect(res.body.gateways[0]).not.toHaveProperty('primary');
+        expect(res.body.active_gateway_codes).toEqual(['bkash', 'nagad']);
+        expect(res.body.active_gateways).toHaveLength(2);
+        expect(res.body.active_gateways[0]).toEqual(expect.objectContaining({
+            code: 'bkash',
+            name: 'bKash',
+            account_number: '01628301525',
+            instructions: 'Use bKash.'
         }));
+        expect(res.body).not.toHaveProperty('payment');
     });
 
     test('PUT /admin/api/gateway normalizes and saves gateways', async () => {
@@ -3407,7 +3425,6 @@ describe('Gateway admin routes', () => {
                         code: '  bkash  ',
                         name: 'bKash',
                         enabled: true,
-                        primary: false,
                         account_number: '01628301525',
                         account_type: 'Personal',
                         instructions: 'Pay by bKash'
@@ -3416,7 +3433,6 @@ describe('Gateway admin routes', () => {
                         code: 'nagad',
                         name: 'Nagad',
                         enabled: true,
-                        primary: true,
                         account_number: '01700000000',
                         account_type: 'Merchant',
                         instructions: 'Pay by Nagad'
@@ -3426,15 +3442,37 @@ describe('Gateway admin routes', () => {
 
         expect(res.status).toBe(200);
         expect(res.body.success).toBe(true);
-        expect(res.body.primary_gateway_code).toBe('nagad');
-        expect(res.body.payment).toEqual(expect.objectContaining({
-            code: 'nagad',
-            method: 'Nagad',
-            number: '01700000000'
+        expect(res.body.active_gateway_codes).toEqual(['bkash', 'nagad']);
+        expect(res.body.gateways[0]).not.toHaveProperty('primary');
+        expect(res.body.active_gateways[0]).toEqual(expect.objectContaining({
+            code: 'bkash',
+            name: 'bKash',
+            account_number: '01628301525'
         }));
+        expect(res.body).not.toHaveProperty('payment');
         expect(db.run).toHaveBeenCalled();
         expect(db.run.mock.calls[0][1][0]).toBe('payment_gateways');
         expect(db.run.mock.calls[0][1][3]).toBe(2);
+    });
+
+    test('PUT /admin/api/gateway allows clearing all gateways', async () => {
+        const db = makeDbMock({
+            run: jest.fn().mockResolvedValue({ changes: 1 })
+        });
+        const router = require('../routes/users');
+        const app = buildApp(router, '/admin', { id: 2, role: 'admin', username: 'admin' }, db);
+
+        const res = await request(app)
+            .put('/admin/api/gateway')
+            .send({ gateways: [] });
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.gateways).toEqual([]);
+        expect(res.body.active_gateway_codes).toEqual([]);
+        expect(res.body.active_gateways).toEqual([]);
+        expect(res.body).not.toHaveProperty('payment');
+        expect(db.run.mock.calls[0][1][1]).toBe('[]');
     });
 });
 

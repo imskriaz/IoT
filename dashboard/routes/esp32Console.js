@@ -209,6 +209,474 @@ const COMMAND_PRESETS = [
 ];
 
 const KNOWN_CONSOLE_COMMANDS = new Set(COMMAND_PRESETS.map((preset) => preset.command));
+function chainWithPrelude(title, steps) {
+    return [`# ${title}`, 'AT', 'wait 500', ...steps];
+}
+
+function ftpsSessionChain(...steps) {
+    return chainWithPrelude('FTPS session', [
+        'AT+CFTPSSTART',
+        'wait 1500',
+        'AT+CFTPSLOGIN="server",21,"username","password",0',
+        'wait 1500',
+        ...steps
+    ]);
+}
+
+function mqttSessionChain(...steps) {
+    return chainWithPrelude('MQTT session', [
+        'AT+CMQTTSTART',
+        'wait 1500',
+        'AT+CMQTTACCQ=0,"client-test",0',
+        'wait 800',
+        'AT+CMQTTCONNECT=0,"tcp://test.mosquitto.org:1883",60,1',
+        'wait 1500',
+        ...steps
+    ]);
+}
+
+function httpSessionChain(...steps) {
+    return chainWithPrelude('HTTP session', [
+        'AT+HTTPINIT',
+        'wait 1500',
+        'AT+HTTPPARA="CID",1',
+        'AT+HTTPPARA="URL","http://httpbin.org/get"',
+        ...steps
+    ]);
+}
+
+const VENDOR_WORKFLOW_HINTS = {
+    'AT+CFTPSSTART': {
+        workflowSummary: 'Start the FTP(S) service and activate PDP if needed.',
+        workflowChain: chainWithPrelude('FTPS start', ['AT+CFTPSSTART'])
+    },
+    'AT+CFTPSLOGIN': {
+        sessionRequired: true,
+        workflowSummary: 'Start FTP(S) service, then log in to the FTP or FTPS server.',
+        workflowChain: chainWithPrelude('FTPS login', [
+            'AT+CFTPSSTART',
+            'wait 1500',
+            'AT+CFTPSLOGIN="server",21,"username","password",0'
+        ])
+    },
+    'AT+CFTPSCWD': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active FTP(S) session. Use bare form to return to "/", or pass a directory name to change into it.',
+        workflowChain: ftpsSessionChain(
+            'AT+CFTPSPWD',
+            'AT+CFTPSCWD="TEST1129"',
+            '# Optional: use bare AT+CFTPSCWD to return to "/"'
+        )
+    },
+    'AT+CFTPSLIST': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active FTP(S) session before listing server directories.',
+        workflowChain: ftpsSessionChain('AT+CFTPSLIST="/"')
+    },
+    'AT+CFTPSPWD': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active FTP(S) session before reading the current server directory.',
+        workflowChain: ftpsSessionChain('AT+CFTPSPWD')
+    },
+    'AT+CFTPSGET': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active FTP(S) session and a remote file path. Downloads the file to the serial stream.',
+        workflowChain: ftpsSessionChain(
+            'AT+CFTPSLIST="/"',
+            'AT+CFTPSGET="test.txt"'
+        )
+    },
+    'AT+CFTPSGETFILE': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active FTP(S) session and a remote file path. Downloads the file to module storage.',
+        workflowChain: ftpsSessionChain('AT+CFTPSGETFILE="test.txt"')
+    },
+    'AT+CFTPSLOGI': {
+        sessionRequired: true,
+        workflowSummary: 'Vendor short-form login command. Start FTP(S) service, then log in to the FTP or FTPS server.',
+        workflowChain: chainWithPrelude('FTPS login', [
+            'AT+CFTPSSTART',
+            'wait 1500',
+            'AT+CFTPSLOGI="server",21,"username","password",0'
+        ])
+    },
+    'AT+CFTPSDELE': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active FTP(S) session before deleting a remote file.',
+        workflowChain: ftpsSessionChain('AT+CFTPSDELE="old.txt"')
+    },
+    'AT+CFTPSMKD': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active FTP(S) session before creating a remote directory.',
+        workflowChain: ftpsSessionChain('AT+CFTPSMKD="TEST1129"')
+    },
+    'AT+CFTPSRMD': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active FTP(S) session before removing a remote directory.',
+        workflowChain: ftpsSessionChain('AT+CFTPSRMD="TEST1129"')
+    },
+    'AT+CFTPSSIZE': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active FTP(S) session before querying the size of a remote file.',
+        workflowChain: ftpsSessionChain('AT+CFTPSSIZE="test.txt"')
+    },
+    'AT+CFTPSPUT': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active FTP(S) session, a remote target name, and interactive upload data at the modem prompt.',
+        workflowChain: ftpsSessionChain(
+            'AT+CFTPSPUT="upload.txt",11',
+            '# Then type hello world at the modem prompt'
+        )
+    },
+    'AT+CFTPSPUTFILE': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active FTP(S) session and a local module file path before uploading to the FTP(S) server.',
+        workflowChain: ftpsSessionChain('AT+CFTPSPUTFILE="/customer/upload.txt","upload.txt"')
+    },
+    'AT+CFTPSMODE': {
+        sessionRequired: true,
+        workflowSummary: 'Set FTP(S) transfer mode before file operations when the server requires active or passive changes.',
+        workflowChain: ftpsSessionChain('AT+CFTPSMODE=1')
+    },
+    'AT+CFTPSTYPE': {
+        sessionRequired: true,
+        workflowSummary: 'Set the FTP(S) transfer type before upload or download operations when ASCII/Binary handling matters.',
+        workflowChain: ftpsSessionChain('AT+CFTPSTYPE=0')
+    },
+    'AT+CFTPSSLCFG': {
+        sessionRequired: true,
+        workflowSummary: 'Bind the SSL context used by the FTP(S) session before login when the server requires TLS settings.',
+        workflowChain: chainWithPrelude('FTPS SSL config', [
+            'AT+CSSLCFG="sslversion",0,4',
+            'AT+CFTPSSLCFG=0',
+            'AT+CFTPSSTART',
+            'wait 1500',
+            'AT+CFTPSLOGIN="server",21,"username","password",0'
+        ])
+    },
+    'AT+CFTPSSINGLEIP': {
+        sessionRequired: true,
+        workflowSummary: 'Configure single-IP handling before login when the server or NAT path requires it.',
+        workflowChain: chainWithPrelude('FTPS single IP mode', [
+            'AT+CFTPSSINGLEIP=1',
+            'AT+CFTPSSTART',
+            'wait 1500',
+            'AT+CFTPSLOGIN="server",21,"username","password",0'
+        ])
+    },
+    'AT+CFTPSLOGOUT': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active FTP(S) session before logging out cleanly.',
+        workflowChain: ftpsSessionChain('AT+CFTPSLOGOUT')
+    },
+    'AT+CFTPSSTOP': {
+        sessionRequired: true,
+        workflowSummary: 'Stop the FTP(S) service after logout or when you want to tear down the session cleanly.',
+        workflowChain: ftpsSessionChain(
+            'AT+CFTPSLOGOUT',
+            'wait 800',
+            'AT+CFTPSSTOP'
+        )
+    },
+    'AT+CFTPSTART': {
+        workflowSummary: 'Vendor alias/start form for FTP service activation before FTP(S) session commands.',
+        workflowChain: chainWithPrelude('FTP start', ['AT+CFTPSTART'])
+    },
+    'AT+CMQTTSTART': {
+        workflowSummary: 'Start the MQTT(S) service and activate PDP if needed.',
+        workflowChain: chainWithPrelude('MQTT service start', ['AT+CMQTTSTART'])
+    },
+    'AT+CMQTTACCQ': {
+        sessionRequired: true,
+        workflowSummary: 'Requires MQTT(S) service first, then acquires a client context for connect, publish, or subscribe operations.',
+        workflowChain: chainWithPrelude('MQTT acquire client', [
+            'AT+CMQTTSTART',
+            'wait 1500',
+            'AT+CMQTTACCQ=0,"client-test",0'
+        ])
+    },
+    'AT+CMQTTCONNECT': {
+        sessionRequired: true,
+        workflowSummary: 'Requires MQTT(S) service and an acquired client before connecting to the broker.',
+        workflowChain: chainWithPrelude('MQTT connect', [
+            'AT+CMQTTSTART',
+            'wait 1500',
+            'AT+CMQTTACCQ=0,"client-test",0',
+            'wait 800',
+            'AT+CMQTTCONNECT=0,"tcp://test.mosquitto.org:1883",60,1'
+        ])
+    },
+    'AT+CMQTTPUB': {
+        sessionRequired: true,
+        workflowSummary: 'Requires MQTT(S) service, client acquisition, broker connection, publish topic, and payload before publishing.',
+        workflowChain: [
+            '# MQTT publish',
+            'AT',
+            'wait 500',
+            'AT+CMQTTSTART',
+            'wait 1500',
+            'AT+CMQTTACCQ=0,"client-test",0',
+            'wait 800',
+            'AT+CMQTTCONNECT=0,"tcp://test.mosquitto.org:1883",60,1',
+            'wait 1500',
+            'AT+CMQTTTOPIC=0,9',
+            '# Then type topic/test at the modem prompt',
+            'AT+CMQTTPAYLOAD=0,11',
+            '# Then type hello world at the modem prompt',
+            'AT+CMQTTPUB=0,1,60'
+        ]
+    },
+    'AT+CMQTTTOPIC': {
+        sessionRequired: true,
+        workflowSummary: 'Requires MQTT(S) service, client acquisition, and broker connection before entering the publish topic at the modem prompt.',
+        workflowChain: [
+            '# MQTT publish topic',
+            'AT',
+            'wait 500',
+            'AT+CMQTTSTART',
+            'wait 1500',
+            'AT+CMQTTACCQ=0,"client-test",0',
+            'wait 800',
+            'AT+CMQTTCONNECT=0,"tcp://test.mosquitto.org:1883",60,1',
+            'wait 1500',
+            'AT+CMQTTTOPIC=0,9',
+            '# Then type topic/test at the modem prompt'
+        ]
+    },
+    'AT+CMQTTPAYLOAD': {
+        sessionRequired: true,
+        workflowSummary: 'Requires MQTT(S) service, client acquisition, broker connection, and a prepared topic before entering the publish payload at the modem prompt.',
+        workflowChain: [
+            '# MQTT publish payload',
+            'AT',
+            'wait 500',
+            'AT+CMQTTSTART',
+            'wait 1500',
+            'AT+CMQTTACCQ=0,"client-test",0',
+            'wait 800',
+            'AT+CMQTTCONNECT=0,"tcp://test.mosquitto.org:1883",60,1',
+            'wait 1500',
+            'AT+CMQTTTOPIC=0,9',
+            '# Then type topic/test at the modem prompt',
+            'AT+CMQTTPAYLOAD=0,11',
+            '# Then type hello world at the modem prompt'
+        ]
+    },
+    'AT+CMQTTSUB': {
+        sessionRequired: true,
+        workflowSummary: 'Requires MQTT(S) service, client acquisition, broker connection, and a prepared subscribe topic before subscribing.',
+        workflowChain: [
+            '# MQTT subscribe',
+            'AT',
+            'wait 500',
+            'AT+CMQTTSTART',
+            'wait 1500',
+            'AT+CMQTTACCQ=0,"client-test",0',
+            'wait 800',
+            'AT+CMQTTCONNECT=0,"tcp://test.mosquitto.org:1883",60,1',
+            'wait 1500',
+            'AT+CMQTTSUBTOPIC=0,9,1',
+            '# Then type topic/test at the modem prompt',
+            'AT+CMQTTSUB=0,9,1'
+        ]
+    },
+    'AT+CMQTTSUBTOPIC': {
+        sessionRequired: true,
+        workflowSummary: 'Requires MQTT(S) service, client acquisition, and broker connection before entering the subscribe topic at the modem prompt.',
+        workflowChain: [
+            '# MQTT subscribe topic',
+            'AT',
+            'wait 500',
+            'AT+CMQTTSTART',
+            'wait 1500',
+            'AT+CMQTTACCQ=0,"client-test",0',
+            'wait 800',
+            'AT+CMQTTCONNECT=0,"tcp://test.mosquitto.org:1883",60,1',
+            'wait 1500',
+            'AT+CMQTTSUBTOPIC=0,9,1',
+            '# Then type topic/test at the modem prompt'
+        ]
+    },
+    'AT+CMQTTUNSUBTOPIC': {
+        sessionRequired: true,
+        workflowSummary: 'Requires MQTT(S) service, client acquisition, and broker connection before entering the unsubscribe topic at the modem prompt.',
+        workflowChain: mqttSessionChain(
+            'AT+CMQTTUNSUBTOPIC=0,9,1',
+            '# Then type topic/test at the modem prompt'
+        )
+    },
+    'AT+CMQTTUNSUB': {
+        sessionRequired: true,
+        workflowSummary: 'Requires MQTT(S) service, client acquisition, broker connection, and a prepared unsubscribe topic before unsubscribing.',
+        workflowChain: mqttSessionChain(
+            'AT+CMQTTUNSUBTOPIC=0,9,1',
+            '# Then type topic/test at the modem prompt',
+            'AT+CMQTTUNSUB=0,9,1'
+        )
+    },
+    'AT+CMQTTCFG': {
+        sessionRequired: true,
+        workflowSummary: 'Configure MQTT context after client acquisition and before broker connect, especially for protocol or timeout tuning.',
+        workflowChain: chainWithPrelude('MQTT config', [
+            'AT+CMQTTSTART',
+            'wait 1500',
+            'AT+CMQTTACCQ=0,"client-test",0',
+            'wait 800',
+            'AT+CMQTTCFG="checkUTF8",0,0'
+        ])
+    },
+    'AT+CMQTTSSLCFG': {
+        sessionRequired: true,
+        workflowSummary: 'Attach an SSL context to the MQTT client after acquisition and before broker connect for secure sessions.',
+        workflowChain: chainWithPrelude('MQTT SSL config', [
+            'AT+CSSLCFG="sslversion",0,4',
+            'AT+CMQTTSTART',
+            'wait 1500',
+            'AT+CMQTTACCQ=0,"client-test",1',
+            'wait 800',
+            'AT+CMQTTSSLCFG=0,0'
+        ])
+    },
+    'AT+CMQTTWILLTOPIC': {
+        sessionRequired: true,
+        workflowSummary: 'Set the MQTT will topic after client acquisition and before connect when the broker should publish a last-will message.',
+        workflowChain: chainWithPrelude('MQTT will topic', [
+            'AT+CMQTTSTART',
+            'wait 1500',
+            'AT+CMQTTACCQ=0,"client-test",0',
+            'wait 800',
+            'AT+CMQTTWILLTOPIC=0,10',
+            '# Then type will/topic at the modem prompt'
+        ])
+    },
+    'AT+CMQTTWILLMSG': {
+        sessionRequired: true,
+        workflowSummary: 'Set the MQTT will payload after the will topic and before connect when the broker should publish a last-will message.',
+        workflowChain: chainWithPrelude('MQTT will message', [
+            'AT+CMQTTSTART',
+            'wait 1500',
+            'AT+CMQTTACCQ=0,"client-test",0',
+            'wait 800',
+            'AT+CMQTTWILLTOPIC=0,10',
+            '# Then type will/topic at the modem prompt',
+            'AT+CMQTTWILLMSG=0,13,1',
+            '# Then type offline-state at the modem prompt'
+        ])
+    },
+    'AT+CMQTTDISC': {
+        sessionRequired: true,
+        workflowSummary: 'Requires an active MQTT broker connection before disconnecting the client cleanly.',
+        workflowChain: mqttSessionChain('AT+CMQTTDISC=0,60')
+    },
+    'AT+CMQTTREL': {
+        sessionRequired: true,
+        workflowSummary: 'Release the acquired MQTT client after disconnecting it from the broker.',
+        workflowChain: mqttSessionChain(
+            'AT+CMQTTDISC=0,60',
+            'wait 800',
+            'AT+CMQTTREL=0'
+        )
+    },
+    'AT+CMQTTSTOP': {
+        sessionRequired: true,
+        workflowSummary: 'Stop the MQTT(S) service after disconnecting and releasing the client.',
+        workflowChain: mqttSessionChain(
+            'AT+CMQTTDISC=0,60',
+            'wait 800',
+            'AT+CMQTTREL=0',
+            'wait 800',
+            'AT+CMQTTSTOP'
+        )
+    },
+    'AT+HTTPINIT': {
+        workflowSummary: 'Start the HTTP service and activate PDP if needed before setting request parameters.',
+        workflowChain: chainWithPrelude('HTTP init', ['AT+HTTPINIT'])
+    },
+    'AT+HTTPACTION': {
+        sessionRequired: true,
+        workflowSummary: 'Requires HTTP service and request parameters such as CID and URL before sending the HTTP method action.',
+        workflowChain: httpSessionChain('AT+HTTPACTION=0')
+    },
+    'AT+HTTPPARA': {
+        sessionRequired: true,
+        workflowSummary: 'Set HTTP request parameters such as CID, URL, headers, or content type after HTTP init and before HTTP action.',
+        workflowChain: chainWithPrelude('HTTP parameter setup', [
+            'AT+HTTPINIT',
+            'wait 1500',
+            'AT+HTTPPARA="CID",1',
+            'AT+HTTPPARA="URL","http://httpbin.org/get"'
+        ])
+    },
+    'AT+HTTPDATA': {
+        sessionRequired: true,
+        workflowSummary: 'Prepare POST body data after HTTP init and parameters, then type the payload at the modem prompt before HTTPACTION=1.',
+        workflowChain: httpSessionChain(
+            'AT+HTTPDATA=17,10000',
+            '# Then type {"hello":"world"} at the modem prompt'
+        )
+    },
+    'AT+HTTPPOSTFILE': {
+        sessionRequired: true,
+        workflowSummary: 'Post a local module file after HTTP init and parameters when the request body should come from storage.',
+        workflowChain: httpSessionChain('AT+HTTPPOSTFILE="/customer/upload.txt",10000')
+    },
+    'AT+HTTPREAD': {
+        sessionRequired: true,
+        workflowSummary: 'Read the HTTP response body after a completed HTTP action.',
+        workflowChain: httpSessionChain(
+            'AT+HTTPACTION=0',
+            'wait 3000',
+            'AT+HTTPREAD'
+        )
+    },
+    'AT+HTTPREADFILE': {
+        sessionRequired: true,
+        workflowSummary: 'Read the HTTP response body into a local file after a completed HTTP action.',
+        workflowChain: httpSessionChain(
+            'AT+HTTPACTION=0',
+            'wait 3000',
+            'AT+HTTPREADFILE="/customer/http.bin"'
+        )
+    },
+    'AT+HTTPHEAD': {
+        sessionRequired: true,
+        workflowSummary: 'Read response headers after a completed HTTP action when header inspection is needed.',
+        workflowChain: httpSessionChain(
+            'AT+HTTPACTION=0',
+            'wait 3000',
+            'AT+HTTPHEAD'
+        )
+    },
+    'AT+HTTPTERM': {
+        sessionRequired: true,
+        workflowSummary: 'Terminate the HTTP service after request handling is complete.',
+        workflowChain: httpSessionChain(
+            'AT+HTTPACTION=0',
+            'wait 3000',
+            'AT+HTTPTERM'
+        )
+    },
+    'AT+CSSLCFG': {
+        workflowSummary: 'Configure the shared SSL context before HTTPS, MQTTS, or FTPS commands that bind to a TLS profile.',
+        workflowChain: chainWithPrelude('SSL context config', [
+            'AT+CSSLCFG="sslversion",0,4',
+            'AT+CSSLCFG="authmode",0,1'
+        ])
+    },
+    'AT+NETOPEN': {
+        workflowSummary: 'Activates the PDP context and starts the socket service before socket connect or send commands.',
+        workflowChain: chainWithPrelude('TCPIP network open', ['AT+NETOPEN'])
+    },
+    'AT+CIPOPEN': {
+        sessionRequired: true,
+        workflowSummary: 'Requires PDP activation with AT+NETOPEN first, then opens the TCP or UDP socket.',
+        workflowChain: chainWithPrelude('TCP socket open', [
+            'AT+NETOPEN',
+            'wait 1500',
+            'AT+CIPOPEN=0,"TCP","117.131.85.139",5253'
+        ])
+    }
+};
 
 function readVendorManualLines(markdownFile) {
     if (!markdownFile) return [];
@@ -288,6 +756,7 @@ function vendorCommandAllowsBare(commandEntry) {
 }
 
 function enrichVendorCommand(commandEntry) {
+    const workflowHint = VENDOR_WORKFLOW_HINTS[String(commandEntry?.line || commandEntry?.command || '').trim().toUpperCase()] || null;
     const syntaxExamples = extractVendorCommandExamples(commandEntry);
     const allowsBare = vendorCommandAllowsBare(commandEntry);
     const requiresInput = syntaxExamples.some((example) => {
@@ -300,7 +769,10 @@ function enrichVendorCommand(commandEntry) {
         syntaxExamples,
         requiresInput,
         allowsBare,
-        requiresVariant
+        requiresVariant,
+        sessionRequired: Boolean(workflowHint?.sessionRequired),
+        workflowSummary: workflowHint?.workflowSummary || '',
+        workflowChain: Array.isArray(workflowHint?.workflowChain) ? workflowHint.workflowChain : []
     };
 }
 

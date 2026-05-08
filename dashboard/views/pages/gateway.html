@@ -13,45 +13,19 @@
     </div>
 </div>
 
-<div class="row g-4">
-    <div class="col-12 col-xl-8">
-        <div class="card">
-            <div class="card-header bg-body py-3 d-flex justify-content-between align-items-center">
-                <div>
-                    <h5 class="mb-1"><i class="bi bi-wallet2 me-2"></i>Gateway Catalog</h5>
-                    <div class="small text-muted">Enable one or more gateways and choose exactly one primary gateway for checkout instructions.</div>
-                </div>
-                <button class="btn btn-sm btn-outline-primary" type="button" onclick="addGatewayRow()">
-                    <i class="bi bi-plus-lg me-1"></i>Add Gateway
-                </button>
-            </div>
-            <div class="card-body">
-                <div id="gatewayList" class="d-grid gap-3">
-                    <div class="text-muted">Loading gateways...</div>
-                </div>
-            </div>
+<div class="card">
+    <div class="card-header bg-body py-3 d-flex justify-content-between align-items-center">
+        <div>
+            <h5 class="mb-1"><i class="bi bi-wallet2 me-2"></i>Gateway Catalog</h5>
+            <div class="small text-muted">Enable one or more gateways for package checkout instructions.</div>
         </div>
+        <button class="btn btn-sm btn-outline-primary" type="button" onclick="addGatewayRow()">
+            <i class="bi bi-plus-lg me-1"></i>Add Gateway
+        </button>
     </div>
-
-    <div class="col-12 col-xl-4">
-        <div class="card mb-4">
-            <div class="card-header bg-body py-3">
-                <h5 class="mb-0"><i class="bi bi-broadcast me-2"></i>Live Checkout Copy</h5>
-            </div>
-            <div class="card-body">
-                <div class="small text-muted mb-2">This is what package pages and the landing page will show right now.</div>
-                <div id="gatewayPreview" class="gateway-preview-card text-dark">Loading preview…</div>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="card-header bg-body py-3">
-                <h5 class="mb-0"><i class="bi bi-info-circle me-2"></i>Behavior</h5>
-            </div>
-            <div class="card-body small text-muted">
-                <p>Only the primary enabled gateway is shown as the default payment instruction for package applications.</p>
-                <p class="mb-0">You can still keep other gateways enabled as backups for later checkout flows.</p>
-            </div>
+    <div class="card-body">
+        <div id="gatewayList" class="d-grid gap-3">
+            <div class="text-muted">Loading gateways...</div>
         </div>
     </div>
 </div>
@@ -62,13 +36,6 @@
     border-radius: 1rem;
     padding: 1rem;
     background: linear-gradient(180deg, rgba(15,118,110,0.05), rgba(15,118,110,0.015));
-}
-
-.gateway-preview-card {
-    border-radius: 1rem;
-    border: 1px solid rgba(15,23,42,0.08);
-    background: linear-gradient(135deg, rgba(13,110,253,0.08), rgba(15,118,110,0.12));
-    padding: 1rem;
 }
 </style>
 
@@ -84,46 +51,13 @@ function gatewayEscape(value) {
         .replace(/'/g, '&#39;');
 }
 
-function normalizeGatewayPrimary(index) {
-    paymentGateways.forEach((gateway, currentIndex) => {
-        gateway.primary = currentIndex === index;
-    });
-}
-
-function renderGatewayPreview(payment = null) {
-    const preview = document.getElementById('gatewayPreview');
-    if (!preview) return;
-    if (!payment) {
-        preview.innerHTML = '<div class="text-muted">No gateway configured.</div>';
-        return;
-    }
-    preview.innerHTML = `
-        <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
-            <div class="fw-semibold">${gatewayEscape(payment.method || 'Payment')}</div>
-            <span class="badge bg-dark-subtle text-dark-emphasis">${gatewayEscape(payment.code || 'gateway')}</span>
-        </div>
-        <div class="small text-muted mb-1">Account</div>
-        <div class="fs-5 fw-semibold mb-3">${gatewayEscape(payment.number || 'Not configured')}</div>
-        <div class="small">${gatewayEscape(payment.message || '')}</div>
-    `;
-}
-
 function renderGatewayList() {
     const list = document.getElementById('gatewayList');
     if (!list) return;
     if (!paymentGateways.length) {
         list.innerHTML = '<div class="text-muted">No payment gateways configured.</div>';
-        renderGatewayPreview(null);
         return;
     }
-
-    const primary = paymentGateways.find((gateway) => gateway.primary) || paymentGateways[0];
-    renderGatewayPreview({
-        code: primary.code,
-        method: primary.name,
-        number: primary.account_number,
-        message: primary.instructions
-    });
 
     list.innerHTML = paymentGateways.map((gateway, index) => `
         <div class="gateway-card">
@@ -142,20 +76,13 @@ function renderGatewayList() {
                 </div>
             </div>
             <div class="row g-3">
-                <div class="col-md-4">
+                <div class="col-md-6">
                     <label class="form-label small fw-semibold">Code</label>
                     <input class="form-control form-control-sm" value="${gatewayEscape(gateway.code || '')}" onchange="updateGatewayField(${index}, 'code', this.value)">
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-6">
                     <label class="form-label small fw-semibold">Name</label>
                     <input class="form-control form-control-sm" value="${gatewayEscape(gateway.name || '')}" onchange="updateGatewayField(${index}, 'name', this.value)">
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label small fw-semibold">Primary</label>
-                    <div class="form-check mt-2">
-                        <input class="form-check-input" type="radio" name="primaryGateway" ${gateway.primary ? 'checked' : ''} onchange="setPrimaryGateway(${index})">
-                        <label class="form-check-label small">Use for package checkout</label>
-                    </div>
                 </div>
                 <div class="col-md-6">
                     <label class="form-label small fw-semibold">Account Number</label>
@@ -179,32 +106,20 @@ function updateGatewayField(index, key, value) {
     renderGatewayList();
 }
 
-function setPrimaryGateway(index) {
-    normalizeGatewayPrimary(index);
-    renderGatewayList();
-}
-
 function addGatewayRow() {
     paymentGateways.push({
-        code: `gateway${paymentGateways.length + 1}`,
-        name: 'New Gateway',
-        enabled: true,
-        primary: paymentGateways.length === 0,
+        code: '',
+        name: '',
+        enabled: false,
         account_number: '',
-        account_type: 'Personal',
+        account_type: '',
         instructions: ''
     });
-    if (!paymentGateways.some((gateway) => gateway.primary)) {
-        normalizeGatewayPrimary(paymentGateways.length - 1);
-    }
     renderGatewayList();
 }
 
 function removeGatewayRow(index) {
     paymentGateways.splice(index, 1);
-    if (paymentGateways.length && !paymentGateways.some((gateway) => gateway.primary)) {
-        normalizeGatewayPrimary(0);
-    }
     renderGatewayList();
 }
 
@@ -217,7 +132,6 @@ async function loadGatewayAdmin() {
         }
         paymentGateways = Array.isArray(payload.gateways) ? payload.gateways : [];
         renderGatewayList();
-        renderGatewayPreview(payload.payment || null);
     } catch (error) {
         if (window.showToast) window.showToast(error.message || 'Failed to load payment gateways', 'danger');
     }
@@ -239,7 +153,6 @@ async function saveGatewayAdmin() {
         }
         paymentGateways = Array.isArray(payload.gateways) ? payload.gateways : [];
         renderGatewayList();
-        renderGatewayPreview(payload.payment || null);
         if (window.showToast) window.showToast('Payment gateways saved', 'success');
     } catch (error) {
         if (window.showToast) window.showToast(error.message || 'Failed to save payment gateways', 'danger');

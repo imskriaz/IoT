@@ -248,6 +248,12 @@ describe('dashboard screen coverage', () => {
         expect(js).toContain('function vendorExamples(commandEntry)');
         expect(js).toContain('const allowsBare = Boolean(option.source?.allowsBare);');
         expect(js).toContain('const needsVariant = Boolean(option.source?.requiresVariant);');
+        expect(js).toContain('const workflowSummary = String(option.source?.workflowSummary || \'\').trim();');
+        expect(js).toContain('const workflowChain = Array.isArray(option.source?.workflowChain) ? option.source.workflowChain : [];');
+        expect(js).toContain("group: `${vendorCommand.group || 'Vendor'} workflows`");
+        expect(js).toContain("label: `${vendorCommand.label || vendorCommand.command} Workflow`");
+        expect(js).toContain("task: workflowSummary || option.note || 'Vendor AT command.'");
+        expect(js).toContain("example: workflowChain.length ? workflowChain.join('\\n') : (vendorExample || String(option.command || 'AT').trim())");
         expect(js).toContain('function runtimeModule(option)');
         expect(js).toContain('function describeFunctionParameters(test)');
         expect(js).toContain('function setMode(mode)');
@@ -258,10 +264,8 @@ describe('dashboard screen coverage', () => {
         expect(js).not.toContain('JSON.stringify([');
         expect(js).toContain('function updateCommandLineVisibility()');
         expect(js).toContain('function commandNeedsLineInput(option)');
-        expect(js).toContain('function vendorCommandNeedsParameters(option)');
         expect(js).toContain("state.mode === 'command' && commandNeedsLineInput(option)");
-        expect(js).toContain("option.type === 'vendor') return vendorCommandNeedsParameters(option)");
-        expect(js).toContain("option?.source?.requiresInput === true");
+        expect(js).toContain("if (option.type === 'vendor') return true;");
         expect(js).toContain("option.category === 'manual' || option.raw === true");
         expect(js).toContain("state.mode === 'action'");
         expect(js).toContain("state.mode === 'action' && category !== 'system'");

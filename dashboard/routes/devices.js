@@ -30,8 +30,6 @@ const { validateDeviceIdPrefix } = require('../utils/deviceIdPolicy');
 
 const DEFAULT_MQTT_PORT = 1883;
 const DEFAULT_TOPIC_PREFIX = normalizeTopicPrefix(process.env.MQTT_TOPIC_PREFIX || 'device');
-const PACKAGE_PAYMENT_METHOD = 'bKash';
-const PACKAGE_PAYMENT_NUMBER = '01628301525';
 const DEVICE_PACKAGE_OFFERS = Object.freeze([
     {
         code: 'starter',
@@ -236,14 +234,6 @@ function serializePackageOffer(offer) {
     };
 }
 
-function buildPaymentInstructions() {
-    return {
-        method: PACKAGE_PAYMENT_METHOD,
-        number: PACKAGE_PAYMENT_NUMBER,
-        message: `Send the package price to ${PACKAGE_PAYMENT_NUMBER} via bKash, then wait for admin approval.`
-    };
-}
-
 function buildCurrentPackage(row) {
     const code = String(row?.current_package_code || '').trim();
     if (!code) {
@@ -270,8 +260,8 @@ function buildPackageRequest(row) {
         package_code: row.package_code,
         package_name: row.package_name,
         price_bdt: Number(row.price_bdt || 0),
-        payment_method: row.payment_method || PACKAGE_PAYMENT_METHOD,
-        payment_number: row.payment_number || PACKAGE_PAYMENT_NUMBER,
+        payment_method: row.payment_method || '',
+        payment_number: row.payment_number || '',
         payment_reference: row.payment_reference || '',
         notes: row.notes || '',
         status: row.status || 'pending',
@@ -1165,11 +1155,11 @@ router.post('/active', [
 router.get('/package-offers', async (req, res) => {
     try {
         const offers = await packageService.loadPackageOffers(req.app.locals.db);
-        const payment = await paymentGatewayService.loadPaymentInstructions(req.app.locals.db);
+        const gateways = await paymentGatewayService.loadPaymentGateways(req.app.locals.db);
         res.json({
             success: true,
             offers: offers.map(packageService.serializeOffer),
-            payment
+            payment_gateways: paymentGatewayService.listActiveGateways(gateways)
         });
     } catch (error) {
         logger.error('GET /api/devices/package-offers error:', error);
@@ -1193,11 +1183,11 @@ router.put('/package-offers', [
             req.body.offers,
             req.session?.user?.id || req.user?.id || null
         );
-        const payment = await paymentGatewayService.loadPaymentInstructions(req.app.locals.db);
+        const gateways = await paymentGatewayService.loadPaymentGateways(req.app.locals.db);
         res.json({
             success: true,
             offers: offers.map(packageService.serializeOffer),
-            payment
+            payment_gateways: paymentGatewayService.listActiveGateways(gateways)
         });
     } catch (error) {
         logger.error('PUT /api/devices/package-offers error:', error);
@@ -1525,7 +1515,8 @@ router.get('/:id/package', requireDeviceAccess('id'), async (req, res) => {
         const offers = await packageService.loadPackageOffers(db);
         const snapshot = await packageService.loadDevicePackageSnapshot(db, req.params.id);
         const quota = await packageService.getDeviceQuotaState(db, req.params.id);
-        const payment = await paymentGatewayService.loadPaymentInstructions(db);
+        const gateways = await paymentGatewayService.loadPaymentGateways(db);
+        const paymentGateways = paymentGatewayService.listActiveGateways(gateways);
         const assignedUsers = await db.get(
             `SELECT COUNT(*) AS count FROM device_users WHERE device_id = ?`,
             [req.params.id]
@@ -1535,7 +1526,7 @@ router.get('/:id/package', requireDeviceAccess('id'), async (req, res) => {
             success: true,
             device_id: req.params.id,
             offers: offers.map(packageService.serializeOffer),
-            payment,
+            payment_gateways: paymentGateways,
             current_package: snapshot.currentPackage,
             requests: snapshot.requests,
             quota: {
@@ -1567,10 +1558,14 @@ router.post('/:id/package/apply', [
 
         const db = req.app.locals.db;
         const offers = await packageService.loadPackageOffers(db);
-        const payment = await paymentGatewayService.loadPaymentInstructions(db);
+        const gateways = await paymentGatewayService.loadPaymentGateways(db);
+        const paymentGateways = paymentGatewayService.listActiveGateways(gateways);
         const offer = packageService.getPackageOffer(offers, req.body.package_code);
         if (!offer) {
             return res.status(404).json({ success: false, message: 'Package plan not found' });
+        }
+        if (!paymentGateways.length) {
+            return res.status(400).json({ success: false, message: 'No active payment gateway configured' });
         }
 
         const actorId = req.session?.user?.id || req.user?.id || null;
@@ -1599,8 +1594,8 @@ router.post('/:id/package/apply', [
                 offer.name,
                 Number(offer.priceBdt || 0),
                 JSON.stringify(offer.limits || {}),
-                String(payment.method || packageService.DEFAULT_PACKAGE_PAYMENT.method).toLowerCase(),
-                payment.number || packageService.DEFAULT_PACKAGE_PAYMENT.number,
+                '',
+                '',
                 req.body.payment_reference || null,
                 req.body.notes || null
             ]
@@ -1608,8 +1603,8 @@ router.post('/:id/package/apply', [
 
         res.json({
             success: true,
-            message: `Package request submitted. Complete the ${payment.method || 'payment'} payment and wait for admin approval.`,
-            payment
+            message: 'Package request submitted. Complete payment through any active gateway and wait for admin approval.',
+            payment_gateways: paymentGateways
         });
     } catch (error) {
         logger.error('POST /api/devices/:id/package/apply error:', error);

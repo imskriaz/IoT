@@ -554,7 +554,7 @@ function renderDevicePackageCard(payload = {}) {
     const list = document.getElementById('devicePackageOfferList');
     const currentPackage = payload.current_package || null;
     const quotaState = payload.quota || {};
-    const payment = payload.payment || {};
+    const paymentGateways = Array.isArray(payload.payment_gateways) ? payload.payment_gateways : [];
     const offers = Array.isArray(payload.offers) ? payload.offers : [];
     const pendingRequest = Array.isArray(payload.requests)
         ? payload.requests.find((request) => String(request.status || '') === 'pending')
@@ -567,12 +567,20 @@ function renderDevicePackageCard(payload = {}) {
                 <div class="text-muted small">Approved ${currentPackage.approved_at ? new Date(currentPackage.approved_at).toLocaleString() : 'recently'}</div>
             `;
         } else if (pendingRequest) {
+            const pendingPaymentMethod = pendingRequest.payment_method || '';
+            const pendingPaymentNumber = pendingRequest.payment_number || '';
+            const pendingPaymentText = pendingPaymentMethod || pendingPaymentNumber
+                ? `Pay ${escapeHtml(pendingPaymentNumber || 'the configured account')} via ${escapeHtml(pendingPaymentMethod || 'the active gateway')} and wait for admin approval.`
+                : 'Pay through any active gateway and wait for admin approval.';
             summary.innerHTML = `
                 <div class="fw-semibold">${escapeHtml(pendingRequest.package_name)} pending approval</div>
-                <div class="text-muted small">Pay ${escapeHtml(payment.number || '01628301525')} via ${escapeHtml(payment.method || 'bKash')} and wait for admin approval.</div>
+                <div class="text-muted small">${pendingPaymentText}</div>
             `;
         } else {
-            summary.innerHTML = `<div class="text-muted">No package allocated yet. Apply below.</div>`;
+            const gatewayText = paymentGateways.length
+                ? `<div class="small text-muted mt-1">${paymentGateways.map((gateway) => `${escapeHtml(gateway.name || 'Payment')}: ${escapeHtml(gateway.account_number || 'Account not configured')}`).join('<br>')}</div>`
+                : '<div class="small text-muted mt-1">No payment gateway is active yet.</div>';
+            summary.innerHTML = `<div class="text-muted">No package allocated yet. Apply below.</div>${gatewayText}`;
         }
     }
 
@@ -637,7 +645,7 @@ async function applyDevicePackage(packageCode) {
         if (!response.ok || payload.success === false) {
             throw new Error(payload.message || 'Failed to apply for package');
         }
-        showToast(`${payload.message || 'Package request submitted'} Pay ${payload.payment?.number || '01628301525'} via ${payload.payment?.method || 'bKash'}.`, 'success');
+        showToast(payload.message || 'Package request submitted', 'success');
         loadDevicePackageCard();
     } catch (error) {
         showToast(error.message || 'Failed to apply for package', 'danger');

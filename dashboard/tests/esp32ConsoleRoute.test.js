@@ -70,13 +70,31 @@ describe('ESP32 MQTT console route', () => {
             expect.objectContaining({
                 command: 'AT+CFTPSGET',
                 requiresInput: true,
-                syntaxExamples: expect.arrayContaining(['AT+CFTPSGET="test.txt"'])
+                syntaxExamples: expect.arrayContaining(['AT+CFTPSGET="test.txt"']),
+                workflowSummary: expect.stringContaining('active FTP(S) session'),
+                workflowChain: expect.arrayContaining(['AT+CFTPSSTART', 'AT+CFTPSLOGIN="server",21,"username","password",0'])
             }),
             expect.objectContaining({
                 command: 'AT+CFTPSCWD',
                 requiresInput: false,
                 allowsBare: true,
-                syntaxExamples: expect.arrayContaining(['AT+CFTPSCWD="TEST1129"'])
+                syntaxExamples: expect.arrayContaining(['AT+CFTPSCWD="TEST1129"']),
+                workflowChain: expect.arrayContaining(['AT+CFTPSPWD', 'AT+CFTPSCWD="TEST1129"'])
+            }),
+            expect.objectContaining({
+                command: 'AT+CMQTTCONNECT',
+                workflowSummary: expect.stringContaining('broker'),
+                workflowChain: expect.arrayContaining(['AT+CMQTTSTART', 'AT+CMQTTACCQ=0,"client-test",0', 'AT+CMQTTCONNECT=0,"tcp://test.mosquitto.org:1883",60,1'])
+            }),
+            expect.objectContaining({
+                command: 'AT+HTTPACTION',
+                workflowSummary: expect.stringContaining('HTTP service'),
+                workflowChain: expect.arrayContaining(['AT+HTTPINIT', 'AT+HTTPPARA="URL","http://httpbin.org/get"', 'AT+HTTPACTION=0'])
+            }),
+            expect.objectContaining({
+                command: 'AT+CIPOPEN',
+                workflowSummary: expect.stringContaining('AT+NETOPEN'),
+                workflowChain: expect.arrayContaining(['AT+NETOPEN', 'AT+CIPOPEN=0,"TCP","117.131.85.139",5253'])
             }),
             expect.objectContaining({
                 command: 'AT+BTPAIRED',
@@ -119,6 +137,46 @@ describe('ESP32 MQTT console route', () => {
             expect(entry.transports).toEqual(expect.arrayContaining(['serial', 'mqtt']));
         }
         expect(new Set(vendorCommands.map((entry) => entry.command)).size).toBe(vendorCommands.length);
+    });
+
+    test('provides workflow chains for stateful FTP, MQTT, HTTP, and TCPIP vendor families', async () => {
+        const app = buildApp();
+
+        const res = await request(app).get('/api/esp32-console/commands');
+        const interesting = res.body.data.vendorCommands.filter((entry) =>
+            /^(AT\+CMQTT|AT\+HTTP|AT\+CFTPS|AT\+NETOPEN|AT\+CIPOPEN|AT\+CSSLCFG)/.test(entry.command)
+        );
+        const missing = interesting
+            .filter((entry) => !Array.isArray(entry.workflowChain) || !entry.workflowChain.length)
+            .map((entry) => entry.command);
+
+        expect(interesting.length).toBeGreaterThan(0);
+        expect(missing).toEqual([]);
+    });
+
+    test('workflow chains stay compatible with the console chain parser format', async () => {
+        const app = buildApp();
+
+        const res = await request(app).get('/api/esp32-console/commands');
+        const entries = res.body.data.vendorCommands.filter((entry) => Array.isArray(entry.workflowChain) && entry.workflowChain.length);
+        const invalidLines = [];
+
+        entries.forEach((entry) => {
+            entry.workflowChain.forEach((line, index) => {
+                const text = String(line || '').trim();
+                if (!text) {
+                    invalidLines.push(`${entry.command}:${index + 1}:blank`);
+                    return;
+                }
+                if (text.startsWith('#')) return;
+                if (/^wait\s+\d{1,6}(?:\s*ms)?$/i.test(text)) return;
+                if (/^(?:AT|A)\S*/i.test(text)) return;
+                invalidLines.push(`${entry.command}:${index + 1}:${text}`);
+            });
+        });
+
+        expect(entries.length).toBeGreaterThan(0);
+        expect(invalidLines).toEqual([]);
     });
 
     test('keeps every ESP32 console preset backed by a firmware handler', async () => {

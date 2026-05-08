@@ -316,12 +316,14 @@ app.get('/', async (req, res, next) => {
         }
 
         const offers = await packageService.loadPackageOffers(app.locals.db);
-        const payment = await paymentGatewayService.loadPaymentInstructions(app.locals.db);
+        const paymentGateways = paymentGatewayService.listActiveGateways(
+            await paymentGatewayService.loadPaymentGateways(app.locals.db)
+        );
         return res.render('pages/landing', {
             title: 'Device Bridge',
             layout: false,
             offers: offers.map(packageService.serializeOffer),
-            payment
+            payment_gateways: paymentGateways
         });
     } catch (error) {
         return next(error);

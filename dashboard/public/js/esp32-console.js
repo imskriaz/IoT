@@ -506,6 +506,34 @@
                     source: scenario
                 });
             });
+            state.vendorCommands.forEach((vendorCommand, commandIndex) => {
+                const workflowChain = Array.isArray(vendorCommand.workflowChain) ? vendorCommand.workflowChain : [];
+                if (!workflowChain.length) return;
+                if (activeDeviceType() === 'android') {
+                    state.hidden.device += 1;
+                    return;
+                }
+                options.push({
+                    key: `workflow:${commandIndex}`,
+                    type: 'scenario',
+                    category: 'chain',
+                    group: `${vendorCommand.group || 'Vendor'} workflows`,
+                    label: `${vendorCommand.label || vendorCommand.command} Workflow`,
+                    command: String(vendorCommand.command || '').trim(),
+                    payload: {},
+                    timeoutMs: 45000,
+                    waitForResponse: true,
+                    note: vendorCommand.workflowSummary || vendorCommand.note || 'Vendor workflow.',
+                    source: {
+                        key: `workflow:${commandIndex}`,
+                        label: `${vendorCommand.label || vendorCommand.command} Workflow`,
+                        group: vendorCommand.group || 'Vendor',
+                        module: vendorModule({ source: vendorCommand }),
+                        task: vendorCommand.workflowSummary || vendorCommand.note || 'Vendor workflow.',
+                        chain: workflowChain.join('\n')
+                    }
+                });
+            });
         }
 
         state.options = options;
@@ -637,9 +665,11 @@
             const needsInput = Boolean(option.source?.requiresInput);
             const allowsBare = Boolean(option.source?.allowsBare);
             const needsVariant = Boolean(option.source?.requiresVariant);
+            const workflowSummary = String(option.source?.workflowSummary || '').trim();
+            const workflowChain = Array.isArray(option.source?.workflowChain) ? option.source.workflowChain : [];
             return {
                 module: vendorModule(option),
-                task: option.note || 'Vendor AT command.',
+                task: workflowSummary || option.note || 'Vendor AT command.',
                 parameter: needsInput
                     ? 'This command needs parameters or a target value. Keep quotes and comma order exactly as the vendor form shows.'
                     : (needsVariant
@@ -649,8 +679,10 @@
                     ? 'Use the example form below as the starting point, replace the target values, then send.'
                     : (needsVariant
                         ? 'Start from the example form below and send that exact variant, instead of the bare command name.'
-                        : (allowsBare ? 'Send the base command directly, or use one of the example forms when you need a target value.' : 'Select the command and Send. Use Chain mode if it must be part of a larger scenario.'))),
-                example: vendorExample || String(option.command || 'AT').trim(),
+                        : (workflowChain.length
+                            ? 'Send the base command directly for a live session, or switch to Chain mode and run the workflow template.'
+                            : (allowsBare ? 'Send the base command directly, or use one of the example forms when you need a target value.' : 'Select the command and Send. Use Chain mode if it must be part of a larger scenario.'))),
+                example: workflowChain.length ? workflowChain.join('\n') : (vendorExample || String(option.command || 'AT').trim()),
                 exampleIsCode: true
             };
         }
@@ -922,14 +954,9 @@
 
     function commandNeedsLineInput(option) {
         if (!option) return false;
-        if (option.type === 'vendor') return vendorCommandNeedsParameters(option);
+        if (option.type === 'vendor') return true;
         if (option.type === 'command') return option.category === 'manual' || option.raw === true;
         return false;
-    }
-
-    function vendorCommandNeedsParameters(option) {
-        const command = String(option?.command || option?.source?.command || '').toUpperCase();
-        return command === 'AT+CUSD' || option?.source?.requiresInput === true;
     }
 
     function normalizeMode(mode) {

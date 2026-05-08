@@ -3,39 +3,6 @@
 const logger = require('../utils/logger');
 
 const PAYMENT_GATEWAYS_KEY = 'payment_gateways';
-const DEFAULT_PAYMENT_GATEWAYS = Object.freeze([
-    {
-        code: 'bkash',
-        name: 'bKash',
-        enabled: true,
-        primary: true,
-        account_number: '01628301525',
-        account_type: 'Personal',
-        instructions: 'Send the package price to 01628301525 via bKash, then wait for admin approval.'
-    },
-    {
-        code: 'nagad',
-        name: 'Nagad',
-        enabled: false,
-        primary: false,
-        account_number: '',
-        account_type: 'Personal',
-        instructions: ''
-    },
-    {
-        code: 'rocket',
-        name: 'Rocket',
-        enabled: false,
-        primary: false,
-        account_number: '',
-        account_type: 'Personal',
-        instructions: ''
-    }
-]);
-
-function cloneDefaultGateways() {
-    return DEFAULT_PAYMENT_GATEWAYS.map((gateway) => ({ ...gateway }));
-}
 
 function parseJsonArray(value, fallback = []) {
     if (!value) return fallback;
@@ -60,9 +27,8 @@ function normalizeGateway(raw = {}) {
         code,
         name,
         enabled: Boolean(raw.enabled),
-        primary: Boolean(raw.primary),
         account_number: cleanText(raw.account_number || raw.number, 120),
-        account_type: cleanText(raw.account_type || raw.type || 'Personal', 80),
+        account_type: cleanText(raw.account_type || raw.type, 80),
         instructions: cleanText(raw.instructions, 500)
     };
 }
@@ -80,23 +46,7 @@ function normalizeGatewayList(rawGateways) {
         unique.push(gateway);
     });
 
-    if (!unique.length) {
-        return cloneDefaultGateways();
-    }
-
-    let primaryAssigned = false;
-    unique.forEach((gateway) => {
-        if (gateway.enabled && gateway.primary && !primaryAssigned) {
-            primaryAssigned = true;
-            return;
-        }
-        gateway.primary = false;
-    });
-
-    if (!primaryAssigned) {
-        const firstEnabled = unique.find((gateway) => gateway.enabled) || unique[0];
-        firstEnabled.primary = true;
-    }
+    if (!unique.length) return [];
 
     return unique;
 }
@@ -106,25 +56,30 @@ function serializeGateway(gateway = {}) {
         code: gateway.code,
         name: gateway.name,
         enabled: !!gateway.enabled,
-        primary: !!gateway.primary,
         account_number: gateway.account_number || '',
         account_type: gateway.account_type || '',
         instructions: gateway.instructions || ''
     };
 }
 
+function listActiveGateways(gateways) {
+    return (Array.isArray(gateways) ? gateways : [])
+        .filter((gateway) => gateway.enabled)
+        .map(serializeGateway);
+}
+
 async function loadPaymentGateways(db) {
     if (!db) {
-        return cloneDefaultGateways();
+        return [];
     }
 
     try {
         const row = await db.get(`SELECT value FROM settings WHERE key = ?`, [PAYMENT_GATEWAYS_KEY]);
         const configured = normalizeGatewayList(parseJsonArray(row?.value, []));
-        return configured.length ? configured : cloneDefaultGateways();
+        return configured;
     } catch (error) {
         logger.warn(`Could not load payment gateways: ${error.message}`);
-        return cloneDefaultGateways();
+        return [];
     }
 }
 
@@ -150,41 +105,11 @@ async function savePaymentGateways(db, gateways, userId = null) {
     return normalized;
 }
 
-function getPrimaryGateway(gateways) {
-    const list = Array.isArray(gateways) ? gateways : [];
-    return list.find((gateway) => gateway.enabled && gateway.primary)
-        || list.find((gateway) => gateway.enabled)
-        || list[0]
-        || cloneDefaultGateways()[0];
-}
-
-function buildPaymentInstructions(gateway) {
-    const selected = gateway || cloneDefaultGateways()[0];
-    const method = selected.name || 'Payment';
-    const number = selected.account_number || '';
-    const instructions = cleanText(selected.instructions, 500);
-    return {
-        code: selected.code || 'payment',
-        method,
-        number,
-        account_type: selected.account_type || '',
-        message: instructions || `Send the package price to ${number || 'the configured account'} via ${method}, then wait for admin approval.`
-    };
-}
-
-async function loadPaymentInstructions(db) {
-    const gateways = await loadPaymentGateways(db);
-    return buildPaymentInstructions(getPrimaryGateway(gateways));
-}
-
 module.exports = {
     PAYMENT_GATEWAYS_KEY,
-    DEFAULT_PAYMENT_GATEWAYS,
     normalizeGatewayList,
     serializeGateway,
+    listActiveGateways,
     loadPaymentGateways,
-    savePaymentGateways,
-    getPrimaryGateway,
-    buildPaymentInstructions,
-    loadPaymentInstructions
+    savePaymentGateways
 };

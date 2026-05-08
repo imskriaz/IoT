@@ -39,6 +39,8 @@ enum {
     API_BRIDGE_OTA_RESTART_DELAY_MS = 1500,
     API_BRIDGE_MODEM_RESTART_DEFAULT_TIMEOUT_MS = 45000,
     API_BRIDGE_GPIO_DIAGNOSTIC_PIN = 2,
+    API_BRIDGE_MODEM_AT_RESPONSE_LEN = 768,
+    API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN = 160,
 };
 
 typedef struct {
@@ -324,7 +326,7 @@ static unified_action_response_t api_bridge_execute_modem_at(
     char *payload,
     size_t payload_len
 ) {
-    char modem_response[256] = {0};
+    char modem_response[API_BRIDGE_MODEM_AT_RESPONSE_LEN] = {0};
     char escaped_line[UNIFIED_TEXT_LONG_LEN * 2U] = {0};
     char escaped_response[sizeof(modem_response) * 2U] = {0};
     esp_err_t err = ESP_OK;
@@ -350,14 +352,41 @@ static unified_action_response_t api_bridge_execute_modem_at(
             escaped_line,
             escaped_response
         ) >= (int)payload_len) {
-        payload[0] = '\0';
-        return api_bridge_build_response(
-            action,
-            UNIFIED_ACTION_RESULT_FAILED,
-            ESP_ERR_INVALID_SIZE,
-            UNIFIED_FEATURE_REASON_NONE,
-            "modem_at_payload_failed"
-        );
+        char truncated_response[API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN + 16] = {0};
+        char escaped_truncated_response[(API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN + 16) * 2U] = {0};
+        size_t preview_len = 0U;
+
+        while (preview_len < API_BRIDGE_MODEM_AT_TRUNCATED_PREVIEW_LEN &&
+               modem_response[preview_len] != '\0') {
+            truncated_response[preview_len] = modem_response[preview_len];
+            ++preview_len;
+        }
+        truncated_response[preview_len] = '\0';
+        if (modem_response[preview_len] != '\0') {
+            const char *suffix = "...[truncated]";
+            strncat(
+                truncated_response,
+                suffix,
+                sizeof(truncated_response) - strlen(truncated_response) - 1U
+            );
+        }
+        api_bridge_escape_json(truncated_response, escaped_truncated_response, sizeof(escaped_truncated_response));
+        if (snprintf(
+                payload,
+                payload_len,
+                "{\"line\":\"%s\",\"response\":\"%s\"}",
+                escaped_line,
+                escaped_truncated_response
+            ) >= (int)payload_len) {
+            payload[0] = '\0';
+            return api_bridge_build_response(
+                action,
+                UNIFIED_ACTION_RESULT_FAILED,
+                ESP_ERR_INVALID_SIZE,
+                UNIFIED_FEATURE_REASON_NONE,
+                "modem_at_payload_failed"
+            );
+        }
     }
 
     return api_bridge_build_response(
