@@ -1961,7 +1961,7 @@ describe('GET /api/devices', () => {
         }));
     });
 
-    test('keeps official httpSMS app devices on the httpsms lane even with HTTP live status', async () => {
+    test('keeps official httpSMS app devices on the httpSMS lane even with HTTP live status', async () => {
         global.modemService = {
             getStatus: jest.fn().mockReturnValue({
                 online: true,
@@ -1999,8 +1999,8 @@ describe('GET /api/devices', () => {
         expect(res.status).toBe(200);
         expect(res.body.devices[0]).toEqual(expect.objectContaining({
             id: 'httpsms-1',
-            type: 'httpsms',
-            deviceType: 'httpsms',
+            type: 'httpSMS',
+            deviceType: 'httpSMS',
             activePath: 'http'
         }));
     });
@@ -3354,6 +3354,60 @@ describe('GET /api/devices/:id/provisioning-qr', () => {
                 expect.any(String),
                 'write',
                 JSON.stringify(['android-bridge-01']),
+                120
+            ])
+        );
+    });
+
+    test('creates a pk_ phone key QR for official httpSMS app device settings', async () => {
+        const db = makeDbMock({
+            get: jest.fn((sql) => {
+                if (String(sql).includes('FROM devices d')) {
+                    return Promise.resolve({
+                        id: 'httpsms-01',
+                        name: 'httpSMS 01',
+                        type: 'httpsms-bridge',
+                        status: 'offline',
+                        capabilities: JSON.stringify({
+                            bridge: 'httpsms',
+                            sms: true,
+                            http: true,
+                            mqtt: false
+                        })
+                    });
+                }
+                return Promise.resolve(null);
+            }),
+            run: jest.fn().mockResolvedValue({ lastID: 0, changes: 1 })
+        });
+        const router = require('../routes/devices');
+        const app = buildApp(router, '/api/devices', { id: 1, role: 'admin', username: 'admin' }, db);
+
+        const res = await request(app).get('/api/devices/httpsms-01/provisioning-qr');
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            lane: 'httpSMS',
+            device_id: 'httpsms-01',
+            qr_content_type: 'text/plain'
+        }));
+        expect(res.body.setup).toEqual(expect.objectContaining({
+            api_path: '/v1',
+            api_key: expect.stringMatching(/^pk_/)
+        }));
+        expect(res.body.qr_content).toBe(res.body.setup.api_key);
+        expect(res.body.copy_text).toContain('API path: /v1');
+        expect(res.body.copy_text).toContain(res.body.setup.api_key);
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO api_keys'),
+            expect.arrayContaining([
+                1,
+                'httpSMS httpSMS 01 settings',
+                expect.any(String),
+                expect.stringMatching(/^pk_/),
+                'write',
+                JSON.stringify(['httpsms-01']),
                 120
             ])
         );

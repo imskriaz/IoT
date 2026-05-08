@@ -149,6 +149,20 @@ static bool sms_service_telephony_unavailable(const modem_a7670_status_t *modem_
     return modem_status && modem_status->runtime.running && !modem_a7670_telephony_supported();
 }
 
+static bool sms_service_sms_storage_ready(const modem_a7670_status_t *modem_status) {
+    return modem_status &&
+           modem_status->sms_storage_name[0] != '\0' &&
+           (modem_status->sms_storage_total > 0U ||
+            modem_status->sms_read_storage_total > 0U ||
+            modem_status->sms_write_storage_total > 0U);
+}
+
+static bool sms_service_sms_pull_ready(const modem_a7670_status_t *modem_status) {
+    return modem_status &&
+           modem_status->runtime.running &&
+           (modem_status->sim_ready || sms_service_sms_storage_ready(modem_status));
+}
+
 static bool sms_service_no_pending_sms(esp_err_t err) {
     return err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_STATE || err == ESP_ERR_TIMEOUT;
 }
@@ -557,7 +571,7 @@ static void sms_service_task(void *arg) {
             cycle_detail = "telephony_unavailable";
             cycle_ready = false;
             cycle_health_detail = "telephony_unavailable";
-        } else if (!modem_status.runtime.running || !modem_status.sim_ready) {
+        } else if (!sms_service_sms_pull_ready(&modem_status)) {
             cycle_error = ESP_ERR_INVALID_STATE;
             cycle_error_text = "modem_not_ready";
             cycle_detail = "modem_not_ready";
@@ -623,7 +637,7 @@ static void sms_service_task(void *arg) {
                 }
             }
 
-            if (modem_status.runtime.running && modem_status.sim_ready) {
+            if (sms_service_sms_pull_ready(&modem_status)) {
                 uint32_t idle_wait_ms = SMS_SERVICE_FALLBACK_POLL_INTERVAL_MS;
 
                 if (saw_event && !event_consumed) {
@@ -738,7 +752,7 @@ unified_action_response_t sms_service_pull_pending(uint32_t timeout_ms, uint32_t
             effective_timeout_ms
         );
     }
-    if (!modem_status.runtime.running || !modem_status.sim_ready) {
+    if (!sms_service_sms_pull_ready(&modem_status)) {
         return sms_service_build_response(
             UNIFIED_ACTION_CMD_GET_SMS_HISTORY,
             UNIFIED_ACTION_RESULT_REJECTED,

@@ -570,6 +570,7 @@ describe('sidebar navigation coverage', () => {
     const modemPath = path.join(__dirname, '..', 'views', 'pages', 'modem.html');
     const queueManagerPath = path.join(__dirname, '..', 'views', 'pages', 'queue-manager.html');
     const deviceAboutPath = path.join(__dirname, '..', 'views', 'pages', 'device-about.html');
+    const deviceSettingsPath = path.join(__dirname, '..', 'views', 'pages', 'device-settings.html');
     const smsJsPath = path.join(__dirname, '..', 'public', 'js', 'sms.js');
     const smsPagePath = path.join(__dirname, '..', 'views', 'pages', 'sms.html');
     const usersPagePath = path.join(__dirname, '..', 'views', 'pages', 'users.html');
@@ -638,8 +639,19 @@ describe('sidebar navigation coverage', () => {
         expect(mainJs).toContain("return 'httpsms';");
         expect(mainJs).toContain('showTypes.some(type => sidebarDeviceTypeMatches(activeType, type))');
         expect(mainJs).toContain('hideTypes.some(type => sidebarDeviceTypeMatches(activeType, type))');
-        expect(indexHtml).toContain("httpsms: 'httpSMS device'");
+        expect(indexHtml).toContain("httpSMS: 'httpSMS device'");
         expect(indexHtml).toContain('Open the httpSMS app, confirm the dashboard link and app key');
+    });
+
+    test('device settings renders a compact copyable QR for httpSMS phone app setup', () => {
+        const html = fs.readFileSync(deviceSettingsPath, 'utf8');
+
+        expect(html).toContain('data-lane-visible="android,httpSMS"');
+        expect(html).toContain("return 'httpSMS';");
+        expect(html).toContain("payload.lane === 'httpSMS'");
+        expect(html).toContain('id="deviceSettingsProvisioningCopyBtn"');
+        expect(html).toContain('copyDeviceSettingsProvisioningData()');
+        expect(html).toContain('max-width: 180px');
     });
 
     test('queue manager uses the shared appConfirm flow instead of an undefined legacy helper', () => {
