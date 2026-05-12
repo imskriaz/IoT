@@ -34,6 +34,51 @@ describe('status route live refresh', () => {
         delete global.modemService;
     });
 
+    test('returns persisted httpSMS phone status without requiring MQTT', async () => {
+        const router = require('../routes/status');
+        const db = {
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('FROM device_status_cache')) return null;
+                if (String(sql).includes('FROM devices d')) {
+                    return {
+                        id: 'httpsms-01',
+                        type: 'httpsms-bridge',
+                        status: 'online',
+                        last_seen: new Date().toISOString(),
+                        last_sim_number: '+8801555000000',
+                        slot_index: 0,
+                        sim_number: '+8801555000000'
+                    };
+                }
+                if (String(sql).includes('last_sim_number')) {
+                    return { last_sim_number: '+8801555000000' };
+                }
+                return null;
+            }),
+            all: jest.fn().mockResolvedValue([]),
+            run: jest.fn().mockResolvedValue({ changes: 1 })
+        };
+        global.mqttService = {
+            connected: false,
+            getDeviceQueueState: jest.fn().mockResolvedValue(null)
+        };
+        const app = buildApp(router, { db });
+
+        const res = await request(app).get('/api/status?deviceId=httpsms-01');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.data).toEqual(expect.objectContaining({
+            online: true,
+            app: 'httpSMS',
+            activePath: 'http',
+            simNumber: '+8801555000000'
+        }));
+        expect(res.body.data.mqtt).toEqual(expect.objectContaining({
+            connected: false
+        }));
+    });
+
     test('requests fresh status and returns normalized live Wi-Fi state', async () => {
         const mqttService = new EventEmitter();
         mqttService.connected = true;

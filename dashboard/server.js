@@ -16,6 +16,7 @@ const { initializeDatabase } = require('./config/database');
 const { DEFAULT_DEVICE_ID } = require('./config/device');
 const { buildDashboardDeviceStatus } = require('./utils/dashboardStatus');
 const { hydrateDeviceStatusFromCache } = require('./utils/deviceStatusCache');
+const { readHttpSmsStatusSnapshot } = require('./utils/httpSmsDeviceStatus');
 const { withEffectiveRole } = require('./middleware/auth');
 const { captureRawBody, createErrorHandler } = require('./middleware/errorHandler');
 const { getEffectiveSystemSettings, normalizeStatusWatchSettings } = require('./services/systemSettingsService');
@@ -252,7 +253,16 @@ app.use(async (req, res, next) => {
         res.locals.initialMqttStatusJson = JSON.stringify(mqttService.getStatus()).replace(/</g, '\\u003c');
         if (activeDeviceId) {
             await hydrateDeviceStatusFromCache(req.app?.locals?.db, modemService, activeDeviceId).catch(() => null);
-            const rawDeviceStatus = modemService.getDeviceStatus(activeDeviceId);
+            let rawDeviceStatus = modemService.getDeviceStatus(activeDeviceId);
+            if (!rawDeviceStatus?.online) {
+                const httpSmsStatus = await readHttpSmsStatusSnapshot(req.app?.locals?.db, activeDeviceId).catch(() => null);
+                if (httpSmsStatus) {
+                    rawDeviceStatus = httpSmsStatus;
+                    if (httpSmsStatus.online) {
+                        modemService.updateDeviceStatus(activeDeviceId, httpSmsStatus);
+                    }
+                }
+            }
             if (rawDeviceStatus) {
                 const initialDeviceStatus = {
                     deviceId: activeDeviceId,

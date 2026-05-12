@@ -15,6 +15,7 @@ const {
     sqlNormalizePhone,
     sqlPhoneLastDigits
 } = require('../utils/phoneNumber');
+const { persistDeviceStatusCache } = require('../utils/deviceStatusCache');
 const { extractSimScope } = require('../utils/simScope');
 const { isRegisteredDevice, noteUnregisteredDevice } = require('../utils/unregisteredDevices');
 
@@ -63,6 +64,27 @@ function boolFromPayload(value, fallback = false) {
     if (['true', '1', 'yes', 'y', 'on'].includes(text)) return true;
     if (['false', '0', 'no', 'n', 'off'].includes(text)) return false;
     return fallback;
+}
+
+function unwrapCloudEvent(payload = {}) {
+    if (payload?.data && typeof payload.data === 'object') {
+        return payload.data;
+    }
+    return payload || {};
+}
+
+function cloudEventType(payload = {}) {
+    return clean(payload?.type || payload?.event_type || payload?.eventType || payload?.event_name || payload?.eventName).toLowerCase();
+}
+
+function messageEventStatus(payload = {}) {
+    const raw = clean(payload?.event_name || payload?.eventName || payload?.status || payload?.type).toUpperCase();
+    const type = cloudEventType(payload);
+    if (raw === 'DELIVERED' || type === 'message.phone.delivered') return 'delivered';
+    if (raw === 'SENT' || type === 'message.phone.sent') return 'sent';
+    if (raw === 'FAILED' || type === 'message.send.failed') return 'failed';
+    if (raw === 'EXPIRED' || type === 'message.send.expired') return 'expired';
+    return '';
 }
 
 function stableUuid(...parts) {
@@ -115,6 +137,8 @@ function toHttpSmsMessage(row = {}, owner = null) {
         status: httpSmsStatus(row.status, direction),
         sim: Number.isInteger(Number(row.sim_slot)) ? `SIM${Number(row.sim_slot) + 1}` : 'DEFAULT',
         request_received_at: timestamp,
+        scheduled_at: row.scheduled_at ? normalizeTimestamp(row.scheduled_at) : null,
+        scheduled_send_time: row.scheduled_at ? normalizeTimestamp(row.scheduled_at) : null,
         created_at: timestamp,
         updated_at: normalizeTimestamp(row.delivered_at || row.updated_at || row.timestamp || timestamp),
         order_timestamp: normalizeTimestamp(row.delivered_at || row.timestamp || timestamp),
@@ -162,7 +186,8 @@ function toHttpSmsHeartbeat(req, { deviceId, owner, charging = false, version = 
 }
 
 function collectPhoneNumbers(payload = {}) {
-    const source = payload.phone_numbers ?? payload.phoneNumbers ?? payload.phone_number ?? payload.phoneNumber ?? payload.owner ?? payload.from ?? payload.to;
+    const body = unwrapCloudEvent(payload);
+    const source = body.phone_numbers ?? body.phoneNumbers ?? body.phone_number ?? body.phoneNumber ?? body.owner ?? body.from ?? body.to;
     const values = Array.isArray(source) ? source : [source];
     return Array.from(new Set(values.map((value) => formatPhoneNumber(value) || clean(value)).filter(Boolean)));
 }
@@ -180,6 +205,40 @@ function emitDevice(deviceId, eventName, payload) {
     const room = global.io.to?.(`device:${deviceId}`);
     if (room?.emit) room.emit(eventName, payload);
     else global.io.emit?.(eventName, payload);
+}
+
+async function setHttpSmsDeviceOnlineState(db, req, { deviceId, owner, online = true, timestamp = null } = {}) {
+    const normalizedOwner = formatPhoneNumber(owner) || clean(owner);
+    const normalizedTimestamp = normalizeTimestamp(timestamp || new Date().toISOString());
+    if (!db || !deviceId) return;
+
+    await db.run(
+        `UPDATE devices
+         SET status = ?,
+             last_seen = CASE WHEN ? = 'online' THEN CURRENT_TIMESTAMP ELSE last_seen END
+         WHERE id = ?`,
+        [online ? 'online' : 'offline', online ? 'online' : 'offline', deviceId]
+    );
+    const statusPayload = {
+        deviceId,
+        online: Boolean(online),
+        bridge_transport: 'http',
+        transport_mode: 'http',
+        active_path: 'http',
+        app: 'httpSMS',
+        simNumber: normalizedOwner,
+        lastSeen: normalizedTimestamp
+    };
+    if (online) {
+        global.modemService?.updateDeviceStatus?.(deviceId, statusPayload);
+    }
+    await persistDeviceStatusCache(db, deviceId, statusPayload).catch(() => {});
+    emitDevice(deviceId, 'device:status', statusPayload);
+    return toHttpSmsHeartbeat(req, {
+        deviceId,
+        owner: normalizedOwner,
+        timestamp: normalizedTimestamp
+    });
 }
 
 async function findDeviceByPhone(db, phone) {
@@ -313,6 +372,7 @@ async function upsertHttpSmsPhoneState(db, req, { deviceId, phoneNumber, sim = n
         lastSeen: timestamp
     };
     global.modemService?.updateDeviceStatus?.(deviceId, statusPayload);
+    await persistDeviceStatusCache(db, deviceId, statusPayload).catch(() => {});
     emitDevice(deviceId, 'device:status', statusPayload);
 
     return toHttpSmsPhone(req, {
@@ -384,33 +444,87 @@ async function listHttpSmsPhones(db, req, payload = {}) {
 
 async function queueHttpSmsMessage(req, payload, index = null) {
     const db = req.app.locals.db;
-    const to = payload.to;
-    const content = clean(payload.content ?? payload.message ?? payload.text);
+    const body = unwrapCloudEvent(payload || {});
+    if (Array.isArray(body.attachments) && body.attachments.length) {
+        const error = new Error('MMS attachments are not supported by this dashboard execution lane yet');
+        error.statusCode = 422;
+        throw error;
+    }
+
+    const to = body.to;
+    const content = clean(body.content ?? body.message ?? body.text);
     if (!to || !content) {
         const error = new Error('to and content required');
         error.statusCode = 400;
         throw error;
     }
 
-    const deviceId = await resolveHttpSmsDevice(db, req, payload);
-    const encrypted = boolFromPayload(payload.encrypted, false);
+    const deviceId = await resolveHttpSmsDevice(db, req, body);
+    const encrypted = boolFromPayload(body.encrypted, false);
+    const sendAtText = clean(body.send_at || body.sendAt || body.scheduled_at || body.scheduledAt);
+    if (sendAtText) {
+        const sendAt = new Date(sendAtText);
+        if (Number.isNaN(sendAt.getTime())) {
+            const error = new Error('send_at must be a valid date-time');
+            error.statusCode = 422;
+            throw error;
+        }
+        const maxScheduleAt = Date.now() + (20 * 24 * 60 * 60 * 1000);
+        if (sendAt.getTime() > maxScheduleAt) {
+            const error = new Error('send_at cannot be more than 20 days in the future');
+            error.statusCode = 422;
+            throw error;
+        }
+        if (sendAt.getTime() > Date.now()) {
+            const formattedTo = formatPhoneNumber(to) || clean(to);
+            const result = await db.run(
+                `INSERT INTO scheduled_sms (device_id, to_number, message, send_at, sim_slot, user_id)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [deviceId, formattedTo, content, sendAt.toISOString(), normalizeSimSlot(body.sim), req.user?.id || req.session?.user?.id || null]
+            );
+            const messageId = clean(body.request_id) || `httpsms_sched_${result?.lastID || Date.now()}`;
+            emitDevice(deviceId, 'sms:scheduled-created', {
+                deviceId,
+                id: result?.lastID || null,
+                to: formattedTo,
+                message: content,
+                send_at: sendAt.toISOString(),
+                source: 'httpsms'
+            });
+            return toHttpSmsMessage({
+                id: result?.lastID || null,
+                external_id: messageId,
+                from_number: formatPhoneNumber(body.from) || body.from || 'self',
+                to_number: formattedTo,
+                message: content,
+                type: 'outgoing',
+                status: 'pending',
+                timestamp: new Date().toISOString(),
+                sim_slot: normalizeSimSlot(body.sim),
+                encrypted,
+                request_id: index === null ? clean(body.request_id) : `${clean(body.request_id) || 'bulk'}:${index}`,
+                scheduled_at: sendAt.toISOString()
+            }, formatPhoneNumber(body.from) || clean(body.from) || null);
+        }
+    }
+
     const queued = await queueSmsForDelivery({
         db,
         mqttService: global.mqttService,
         deviceId,
         to,
         message: content,
-        simSlot: normalizeSimSlot(payload.sim),
+        simSlot: normalizeSimSlot(body.sim),
         userId: req.user?.id || req.session?.user?.id || null,
         source: 'httpsms',
-        batchId: index === null ? null : clean(payload.request_id) || `httpsms_bulk_${Date.now()}`,
+        batchId: index === null ? null : clean(body.request_id) || `httpsms_bulk_${Date.now()}`,
         encrypted
     });
 
     return toHttpSmsMessage({
         id: queued.id,
         external_id: queued.messageId,
-        from_number: formatPhoneNumber(payload.from) || payload.from || 'self',
+        from_number: formatPhoneNumber(body.from) || body.from || 'self',
         to_number: queued.to,
         message: content,
         type: 'outgoing',
@@ -418,8 +532,8 @@ async function queueHttpSmsMessage(req, payload, index = null) {
         timestamp: new Date().toISOString(),
         sim_slot: queued.simSlot,
         encrypted,
-        request_id: index === null ? clean(payload.request_id) : `${clean(payload.request_id) || 'bulk'}:${index}`
-    }, formatPhoneNumber(payload.from) || clean(payload.from) || null);
+        request_id: index === null ? clean(body.request_id) : `${clean(body.request_id) || 'bulk'}:${index}`
+    }, formatPhoneNumber(body.from) || clean(body.from) || null);
 }
 
 router.post('/messages/send', async (req, res) => {
@@ -497,9 +611,11 @@ router.get('/messages/outstanding', async (req, res) => {
 router.post('/messages/receive', async (req, res) => {
     try {
         const db = req.app.locals.db;
-        const body = req.body || {};
-        const from = formatPhoneNumber(body.from) || clean(body.from);
-        const to = formatPhoneNumber(body.to) || clean(body.to);
+        const body = unwrapCloudEvent(req.body || {});
+        const fromValue = body.from || body.contact;
+        const toValue = body.to || body.owner;
+        const from = formatPhoneNumber(fromValue) || clean(fromValue);
+        const to = formatPhoneNumber(toValue) || clean(toValue);
         const content = clean(body.content ?? body.message ?? body.text);
         if (!from || !to || !content) {
             return res.status(400).json({ status: 'error', message: 'from, to and content required' });
@@ -507,7 +623,7 @@ router.post('/messages/receive', async (req, res) => {
         const deviceId = await resolveHttpSmsDevice(db, req, { ...body, owner: to });
         const timestamp = normalizeTimestamp(body.timestamp);
         const simSlot = normalizeSimSlot(body.sim);
-        const externalId = clean(body.id || body.message_id || body.messageId || body.request_id) || null;
+        const externalId = clean(body.message_id || body.messageId || body.id || body.request_id) || null;
         const encrypted = boolFromPayload(body.encrypted, false);
         const result = await db.run(
             `INSERT OR IGNORE INTO sms
@@ -573,18 +689,12 @@ router.post('/messages/receive', async (req, res) => {
 router.post('/messages/:messageId/events', async (req, res) => {
     try {
         const db = req.app.locals.db;
-        const deviceId = await resolveHttpSmsDevice(db, req, req.body || {});
-        const messageId = clean(req.params.messageId);
-        const eventName = clean(req.body?.event_name).toUpperCase();
-        const timestamp = normalizeTimestamp(req.body?.timestamp);
-        const reason = clean(req.body?.reason);
-        const status = eventName === 'DELIVERED'
-            ? 'delivered'
-            : eventName === 'SENT'
-                ? 'sent'
-                : eventName === 'FAILED'
-                    ? 'failed'
-                    : '';
+        const body = unwrapCloudEvent(req.body || {});
+        const deviceId = await resolveHttpSmsDevice(db, req, body);
+        const messageId = clean(req.params.messageId || body.id || body.message_id || body.messageId);
+        const timestamp = normalizeTimestamp(body.timestamp);
+        const reason = clean(body.reason || body.error_message || body.error || body.failure_reason);
+        const status = messageEventStatus(req.body || {});
         if (!messageId || !status) {
             return res.status(400).json({ status: 'error', message: 'Unsupported event' });
         }
@@ -593,10 +703,10 @@ router.post('/messages/:messageId/events', async (req, res) => {
             `UPDATE sms
              SET status = ?,
                  delivered_at = CASE WHEN ? = 'delivered' THEN ? ELSE delivered_at END,
-                 error = CASE WHEN ? = 'failed' THEN ? ELSE NULL END
+                 error = CASE WHEN ? IN ('failed', 'expired') THEN ? ELSE NULL END
              WHERE device_id = ?
                AND (external_id = ? OR id = ?)`,
-            [status, status, timestamp, status, reason || 'httpSMS failed', deviceId, messageId, Number(messageId) || -1]
+            [status, status, timestamp, status, reason || `httpSMS ${status}`, deviceId, messageId, Number(messageId) || -1]
         );
         const row = await db.get(
             `SELECT id, external_id, from_number, to_number, message, timestamp, status, delivered_at, error, sim_slot, conversation_id, encrypted
@@ -616,7 +726,7 @@ router.post('/messages/:messageId/events', async (req, res) => {
                 to: row.to_number,
                 sim_slot: row.sim_slot ?? null,
                 status,
-                error: status === 'failed' ? reason || 'httpSMS failed' : null,
+                error: status === 'failed' || status === 'expired' ? reason || `httpSMS ${status}` : null,
                 timestamp
             });
         }
@@ -633,9 +743,11 @@ router.post('/messages/:messageId/events', async (req, res) => {
 router.post('/messages/calls/missed', async (req, res) => {
     try {
         const db = req.app.locals.db;
-        const body = req.body || {};
-        const from = formatPhoneNumber(body.from) || clean(body.from);
-        const to = formatPhoneNumber(body.to) || clean(body.to);
+        const body = unwrapCloudEvent(req.body || {});
+        const fromValue = body.from || body.contact;
+        const toValue = body.to || body.owner;
+        const from = formatPhoneNumber(fromValue) || clean(fromValue);
+        const to = formatPhoneNumber(toValue) || clean(toValue);
         if (!from || !to) {
             return res.status(400).json({ status: 'error', message: 'from and to required' });
         }
@@ -671,30 +783,41 @@ router.post('/messages/calls/missed', async (req, res) => {
 router.post('/heartbeats', async (req, res) => {
     try {
         const db = req.app.locals.db;
-        const body = req.body || {};
+        const body = unwrapCloudEvent(req.body || {});
         const phoneNumbers = collectPhoneNumbers(body);
         if (!phoneNumbers.length) {
             return res.status(400).json({ status: 'error', message: 'phone_numbers required' });
         }
 
         const results = [];
+        const heartbeatType = cloudEventType(req.body || {});
+        const online = heartbeatType === 'phone.heartbeat.offline' ? false : true;
         for (let index = 0; index < phoneNumbers.length; index += 1) {
             const phoneNumber = phoneNumbers[index];
             const sim = body.sim || body.sim_slot || body.simSlot || `SIM${Math.min(index + 1, 2)}`;
             const deviceId = await resolveHttpSmsDevice(db, req, { ...body, owner: phoneNumber });
-            await upsertHttpSmsPhoneState(db, req, {
-                deviceId,
-                phoneNumber,
-                sim,
-                charging: body.charging
-            });
-            results.push(toHttpSmsHeartbeat(req, {
-                deviceId,
-                owner: phoneNumber,
-                charging: body.charging,
-                version: req.headers['x-client-version'] || body.version || body.app_version,
-                timestamp: body.timestamp
-            }));
+            if (online) {
+                await upsertHttpSmsPhoneState(db, req, {
+                    deviceId,
+                    phoneNumber,
+                    sim,
+                    charging: body.charging
+                });
+                results.push(toHttpSmsHeartbeat(req, {
+                    deviceId,
+                    owner: phoneNumber,
+                    charging: body.charging,
+                    version: req.headers['x-client-version'] || body.version || body.app_version,
+                    timestamp: body.timestamp
+                }));
+            } else {
+                results.push(await setHttpSmsDeviceOnlineState(db, req, {
+                    deviceId,
+                    owner: phoneNumber,
+                    online: false,
+                    timestamp: body.timestamp || body.last_heartbeat_timestamp
+                }));
+            }
         }
 
         return res.status(201).json({

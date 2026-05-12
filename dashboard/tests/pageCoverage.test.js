@@ -763,13 +763,16 @@ describe('sidebar navigation coverage', () => {
         expect(js).toContain('buildDeviceAwareHref');
     });
 
-    test('dashboard quick actions include SIM number detection and refresh on USSD response', () => {
+    test('dashboard omits quick actions while keeping USSD response refresh wiring', () => {
         const html = fs.readFileSync(indexPath, 'utf8');
         const js = fs.readFileSync(mainJsPath, 'utf8');
 
-        expect(html).toContain('quickSimNumber()');
-        expect(html).toContain('/api/quick/sim-number');
-        expect(html).toContain('Detect</span> SIM Number');
+        expect(html).not.toContain('Quick Actions');
+        expect(html).not.toContain('quickSimNumber()');
+        expect(html).not.toContain('/api/quick/sim-number');
+        expect(html).not.toContain('Detect</span> SIM Number');
+        expect(html).not.toContain('Check</span> Balance');
+        expect(html).not.toContain('Restart</span> Modem');
         expect(js).toContain("socket.on('ussd:response'");
         expect(js).toContain('scheduleDeviceEnvelopeRefresh(500)');
     });

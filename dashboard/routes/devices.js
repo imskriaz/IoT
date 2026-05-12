@@ -15,10 +15,12 @@ const {
     parseCapabilities
 } = require('../utils/deviceCapabilities');
 const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
+const { buildHttpSmsStatusSnapshot, isHttpSmsDeviceLike } = require('../utils/httpSmsDeviceStatus');
 const { hydrateDeviceStatusFromCache } = require('../utils/deviceStatusCache');
 const { getDeviceModuleHealth } = require('../utils/moduleHealth');
 const { encodeProvisioningToken } = require('../utils/provisioningToken');
 const { createDeviceProvisioningApiKey } = require('../utils/apiKeyProvisioning');
+const { resolvePublicBaseUrl } = require('../utils/publicBaseUrl');
 const packageService = require('../services/packageService');
 const paymentGatewayService = require('../services/paymentGatewayService');
 const hostHotspotService = require('../services/hostHotspotService');
@@ -206,15 +208,7 @@ function sortDeviceList(devices, activeDeviceId = '') {
 }
 
 function normalizePublicBaseUrl(req) {
-    const configured = String(
-        process.env.ANDROID_BRIDGE_PUBLIC_URL ||
-        process.env.PUBLIC_BRIDGE_BASE_URL ||
-        process.env.PUBLIC_BASE_URL ||
-        ''
-    ).trim().replace(/\/+$/, '');
-    if (configured) return configured;
-    const protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
-    return `${protocol}://${req.get('host')}`.replace(/\/+$/, '');
+    return resolvePublicBaseUrl(req);
 }
 
 function classifyDeviceLane(device = {}) {
@@ -1090,7 +1084,7 @@ router.get('/', async (req, res) => {
             // Admins see all devices + assignment counts
             rows = await db.all(`
                 SELECT d.*,
-                       dp.capabilities, dp.board, dp.location, dp.local_ip,
+                       dp.capabilities, dp.board, dp.location, dp.local_ip, dp.last_sim_number,
                        dp.has_gps, dp.has_battery, dp.has_sd, dp.has_camera, dp.has_audio,
                        dp.has_display, dp.has_nfc, dp.has_rfid, dp.has_touch, dp.has_keyboard,
                        (SELECT COUNT(*) FROM device_users du WHERE du.device_id = d.id) AS assigned_users
@@ -1102,7 +1096,7 @@ router.get('/', async (req, res) => {
             // Operators and viewers see only their assigned devices
             rows = await db.all(`
                 SELECT d.*, du.can_write,
-                       dp.capabilities, dp.board, dp.location, dp.local_ip,
+                       dp.capabilities, dp.board, dp.location, dp.local_ip, dp.last_sim_number,
                        dp.has_gps, dp.has_battery, dp.has_sd, dp.has_camera, dp.has_audio,
                        dp.has_display, dp.has_nfc, dp.has_rfid, dp.has_touch, dp.has_keyboard
                 FROM devices d
@@ -1124,27 +1118,31 @@ router.get('/', async (req, res) => {
                 inferCapabilitiesFromStatus(live || {})
             );
             const inferredType = inferDeviceListType(row, live, caps);
+            const httpSmsFallback = isHttpSmsDeviceLike({ ...row, type: inferredType || row.type })
+                ? buildHttpSmsStatusSnapshot(row)
+                : null;
+            const effectiveLive = live?.online ? live : (httpSmsFallback || live || {});
             return {
                 ...row,
                 type: inferredType || row.type,
                 deviceType: inferredType || row.type || '',
                 board: row.board || caps.board || row.type || null,
                 capabilities: caps,
-                online: live?.online || false,
-                signal: live?.signal ?? null,
-                signalDbm: live?.signalDbm ?? null,
-                battery: live?.battery ?? null,
-                network: live?.network || null,
-                operator: live?.operator || null,
-                activePath: live?.activePath || null,
-                wifi: live?.wifi || null,
-                mqtt: live?.mqtt || null,
-                sync: live?.sync || null,
-                storage: live?.storage || null,
+                online: effectiveLive?.online || false,
+                signal: effectiveLive?.signal ?? null,
+                signalDbm: effectiveLive?.signalDbm ?? null,
+                battery: effectiveLive?.battery ?? null,
+                network: effectiveLive?.network || null,
+                operator: effectiveLive?.operator || null,
+                activePath: effectiveLive?.activePath || null,
+                wifi: effectiveLive?.wifi || null,
+                mqtt: effectiveLive?.mqtt || null,
+                sync: effectiveLive?.sync || null,
+                storage: effectiveLive?.storage || null,
                 queueState: {
-                    device: live?.queues || null
+                    device: effectiveLive?.queues || null
                 },
-                lastSeen: live?.lastSeen || row.last_seen
+                lastSeen: effectiveLive?.lastSeen || row.last_seen
             };
         }));
 
@@ -1791,7 +1789,7 @@ router.get('/:id', requireDeviceAccess('id'), async (req, res) => {
             `SELECT d.id, d.name, d.type, d.status, d.last_seen, d.created_at, d.description,
                     dp.location, dp.apn, dp.wifi_ssid, dp.wifi_pass, dp.mqtt_host, dp.mqtt_user,
                     CASE WHEN dp.mqtt_pass IS NOT NULL AND dp.mqtt_pass != '' THEN 1 ELSE 0 END AS mqtt_pass_set,
-                    dp.local_ip, dp.board, dp.firmware_version, dp.updated_at
+                    dp.local_ip, dp.board, dp.firmware_version, dp.updated_at, dp.last_sim_number
              FROM devices d
              LEFT JOIN device_profiles dp ON dp.device_id = d.id
              WHERE d.id = ?`,
@@ -1805,8 +1803,12 @@ router.get('/:id', requireDeviceAccess('id'), async (req, res) => {
         const live = global.modemService?.getDeviceStatus?.(req.params.id)
             || global.modemService?.getStatus?.(req.params.id)
             || {};
+        const fallbackLive = (!live?.online && isHttpSmsDeviceLike(row))
+            ? buildHttpSmsStatusSnapshot(row)
+            : null;
+        const effectiveLive = live?.online ? live : (fallbackLive || live);
         const effectiveMqtt = buildEffectiveMqttConfig(row);
-        const simInventory = await buildStoredSimSnapshot(db, req.params.id, live);
+        const simInventory = await buildStoredSimSnapshot(db, req.params.id, effectiveLive);
 
         res.json({
             success: true,
@@ -1814,10 +1816,10 @@ router.get('/:id', requireDeviceAccess('id'), async (req, res) => {
                 ...row,
                 mqtt_pass_set: Boolean(row.mqtt_pass_set),
                 mqtt_effective: effectiveMqtt,
-                online: !!live.online,
-                uptime: live.uptime || null,
-                activePath: live.activePath || null,
-                operator: live.operator || simInventory.operator || null,
+                online: !!effectiveLive.online,
+                uptime: effectiveLive.uptime || null,
+                activePath: effectiveLive.activePath || null,
+                operator: effectiveLive.operator || simInventory.operator || null,
                 simNumber: simInventory.simNumber,
                 subscriberNumber: simInventory.subscriberNumber,
                 simSlots: simInventory.simSlots,
@@ -1825,9 +1827,9 @@ router.get('/:id', requireDeviceAccess('id'), async (req, res) => {
                 dualSim: simInventory.dualSim,
                 activeSimSlotIndex: simInventory.activeSimSlotIndex,
                 sim: simInventory.sim,
-                wifi: live.wifi || null,
-                mqtt: live.mqtt || null,
-                storage: live.storage || null
+                wifi: effectiveLive.wifi || null,
+                mqtt: effectiveLive.mqtt || null,
+                storage: effectiveLive.storage || null
             }
         });
     } catch (error) {
@@ -2854,6 +2856,7 @@ function buildHttpSmsProvisioningSummary({ device, serverUrl, apiKeyName = '' })
         transport_mode: 'http',
         device_id: device.id,
         server_url: serverUrl,
+        api_base_url: `${serverUrl}/v1`,
         api_path: '/v1',
         app: 'httpSMS',
         api_key_name: apiKeyName,
@@ -2865,6 +2868,7 @@ function buildHttpSmsCopyText({ serverUrl, apiKey, apiKeyName = '' }) {
     return [
         'httpSMS app setup',
         `Dashboard link: ${serverUrl}`,
+        `API base URL: ${serverUrl}/v1`,
         'API path: /v1',
         `API key: ${apiKey}`,
         apiKeyName ? `API key name: ${apiKeyName}` : '',

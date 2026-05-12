@@ -36,6 +36,7 @@ describe('storedSimService', () => {
         expect(result.subscriberNumber).toBe('+8801000000001');
         expect(result.operator).toBe('Grameenphone');
         expect(result.simSlots).toHaveLength(2);
+        expect(result.simSlots.map((slot) => slot.simNumber)).toEqual(['+8801000000000', '+8801000000001']);
         expect(result.sim.slots).toHaveLength(2);
     });
 });

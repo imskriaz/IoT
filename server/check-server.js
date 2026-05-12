@@ -6,7 +6,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const DEFAULT_URL = process.env.PUBLIC_BASE_URL || process.env.ANDROID_BRIDGE_PUBLIC_URL || '';
+const DEFAULT_URL = process.env.ANDROID_BRIDGE_PUBLIC_URL || process.env.PUBLIC_BRIDGE_BASE_URL || '';
 
 function printUsage() {
   console.log(`Usage:
@@ -123,7 +123,7 @@ function validateOptions(options) {
 
 function normalizeBaseUrl(value) {
   if (!value) {
-    throw new Error('--url is required unless PUBLIC_BASE_URL or ANDROID_BRIDGE_PUBLIC_URL is set.');
+    throw new Error('--url is required unless ANDROID_BRIDGE_PUBLIC_URL or PUBLIC_BRIDGE_BASE_URL is set.');
   }
   const parsed = new URL(value || DEFAULT_URL);
   parsed.hash = '';

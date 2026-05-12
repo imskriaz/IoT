@@ -39,7 +39,6 @@ https://something-random.trycloudflare.com
 Use that URL in `dashboard/.env` before generating Android QR codes:
 
 ```env
-PUBLIC_BASE_URL=https://something-random.trycloudflare.com
 ANDROID_BRIDGE_PUBLIC_URL=https://something-random.trycloudflare.com
 PUBLIC_BRIDGE_BASE_URL=https://something-random.trycloudflare.com
 SOCKET_IO_CORS_ORIGIN=https://something-random.trycloudflare.com

@@ -820,6 +820,12 @@ body {
     font-size: 0.84rem;
 }
 
+.status-sim-numbers {
+    line-height: 1.35;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
 .status-metric-full {
     grid-column: 1 / -1;
 }

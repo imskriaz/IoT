@@ -596,6 +596,7 @@ async function loadDeviceSettingsProvisioningCard(device = {}) {
                     'Transport: HTTP API',
                     `Device: ${summary.device_id || payload.device_id || id}`,
                     `Dashboard link: ${summary.server_url || setup.base_url || 'Not configured'}`,
+                    `API base URL: ${summary.api_base_url || setup.api_base_url || ((summary.server_url || setup.base_url) ? `${summary.server_url || setup.base_url}/v1` : 'Not configured')}`,
                     `API path: ${summary.api_path || setup.api_path || '/v1'}`,
                     summary.api_key_name ? `API key: ${summary.api_key_name}` : 'API key: generated for this phone lane',
                     'Secret: QR contains the pk_ phone app key'

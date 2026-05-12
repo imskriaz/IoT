@@ -24,7 +24,6 @@ Put that URL in `dashboard/.env` before generating Android setup QR codes:
 
 ```env
 PORT=3000
-PUBLIC_BASE_URL=https://your-generated-url.trycloudflare.com
 ANDROID_BRIDGE_PUBLIC_URL=https://your-generated-url.trycloudflare.com
 PUBLIC_BRIDGE_BASE_URL=https://your-generated-url.trycloudflare.com
 SOCKET_IO_CORS_ORIGIN=https://your-generated-url.trycloudflare.com
@@ -75,7 +74,6 @@ npm run cloudflare -- --named --hostname your-hostname.example.com --tunnel dash
 Then use:
 
 ```env
-PUBLIC_BASE_URL=https://your-hostname.example.com
 ANDROID_BRIDGE_PUBLIC_URL=https://your-hostname.example.com
 PUBLIC_BRIDGE_BASE_URL=https://your-hostname.example.com
 SOCKET_IO_CORS_ORIGIN=https://your-hostname.example.com

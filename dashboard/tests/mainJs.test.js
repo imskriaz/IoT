@@ -58,4 +58,14 @@ describe('main.js device HTTP helper export', () => {
         expect(source).toContain("updateConnectionStatus('connecting');");
         expect(source).toContain('updateTopBarStatus();');
     });
+
+    test('shows dual-SIM numbers in the status modal and dashboard card', () => {
+        const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'main.js'), 'utf8');
+
+        expect(source).toContain('function getSimNumbersDisplayValue(status, fallback = \'Checking...\')');
+        expect(source).toContain("labels.push(`SIM ${index + 1}: ${number || fallback}`);");
+        expect(source).toContain('? getSimNumbersDisplayValue(status)');
+        expect(source).toContain('const simNumbersText = isOnline ? getSimNumbersDisplayValue(status) : \'-\';');
+        expect(source).not.toContain('selectedSim?.number || getSimNumberDisplayValue(status)');
+    });
 });

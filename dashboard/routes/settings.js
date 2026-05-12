@@ -585,7 +585,6 @@ router.post('/test/mqtt', async (req, res) => {
 router.post('/system', adminMiddleware, [
     body('deviceName').notEmpty(),
     body('phoneCountryCode').optional({ values: 'falsy' }).trim().isLength({ max: 8 }),
-    body('publicBaseUrl').optional({ values: 'falsy' }).trim().isLength({ max: 300 }),
     body('otaBaseUrl').optional({ values: 'falsy' }).trim().isLength({ max: 300 }),
     body('timezone').notEmpty().custom(isValidTimezone).withMessage('Valid timezone required'),
     body('logLevel').isIn(['debug', 'info', 'warn', 'error']),
@@ -618,7 +617,6 @@ router.post('/system', adminMiddleware, [
         const envUpdates = {
             ...buildManagedSystemEnvUpdates(saved.savedSystem, currentEffective.effective),
             PHONE_COUNTRY_CODE: normalizeCountryCode(req.body.phoneCountryCode),
-            PUBLIC_BASE_URL: normalizeUrl(req.body.publicBaseUrl),
             OTA_BASE_URL: normalizeUrl(req.body.otaBaseUrl)
         };
         writeEnvUpdates(envUpdates);
@@ -659,7 +657,6 @@ router.post('/system', adminMiddleware, [
                 system: {
                     ...effective.system,
                     phoneCountryCode: envUpdates.PHONE_COUNTRY_CODE,
-                    publicBaseUrl: envUpdates.PUBLIC_BASE_URL,
                     otaBaseUrl: envUpdates.OTA_BASE_URL
                 },
                 effective: effective.effective,

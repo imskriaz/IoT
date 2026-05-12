@@ -28,6 +28,33 @@ describe('dashboardStatus', () => {
         expect(status.wifiRoleLabel).toBe('Primary');
     });
 
+    test('preserves both dual-SIM subscriber numbers from slot aliases', () => {
+        const status = buildDashboardDeviceStatus({
+            online: true,
+            activePath: 'modem',
+            sim_slot_count: 2,
+            sim_active_slot: 1,
+            sim_slots: [
+                { slot_index: 0, simNumber: '+8801000000000', operator_name: 'Robi', modem_registered: true },
+                { slot_index: 1, sim_number: '+8801000000001', operatorName: 'Grameenphone', modem_registered: true }
+            ]
+        }, true);
+
+        expect(status.dualSim).toBe(true);
+        expect(status.simSlots).toHaveLength(2);
+        expect(status.simSlots[0]).toEqual(expect.objectContaining({
+            slotIndex: 0,
+            number: '+8801000000000',
+            simNumber: '+8801000000000'
+        }));
+        expect(status.simSlots[1]).toEqual(expect.objectContaining({
+            slotIndex: 1,
+            number: '+8801000000001',
+            simNumber: '+8801000000001'
+        }));
+        expect(status.simNumber).toBe('+8801000000001');
+    });
+
     test('marks modem path as cellular standby while PPP is pending', () => {
         const status = buildDashboardDeviceStatus({
             online: true,

@@ -195,13 +195,11 @@ function printPlan(options, args, cloudflared = 'cloudflared') {
   console.log('');
   if (options.named) {
     console.log('Use these dashboard env values before generating Android QR codes:');
-    console.log(`PUBLIC_BASE_URL=${publicUrl}`);
     console.log(`ANDROID_BRIDGE_PUBLIC_URL=${publicUrl}`);
     console.log(`PUBLIC_BRIDGE_BASE_URL=${publicUrl}`);
     console.log(`SOCKET_IO_CORS_ORIGIN=${publicUrl}`);
   } else {
     console.log('After cloudflared starts, copy the printed https://*.trycloudflare.com URL into:');
-    console.log('PUBLIC_BASE_URL=<printed-url>');
     console.log('ANDROID_BRIDGE_PUBLIC_URL=<printed-url>');
     console.log('PUBLIC_BRIDGE_BASE_URL=<printed-url>');
     console.log('SOCKET_IO_CORS_ORIGIN=<printed-url-origin>');

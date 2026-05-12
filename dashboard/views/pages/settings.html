@@ -107,15 +107,10 @@
                                 </div>
                                 <div class="form-text" id="statusWatchRefreshSource">How often the dashboard renews the watch while tabs are visible.</div>
                             </div>
-                            <div class="col-md-6">
-                                <label class="form-label fw-semibold" for="systemPublicBaseUrl">Public Base URL</label>
-                                <input type="url" class="form-control" id="systemPublicBaseUrl" placeholder="https://dashboard.example.com" <%= canEditSystem ? '' : 'disabled' %>>
-                                <div class="form-text" id="systemPublicBaseUrlSource">Used when the dashboard must generate public links.</div>
-                            </div>
-                            <div class="col-md-6">
+                            <div class="col-md-12">
                                 <label class="form-label fw-semibold" for="systemOtaBaseUrl">OTA Base URL</label>
                                 <input type="url" class="form-control" id="systemOtaBaseUrl" placeholder="https://ota.example.com" <%= canEditSystem ? '' : 'disabled' %>>
-                                <div class="form-text" id="systemOtaBaseUrlSource">Override this if devices cannot reach the dashboard URL directly.</div>
+                                <div class="form-text" id="systemOtaBaseUrlSource">Optional. Onboarding and app setup links use the current dashboard URL automatically.</div>
                             </div>
                         </div>
 

@@ -1570,6 +1570,7 @@ function renderProvisioningPanel() {
         const summary = provisioning.summary || {};
         const setup = provisioning.setup || {};
         const baseUrl = summary.server_url || setup.base_url || '';
+        const apiBaseUrl = summary.api_base_url || setup.api_base_url || (baseUrl ? `${baseUrl}/v1` : '');
         const apiKey = setup.api_key || '';
         const encryptionKey = setup.encryption_key || summary.encryption_key || '';
         const isHttpsBaseUrl = /^https:\/\//i.test(baseUrl);
@@ -1617,6 +1618,10 @@ function renderProvisioningPanel() {
                                         </button>
                                     </div>
                                 </td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">API base URL</td>
+                                <td><code>${escHtml(apiBaseUrl || 'Not configured')}</code></td>
                             </tr>
                             <tr><td class="text-muted">App key</td><td><textarea class="form-control font-monospace" id="httpSmsApiKey" rows="3" readonly>${escHtml(apiKey)}</textarea></td></tr>
                             <tr><td class="text-muted">Message lock key</td><td><textarea class="form-control font-monospace" id="httpSmsEncryptionKey" rows="2" readonly>${escHtml(encryptionKey)}</textarea></td></tr>

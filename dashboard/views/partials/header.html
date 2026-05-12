@@ -6,8 +6,11 @@
     <% const statusChromeEnabled = (typeof showStatusChrome === 'undefined') ? true : showStatusChrome !== false; %>
     <% const initialStatus = (typeof initialDeviceStatus !== 'undefined' && initialDeviceStatus) ? initialDeviceStatus : null; %>
     <% const initialDeviceOnline = !!(initialStatus && initialStatus.online); %>
+    <% const initialStatusTokens = initialStatus ? [initialStatus.type, initialStatus.deviceType, initialStatus.device_type, initialStatus.model, initialStatus.bridge, initialStatus.bridge_type, initialStatus.app, initialStatus.platform, initialStatus.activePath, initialStatus.active_path, initialStatus.transport_mode, initialStatus.bridge_transport, initialStatus.deviceId, initialStatus.device_id].map(v => String(v || '').toLowerCase()) : []; %>
+    <% const initialHttpSmsLane = initialStatusTokens.some(t => t === 'httpsms' || t === 'httpsms-bridge' || t.includes('httpsms') || (t.includes('http') && t.includes('sms'))); %>
     <% const initialBrokerOnline = (typeof initialMqttConnected !== 'undefined') ? !!initialMqttConnected : false; %>
-    <% const initialStatusLabel = initialDeviceOnline && initialBrokerOnline ? 'All Operational' : (!initialBrokerOnline ? 'MQTT Offline' : (initialStatus ? 'Device Offline' : 'No Device Selected')); %>
+    <% const initialBrokerRequired = !initialHttpSmsLane; %>
+    <% const initialStatusLabel = initialDeviceOnline && (!initialBrokerRequired || initialBrokerOnline) ? 'All Operational' : (initialBrokerRequired && !initialBrokerOnline ? 'MQTT Offline' : (initialStatus ? (initialHttpSmsLane ? 'Phone Offline' : 'Device Offline') : 'No Device Selected')); %>
     <div class="container-fluid px-3 px-md-4">
         <% if (sidebarEnabled) { %>
             <button class="btn btn-link text-white p-1 d-md-none" type="button" onclick="toggleSidebar()" aria-label="Open sidebar menu">
@@ -29,7 +32,7 @@
                         id="statusPill"
                         onclick="toggleStatusPanel()"
                         title="System status">
-                    <span id="statusDot" class="status-dot" style="background:<%= initialStatus ? (initialDeviceOnline && initialBrokerOnline ? '#22c55e' : '#ef4444') : '#6c757d' %>;"></span>
+                    <span id="statusDot" class="status-dot" style="background:<%= initialStatus ? (initialDeviceOnline && (!initialBrokerRequired || initialBrokerOnline) ? '#22c55e' : '#ef4444') : '#6c757d' %>;"></span>
                     <span id="statusLabel"><%= initialStatusLabel %></span>
                 </button>
 
@@ -51,7 +54,7 @@
                                 </div>
                                 <div class="status-row">
                                     <span class="status-label">MQTT Broker</span>
-                                    <span id="panelMqttStatus" class="status-value" style="color:<%= initialBrokerOnline ? '#22c55e' : '#ef4444' %>;"><%= initialBrokerOnline ? 'Connected' : 'Disconnected' %></span>
+                                    <span id="panelMqttStatus" class="status-value" style="color:<%= initialHttpSmsLane ? '#22c55e' : (initialBrokerOnline ? '#22c55e' : '#ef4444') %>;"><%= initialHttpSmsLane ? 'HTTP lane' : (initialBrokerOnline ? 'Connected' : 'Disconnected') %></span>
                                 </div>
                                 <div class="status-row status-linkable" data-status-href="/devices/about" tabindex="0" role="link" title="Open Device About">
                                     <span class="status-label">Device</span>
@@ -87,7 +90,7 @@
                                     </div>
                                     <div class="status-metric-full status-linkable" data-status-href="/modem" tabindex="0" role="link" title="Open Internet">
                                         <div class="status-metric-label">SIM Number</div>
-                                        <div id="panelSimNumber" class="status-metric-value">---</div>
+                                        <div id="panelSimNumber" class="status-metric-value status-sim-numbers">---</div>
                                     </div>
                                 </div>
                             </div>

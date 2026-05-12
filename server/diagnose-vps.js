@@ -9,7 +9,7 @@ const os = require('os');
 const { spawnSync } = require('child_process');
 
 const DEFAULT_DOMAIN = '';
-const DEFAULT_URL = process.env.PUBLIC_BASE_URL || process.env.ANDROID_BRIDGE_PUBLIC_URL || '';
+const DEFAULT_URL = process.env.ANDROID_BRIDGE_PUBLIC_URL || process.env.PUBLIC_BRIDGE_BASE_URL || '';
 
 function printUsage() {
   console.log(`Usage:

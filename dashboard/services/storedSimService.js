@@ -64,8 +64,9 @@ function applyStoredSimFallback(deviceStatus = {}, storedRows = []) {
         slotMap.set(storedSlot.slotIndex, {
             ...storedSlot,
             ...current,
-            number: String(current.number || current.subscriberNumber || storedSlot.number || '').trim(),
-            subscriberNumber: String(current.subscriberNumber || current.number || storedSlot.subscriberNumber || '').trim(),
+            number: String(current.number || current.simNumber || current.subscriberNumber || storedSlot.number || '').trim(),
+            simNumber: String(current.simNumber || current.number || current.subscriberNumber || storedSlot.simNumber || '').trim(),
+            subscriberNumber: String(current.subscriberNumber || current.number || current.simNumber || storedSlot.subscriberNumber || '').trim(),
             operator: String(current.operator || current.operatorName || storedSlot.operator || '').trim(),
             operatorName: String(current.operatorName || current.operator || storedSlot.operatorName || '').trim(),
             carrierName: String(current.carrierName || current.operatorName || storedSlot.carrierName || '').trim(),

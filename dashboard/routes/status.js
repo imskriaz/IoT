@@ -12,6 +12,7 @@ const {
 const { getDeviceModuleHealth } = require('../utils/moduleHealth');
 const { buildDashboardDeviceStatus } = require('../utils/dashboardStatus');
 const { hydrateDeviceStatusFromCache, readFreshDeviceStatusCache } = require('../utils/deviceStatusCache');
+const { readHttpSmsStatusSnapshot } = require('../utils/httpSmsDeviceStatus');
 const { normalizeSsid } = require('../utils/hostWifiDiagnostics');
 const {
     publishWifiConfigPersistence,
@@ -290,7 +291,16 @@ async function buildStatusEnvelope(req, deviceId) {
     const db = req.app.locals.db;
     await hydrateDeviceStatusFromCache(db, modemService, deviceId).catch(() => null);
     const cachedStatus = await readFreshDeviceStatusCache(db, deviceId).catch(() => null);
-    const status = modemService.getDeviceStatus(deviceId);
+    let status = modemService.getDeviceStatus(deviceId);
+    if (!status?.online) {
+        const httpSmsStatus = await readHttpSmsStatusSnapshot(db, deviceId).catch(() => null);
+        if (httpSmsStatus) {
+            status = httpSmsStatus;
+            if (httpSmsStatus.online) {
+                modemService.updateDeviceStatus(deviceId, httpSmsStatus);
+            }
+        }
+    }
     const storedSimRows = await readStoredSimRows(db, deviceId).catch(() => []);
     let deviceStatus = buildDashboardDeviceStatus(status, status.online);
     const cachedRuntime = runtimeFromCachedStatus(cachedStatus);

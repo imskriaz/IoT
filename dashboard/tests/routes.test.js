@@ -97,7 +97,6 @@ describe('Settings routes', () => {
         LOG_LEVEL: process.env.LOG_LEVEL,
         TZ: process.env.TZ,
         PHONE_COUNTRY_CODE: process.env.PHONE_COUNTRY_CODE,
-        PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL,
         OTA_BASE_URL: process.env.OTA_BASE_URL
     };
 
@@ -131,7 +130,6 @@ describe('Settings routes', () => {
         process.env.MQTT_CLIENT_ID = 'dashboard-main';
         process.env.MQTT_REJECT_UNAUTHORIZED = 'true';
         process.env.PHONE_COUNTRY_CODE = '880';
-        process.env.PUBLIC_BASE_URL = 'https://dashboard.example.com';
         process.env.OTA_BASE_URL = 'https://ota.example.com';
 
         global.mqttService = {
@@ -163,7 +161,6 @@ describe('Settings routes', () => {
         }));
         expect(res.body.data.system).toEqual(expect.objectContaining({
             phoneCountryCode: '880',
-            publicBaseUrl: 'https://dashboard.example.com',
             otaBaseUrl: 'https://ota.example.com'
         }));
     });
@@ -235,7 +232,7 @@ describe('Settings routes', () => {
     test('POST /api/settings/system saves dashboard-side env settings', async () => {
         jest.spyOn(fs, 'existsSync').mockReturnValue(true);
         jest.spyOn(fs, 'readFileSync').mockReturnValue(
-            'PHONE_COUNTRY_CODE=1\nPUBLIC_BASE_URL=http://localhost:3001\nOTA_BASE_URL=\n'
+            'PHONE_COUNTRY_CODE=1\nOTA_BASE_URL=\n'
         );
         const writeSpy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
 
@@ -251,7 +248,6 @@ describe('Settings routes', () => {
             .send({
                 deviceName: 'Dashboard',
                 phoneCountryCode: '+880',
-                publicBaseUrl: 'https://dashboard.example.com/',
                 otaBaseUrl: 'https://ota.example.com/',
                 timezone: 'Asia/Dhaka',
                 logLevel: 'info',
@@ -269,18 +265,16 @@ describe('Settings routes', () => {
         expect(res.body.success).toBe(true);
         const nextEnv = writeSpy.mock.calls[0][1];
         expect(nextEnv).toContain('PHONE_COUNTRY_CODE=880');
-        expect(nextEnv).toContain('PUBLIC_BASE_URL=https://dashboard.example.com');
         expect(nextEnv).toContain('OTA_BASE_URL=https://ota.example.com');
         expect(res.body.data.system).toEqual(expect.objectContaining({
             phoneCountryCode: '880',
-            publicBaseUrl: 'https://dashboard.example.com',
             otaBaseUrl: 'https://ota.example.com'
         }));
     });
 
     test('POST /api/settings/system updates dashboard-owned runtime env keys when they exist in .env', async () => {
         jest.spyOn(fs, 'existsSync').mockReturnValue(true);
-        let envContent = 'DASHBOARD_DEVICE_STATUS_REFRESH_MS=60000\nLOG_RETENTION_DAYS=30\nLOG_LEVEL=info\nTZ=Asia/Dhaka\nPHONE_COUNTRY_CODE=880\nPUBLIC_BASE_URL=http://localhost:3001\nOTA_BASE_URL=\n';
+        let envContent = 'DASHBOARD_DEVICE_STATUS_REFRESH_MS=60000\nLOG_RETENTION_DAYS=30\nLOG_LEVEL=info\nTZ=Asia/Dhaka\nPHONE_COUNTRY_CODE=880\nOTA_BASE_URL=\n';
         jest.spyOn(fs, 'readFileSync').mockImplementation(() => envContent);
         const writeSpy = jest.spyOn(fs, 'writeFileSync').mockImplementation((_path, nextContent) => {
             envContent = nextContent;
@@ -303,7 +297,6 @@ describe('Settings routes', () => {
             .send({
                 deviceName: 'Dashboard',
                 phoneCountryCode: '+880',
-                publicBaseUrl: 'https://dashboard.example.com/',
                 otaBaseUrl: 'https://ota.example.com/',
                 timezone: 'Asia/Kolkata',
                 logLevel: 'warn',
@@ -360,7 +353,6 @@ describe('Settings routes', () => {
             .send({
                 deviceName: 'Dashboard',
                 phoneCountryCode: '+880',
-                publicBaseUrl: 'https://dashboard.example.com/',
                 otaBaseUrl: '',
                 timezone: 'Asia/Dhaka',
                 logLevel: 'error',
@@ -2564,7 +2556,10 @@ describe('rendered dashboard pages', () => {
         expect(html).not.toContain('Call Duration');
         expect(html).not.toContain('USSD Queries');
         expect(html).not.toContain('Check</span> Balance');
-        expect(html).toContain('Restart</span> Modem');
+        expect(html).not.toContain('Send</span> SMS');
+        expect(html).not.toContain('Detect</span> SIM Number');
+        expect(html).not.toContain('Restart</span> Modem');
+        expect(html).not.toContain('Quick Actions');
         expect(html).toContain('System Activity');
     });
 

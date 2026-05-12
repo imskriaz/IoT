@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const logger = require('../utils/logger');
 const { DEFAULT_DEVICE_ID } = require('../config/device');
 const { resolveDeviceId } = require('../utils/deviceResolver');
+const { resolveDeviceReachableBaseUrl } = require('../utils/publicBaseUrl');
 const { admin: adminMiddleware } = require('../middleware/auth');
 
 const FIRMWARE_DIR = path.join(__dirname, '../data/firmware');
@@ -65,43 +66,9 @@ function createDownloadSignature(filename, expires) {
         .digest('hex');
 }
 
-function isLoopbackHost(hostname) {
-    const normalized = String(hostname || '').trim().toLowerCase();
-    return ['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'].includes(normalized);
-}
-
-function configuredUrlIsReachableFromDevice(value) {
-    try {
-        const parsed = new URL(String(value || '').trim());
-        return !isLoopbackHost(parsed.hostname);
-    } catch (_) {
-        return false;
-    }
-}
-
 function getOtaBaseUrl(req) {
     const otaBaseUrl = String(process.env.OTA_BASE_URL || '').trim();
-    if (otaBaseUrl) {
-        return configuredUrlIsReachableFromDevice(otaBaseUrl)
-            ? otaBaseUrl.replace(/\/+$/, '')
-            : null;
-    }
-
-    const publicBaseUrl = String(process.env.PUBLIC_BASE_URL || '').trim();
-    if (publicBaseUrl && configuredUrlIsReachableFromDevice(publicBaseUrl)) {
-        return publicBaseUrl.replace(/\/+$/, '');
-    }
-
-    const host = req.get('host');
-    if (!host) return null;
-
-    const protocol = (req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
-    const hostname = host.replace(/:\d+$/, '').replace(/^\[/, '').replace(/\]$/, '');
-    if (isLoopbackHost(hostname)) {
-        return null;
-    }
-
-    return `${protocol}://${host}`;
+    return resolveDeviceReachableBaseUrl(req, { configured: otaBaseUrl });
 }
 
 function buildSignedFirmwareUrl(req, filename) {

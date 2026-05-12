@@ -17,6 +17,11 @@ const {
     getDeviceCapabilities,
     mergeCapabilities
 } = require('../utils/deviceCapabilities');
+const {
+    buildHttpSmsStatusSnapshot,
+    isHttpSmsDeviceLike,
+    readHttpSmsStatusSnapshot
+} = require('../utils/httpSmsDeviceStatus');
 const { readStoredSimRows, applyStoredSimFallback } = require('../services/storedSimService');
 const fs = require('fs');
 const path = require('path');
@@ -278,8 +283,18 @@ async function renderDashboardPage(req, res) {
         }
 
         // Check device connection status
-        const isDeviceConnected = !!(global.modemService &&
+        let activeHttpSmsStatus = null;
+        let isDeviceConnected = !!(global.modemService &&
                                   global.modemService.isDeviceOnline(deviceId));
+        if (!isDeviceConnected) {
+            activeHttpSmsStatus = await readHttpSmsStatusSnapshot(db, deviceId).catch(() => null);
+            if (activeHttpSmsStatus) {
+                isDeviceConnected = Boolean(activeHttpSmsStatus.online);
+                if (activeHttpSmsStatus.online && global.modemService?.updateDeviceStatus) {
+                    global.modemService.updateDeviceStatus(deviceId, activeHttpSmsStatus);
+                }
+            }
+        }
 
         // Keep recent SMS for legacy dashboard capture/tools while the UI reads conversations.
         const recentSmsConditions = ['device_id = ?'];
@@ -424,7 +439,8 @@ async function renderDashboardPage(req, res) {
         
         if (isDeviceConnected && global.modemService && typeof global.modemService.getDeviceStatus === 'function') {
             try {
-                const status = global.modemService.getDeviceStatus(deviceId);
+                const liveStatus = global.modemService.getDeviceStatus(deviceId);
+                const status = liveStatus?.online ? liveStatus : (activeHttpSmsStatus || liveStatus);
                 deviceStatus = dashboardStatusUtils.buildDashboardDeviceStatus({
                     ...status,
                     lastSeen: status.lastSeen || new Date().toISOString()
@@ -449,6 +465,10 @@ async function renderDashboardPage(req, res) {
             } catch (statusError) {
                 logger.error('Error getting modem status:', statusError);
             }
+        } else if (activeHttpSmsStatus) {
+            deviceStatus = dashboardStatusUtils.buildDashboardDeviceStatus(activeHttpSmsStatus, activeHttpSmsStatus.online);
+            const storedSimRows = await readStoredSimRows(db, deviceId).catch(() => []);
+            deviceStatus = applyStoredSimFallback(deviceStatus, storedSimRows);
         } else {
             logger.debug('Device not connected, showing offline status');
         }
@@ -590,24 +610,39 @@ async function renderDashboardPage(req, res) {
                 caps = mergeCapabilities(capabilityData.caps, caps);
             }
         } catch (_) {}
+        if (isHttpSmsDeviceLike(deviceStatus, { id: deviceId })) {
+            caps = {
+                ...caps,
+                sms: true,
+                calls: false,
+                ussd: false,
+                modem: false,
+                internet: false
+            };
+        }
 
         // Fetch all devices with online status for the device grid
         let allDevices = [];
         try {
             const rows = await db.all(`SELECT id, name, type, description FROM devices ORDER BY name ASC`);
-            allDevices = rows.map(d => {
-                const online = global.modemService && global.modemService.isDeviceOnline(d.id);
-                const st = (global.modemService && typeof global.modemService.getDeviceStatus === 'function')
+            allDevices = await Promise.all(rows.map(async d => {
+                const liveOnline = global.modemService && global.modemService.isDeviceOnline(d.id);
+                const liveStatus = (global.modemService && typeof global.modemService.getDeviceStatus === 'function')
                     ? global.modemService.getDeviceStatus(d.id) : {};
+                const httpSmsFallback = !liveOnline && isHttpSmsDeviceLike(d)
+                    ? (await readHttpSmsStatusSnapshot(db, d.id).catch(() => null) || buildHttpSmsStatusSnapshot(d))
+                    : null;
+                const st = liveStatus?.online ? liveStatus : (httpSmsFallback || liveStatus || {});
+                const online = Boolean(liveOnline || st?.online);
                 return {
                     id: d.id,
                     name: d.name || d.id,
                     type: d.type || 'esp32',
                     description: d.description || '',
-                    online: !!online,
+                    online,
                     ...dashboardStatusUtils.buildDashboardDeviceStatus(st, online),
                 };
-            });
+            }));
             allDevices = sortDashboardHomeDevices(allDevices, deviceId);
         } catch (devErr) { logger.warn('Could not load device grid:', devErr.message); }
 
@@ -1264,7 +1299,7 @@ router.get('/ota', async (req, res) => {
     try {
         const db = req.app.locals.db;
         const devices = await db.all(`SELECT id, name FROM devices ORDER BY name ASC`);
-        const configuredOtaBaseUrl = (process.env.OTA_BASE_URL || process.env.PUBLIC_BASE_URL || '').trim();
+        const configuredOtaBaseUrl = (process.env.OTA_BASE_URL || '').trim();
         res.render('pages/ota', {
             title: 'OTA Firmware Manager',
             user: getViewUser(req),

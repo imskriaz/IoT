@@ -101,6 +101,56 @@ describe('httpSmsAdapter routes', () => {
         }));
     });
 
+    test('POST /messages/send creates scheduled SMS when send_at is in the future', async () => {
+        const { queueSmsForDelivery } = require('../services/smsQueue');
+        const db = makeDbMock({
+            run: jest.fn().mockResolvedValue({ lastID: 72, changes: 1 })
+        });
+        const router = require('../routes/httpSmsAdapter');
+        const app = buildApp(router, db);
+        const sendAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+        const res = await request(app)
+            .post('/v1/messages/send')
+            .send({
+                from: '+8801555000000',
+                to: '+8801700000000',
+                content: 'Schedule through httpSMS',
+                send_at: sendAt,
+                request_id: 'schedule-1'
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toEqual(expect.objectContaining({
+            id: 'schedule-1',
+            contact: '+8801700000000',
+            status: 'pending',
+            scheduled_at: sendAt
+        }));
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO scheduled_sms'),
+            ['httpsms-01', '+8801700000000', 'Schedule through httpSMS', sendAt, null, 1]
+        );
+        expect(queueSmsForDelivery).not.toHaveBeenCalled();
+    });
+
+    test('POST /messages/send rejects MMS attachments instead of silently dropping them', async () => {
+        const router = require('../routes/httpSmsAdapter');
+        const app = buildApp(router, makeDbMock());
+
+        const res = await request(app)
+            .post('/v1/messages/send')
+            .send({
+                from: '+8801555000000',
+                to: '+8801700000000',
+                content: 'Has media',
+                attachments: ['https://example.com/photo.jpg']
+            });
+
+        expect(res.status).toBe(422);
+        expect(res.body.message).toContain('MMS attachments are not supported');
+    });
+
     test('POST /messages/receive stores inbound httpSMS payloads', async () => {
         const emit = jest.fn();
         const { attachSmsToConversation } = require('../services/smsConversations');
@@ -142,6 +192,34 @@ describe('httpSmsAdapter routes', () => {
             sim_slot: 1,
             encrypted: true
         }));
+    });
+
+    test('POST /messages/receive accepts official CloudEvents webhook payload shape', async () => {
+        const db = makeDbMock({
+            run: jest.fn().mockResolvedValue({ lastID: 52, changes: 1 })
+        });
+        const router = require('../routes/httpSmsAdapter');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/v1/messages/receive')
+            .send({
+                type: 'message.phone.received',
+                data: {
+                    contact: '+8801700000000',
+                    owner: '+8801555000000',
+                    content: 'Webhook inbound',
+                    message_id: 'incoming-cloud-1',
+                    sim: 'SIM1',
+                    timestamp: '2026-05-08T10:00:00.000Z'
+                }
+            });
+
+        expect(res.status).toBe(200);
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT OR IGNORE INTO sms'),
+            ['httpsms-01', '+8801700000000', '+8801555000000', 'Webhook inbound', '2026-05-08T10:00:00.000Z', 0, 'incoming-cloud-1', 0]
+        );
     });
 
     test('GET /messages/outstanding returns one queued message in httpSMS format and marks it sending', async () => {
@@ -209,9 +287,44 @@ describe('httpSmsAdapter routes', () => {
         expect(res.status).toBe(200);
         expect(db.run).toHaveBeenCalledWith(
             expect.stringContaining('UPDATE sms'),
-            ['delivered', 'delivered', '2026-05-08T10:01:00.000Z', 'delivered', 'httpSMS failed', 'httpsms-01', 'sms_pending', -1]
+            ['delivered', 'delivered', '2026-05-08T10:01:00.000Z', 'delivered', 'httpSMS delivered', 'httpsms-01', 'sms_pending', -1]
         );
         expect(refreshSmsConversationBySmsId).toHaveBeenCalledWith(db, 41);
+    });
+
+    test('POST /messages/:id/events accepts CloudEvents expired status', async () => {
+        const db = makeDbMock();
+        db.get
+            .mockResolvedValueOnce({ id: 'httpsms-01' })
+            .mockResolvedValueOnce({
+                id: 41,
+                external_id: 'sms_pending',
+                from_number: 'self',
+                to_number: '+8801700000000',
+                message: 'Send me',
+                status: 'expired',
+                timestamp: '2026-05-08T10:00:00.000Z'
+            });
+        const router = require('../routes/httpSmsAdapter');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/v1/messages/sms_pending/events')
+            .send({
+                type: 'message.send.expired',
+                data: {
+                    message_id: 'sms_pending',
+                    owner: '+8801555000000',
+                    timestamp: '2026-05-08T10:02:00.000Z'
+                }
+            });
+
+        expect(res.status).toBe(200);
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('UPDATE sms'),
+            ['expired', 'expired', '2026-05-08T10:02:00.000Z', 'expired', 'httpSMS expired', 'httpsms-01', 'sms_pending', -1]
+        );
+        expect(res.body.data.status).toBe('expired');
     });
 
     test('DELETE /messages/:id marks a message deleted for httpSMS clients', async () => {

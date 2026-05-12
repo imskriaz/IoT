@@ -460,6 +460,35 @@ describe('onboarding routes', () => {
         });
     });
 
+    test('uses the current public request URL for httpSMS onboarding', async () => {
+        const db = makeDbMock({
+            run: jest.fn().mockResolvedValue({ lastID: 91, changes: 1 })
+        });
+        const router = require('../routes/onboarding');
+        const app = buildApiApp(router, db);
+
+        await withEnv({
+            ANDROID_BRIDGE_PUBLIC_URL: '',
+            PUBLIC_BRIDGE_BASE_URL: ''
+        }, async () => {
+            const res = await request(app)
+                .post('/api/onboard/register')
+                .set('Host', 'd.atebd.com')
+                .set('X-Forwarded-Proto', 'https')
+                .send({
+                    device_id: 'httpsms-public-01',
+                    name: 'httpSMS Public',
+                    model: 'httpsms-bridge',
+                    bridge_type: 'httpsms'
+                });
+
+            expect(res.status).toBe(200);
+            expect(res.body.provisioning.setup.base_url).toBe('https://d.atebd.com');
+            expect(res.body.provisioning.setup.api_base_url).toBe('https://d.atebd.com/v1');
+            expect(res.body.provisioning.summary.server_url_https).toBe(true);
+        });
+    });
+
     test('rejects Android onboarding IDs without android prefix', async () => {
         const db = makeDbMock();
         const router = require('../routes/onboarding');

@@ -394,6 +394,63 @@ function getSimNumberDisplayValue(status, fallback = 'Checking...') {
     return value || fallback;
 }
 
+function getSimSlotNumber(slot) {
+    return String(
+        slot?.number
+        || slot?.simNumber
+        || slot?.sim_number
+        || slot?.subscriberNumber
+        || slot?.subscriber_number
+        || slot?.msisdn
+        || slot?.phoneNumber
+        || slot?.phone_number
+        || ''
+    ).trim();
+}
+
+function getActiveSimSlotIndex(status) {
+    const parsed = Number.parseInt(String(
+        status?.activeSimSlotIndex
+        ?? status?.sim?.activeSlotIndex
+        ?? status?.sim?.selectedSlotIndex
+        ?? status?.sim_active_slot
+        ?? status?.active_sim_slot
+        ?? status?.selected_sim_slot
+        ?? ''
+    ), 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function getSimNumbersDisplayValue(status, fallback = 'Checking...') {
+    const slots = normalizeDeviceSimSlots(status);
+    const reportedSlotCount = Number.parseInt(String(
+        status?.simSlotCount
+        ?? status?.sim_slot_count
+        ?? status?.sim?.slotCount
+        ?? ''
+    ), 10);
+    const slotCount = Math.max(
+        Number.isFinite(reportedSlotCount) ? reportedSlotCount : 0,
+        slots.length,
+        status?.dualSim === true || status?.sim?.dualSim === true ? 2 : 0
+    );
+
+    if (slotCount < 2) {
+        return getSimNumberDisplayValue(status, fallback);
+    }
+
+    const activeSlotIndex = getActiveSimSlotIndex(status);
+    const topLevelNumber = getSimNumberDisplayValue(status, '');
+    const labels = [];
+    for (let index = 0; index < Math.min(slotCount, 4); index += 1) {
+        const slot = slots.find((candidate) => candidate.slotIndex === index) || null;
+        const slotNumber = getSimSlotNumber(slot);
+        const number = slotNumber || (activeSlotIndex === index || (activeSlotIndex === null && index === 0) ? topLevelNumber : '');
+        labels.push(`SIM ${index + 1}: ${number || fallback}`);
+    }
+    return labels.join('  |  ');
+}
+
 function getDeviceHardwareIdentity(status, fallback = 'Not reported by device') {
     const androidId = status?.androidId
         || status?.android_id
@@ -461,6 +518,32 @@ function getActiveDeviceTypeLabel() {
     } catch (_) {
         return window.ACTIVE_DEVICE_TYPE || '';
     }
+}
+
+function isHttpSmsDeviceContext(status = latestDeviceStatus) {
+    const tokens = [
+        getActiveDeviceTypeLabel(),
+        status?.type,
+        status?.deviceType,
+        status?.device_type,
+        status?.model,
+        status?.bridge,
+        status?.bridge_type,
+        status?.app,
+        status?.platform,
+        status?.activePath,
+        status?.active_path,
+        status?.transport_mode,
+        status?.bridge_transport,
+        getStatusActiveDeviceId()
+    ].map(value => String(value ?? '').trim().toLowerCase()).filter(Boolean);
+
+    return tokens.some(token => (
+        token === 'httpsms'
+        || token === 'httpsms-bridge'
+        || token.includes('httpsms')
+        || (token.includes('http') && token.includes('sms'))
+    ));
 }
 
 function isEsp32LikeStatus(status = {}) {
@@ -564,6 +647,8 @@ function normalizeDeviceSimSlots(status) {
                 operatorName: String(slot.operatorName || slot.operator || slot.carrierName || slot.carrier_name || '').trim(),
                 number: String(
                     slot.number
+                    || slot.simNumber
+                    || slot.sim_number
                     || slot.subscriberNumber
                     || slot.subscriber_number
                     || slot.msisdn
@@ -646,16 +731,7 @@ function formatSimSelectorLabel(slot) {
         || slot.display_name
         || ''
     ).trim();
-    const number = String(
-        slot.number
-        || slot.simNumber
-        || slot.subscriberNumber
-        || slot.subscriber_number
-        || slot.msisdn
-        || slot.phoneNumber
-        || slot.phone_number
-        || ''
-    ).trim();
+    const number = getSimSlotNumber(slot);
     if (carrier) parts.push(carrier);
     if (number) parts.push(number);
     if (!parts.length) parts.push(`SIM ${Number(slot.slotIndex || 0) + 1}`);
@@ -1859,7 +1935,9 @@ function updateTopBarStatus() {
 
     const hasActiveDevice = hasActiveDeviceContext();
     const activeDeviceOnline = hasActiveDevice ? inferStatusOnline(latestDeviceStatus) : false;
-    const allOk = window._serverConnected && window._mqttConnected && activeDeviceOnline;
+    const mqttRequired = hasActiveDevice && !isHttpSmsDeviceContext(latestDeviceStatus);
+    const mqttOk = !mqttRequired || window._mqttConnected;
+    const allOk = window._serverConnected && mqttOk && activeDeviceOnline;
     if (!hasActiveDevice) {
         dot.style.background = '#6c757d';
         label.textContent = window._serverConnected ? 'No Device Selected' : 'Disconnected';
@@ -1871,8 +1949,10 @@ function updateTopBarStatus() {
             label.textContent = 'All Operational';
         } else if (!window._serverConnected) {
             label.textContent = 'Dashboard Socket Down';
-        } else if (!window._mqttConnected) {
+        } else if (!mqttOk) {
             label.textContent = 'MQTT Offline';
+        } else if (isHttpSmsDeviceContext(latestDeviceStatus)) {
+            label.textContent = 'Phone Offline';
         } else {
             label.textContent = 'Device Offline';
         }
@@ -1890,9 +1970,15 @@ function updateTopBarStatus() {
     }
     if (panelMqtt) {
         const mqttState = normalizeMQTTStatus(window._mqttStatus || window._mqttConnected);
-        panelMqtt.textContent = mqttState.label;
-        panelMqtt.title = mqttState.lastError ? `MQTT: ${mqttState.lastError}` : '';
-        panelMqtt.style.color = mqttState.connected ? '#22c55e' : (mqttState.connecting || mqttState.reconnecting ? '#f59e0b' : '#ef4444');
+        if (hasActiveDevice && isHttpSmsDeviceContext(latestDeviceStatus)) {
+            panelMqtt.textContent = 'HTTP lane';
+            panelMqtt.title = 'httpSMS uses the HTTP adapter, not the MQTT device lane.';
+            panelMqtt.style.color = '#22c55e';
+        } else {
+            panelMqtt.textContent = mqttState.label;
+            panelMqtt.title = mqttState.lastError ? `MQTT: ${mqttState.lastError}` : '';
+            panelMqtt.style.color = mqttState.connected ? '#22c55e' : (mqttState.connecting || mqttState.reconnecting ? '#f59e0b' : '#ef4444');
+        }
     }
     if (panelDevice) {
         panelDevice.textContent = hasActiveDevice ? (activeDeviceOnline ? 'Online' : 'Offline') : 'No device';
@@ -2097,7 +2183,7 @@ function updateDeviceMetrics(status) {
         ? (selectedSim?.operatorName || selectedSim?.displayName || status.operator || '---')
         : '---';
     const simNumberLabel = status.online
-        ? (selectedSim?.number || getSimNumberDisplayValue(status))
+        ? getSimNumbersDisplayValue(status)
         : '---';
 
     // Update signal
@@ -2153,7 +2239,10 @@ function updateDeviceMetrics(status) {
     if (pn) pn.textContent = getStatusNetworkLabel(status);
     if (pu) pu.textContent = status.uptime || '---';
     if (po) po.textContent = operatorLabel;
-    if (psn) psn.textContent = simNumberLabel;
+    if (psn) {
+        psn.textContent = simNumberLabel;
+        psn.setAttribute('title', simNumberLabel);
+    }
     // Update compact strip
     const smSig = document.getElementById('smSignal');
     const smSigBar = document.getElementById('smSignalBar');
@@ -2262,7 +2351,11 @@ function updateDashboardCards(status) {
     const dashSimNumber = document.getElementById('dashSimNumber');
     const dashCurrentIp = document.getElementById('dashCurrentIp');
     if (dashOperator) dashOperator.textContent = isOnline ? (selectedSim?.operatorName || selectedSim?.displayName || status?.operator || 'Not reported') : '-';
-    if (dashSimNumber) dashSimNumber.textContent = isOnline ? (selectedSim?.number || getSimNumberDisplayValue(status)) : '-';
+    if (dashSimNumber) {
+        const simNumbersText = isOnline ? getSimNumbersDisplayValue(status) : '-';
+        dashSimNumber.textContent = simNumbersText;
+        dashSimNumber.setAttribute('title', simNumbersText);
+    }
     if (dashCurrentIp) dashCurrentIp.textContent = isOnline ? (status?.ip || 'N/A') : '-';
     maybeAutoDetectSimNumber(status);
 

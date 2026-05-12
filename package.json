@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "start":     "cd dashboard && node server.js",
-    "dev":       "cd dashboard && npx nodemon server.js",
+    "dev":       "cd dashboard && node server.js",
     "test":      "cd dashboard && npm test",
     "cloudflare": "node server/cloudflare-tunnel.js",
     "server": "node server/share-tunnel.js",

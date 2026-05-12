@@ -190,7 +190,6 @@
         setValue('statusWatchTtlSeconds', system.statusWatchTtlSeconds || Math.round(Number(system.statusWatchTtlMs || 180000) / 1000));
         setValue('statusWatchRefreshSeconds', system.statusWatchRefreshSeconds || Math.round(Number(system.statusWatchRefreshMs || 120000) / 1000));
         setValue('logRetentionDays', system.logRetentionDays || 30);
-        setValue('systemPublicBaseUrl', system.publicBaseUrl || '');
         setValue('systemOtaBaseUrl', system.otaBaseUrl || '');
 
         setSource('systemTimezoneSource', effective.timezone, 'Saved in dashboard settings');
@@ -201,8 +200,7 @@
         setSource('statusWatchTtlSource', effective.statusWatchTtlMs, 'How long the device keeps the temporary watch alive.');
         setSource('statusWatchRefreshSource', effective.statusWatchRefreshMs, 'How often the dashboard renews the device watch command.');
         setSource('logRetentionSource', effective.logRetentionDays, 'Saved in dashboard settings');
-        setSource('systemPublicBaseUrlSource', effective.publicBaseUrl, 'Used when the dashboard must generate public links.');
-        setSource('systemOtaBaseUrlSource', effective.otaBaseUrl, 'Override this if devices cannot reach the dashboard URL directly.');
+        setSource('systemOtaBaseUrlSource', effective.otaBaseUrl, 'Optional. Current dashboard URL is used for normal public links.');
 
         setText('systemHostname', system.hostname || '-');
         setText('systemNodeVersion', system.nodeVersion || '-');
@@ -218,7 +216,6 @@
             { key: 'statusWatchTtlMs', ids: ['statusWatchTtlSeconds'] },
             { key: 'statusWatchRefreshMs', ids: ['statusWatchRefreshSeconds'] },
             { key: 'logRetentionDays', ids: ['logRetentionDays'] },
-            { key: 'publicBaseUrl', ids: ['systemPublicBaseUrl'] },
             { key: 'otaBaseUrl', ids: ['systemOtaBaseUrl'] }
         ]);
 
@@ -400,7 +397,6 @@
         return {
             deviceName: currentSystem.deviceName || 'Dashboard',
             phoneCountryCode: $('systemPhoneCountryCode')?.value?.trim() || '',
-            publicBaseUrl: $('systemPublicBaseUrl')?.value?.trim() || '',
             otaBaseUrl: $('systemOtaBaseUrl')?.value?.trim() || '',
             timezone: $('systemTimezone')?.value?.trim() || 'UTC',
             logLevel: $('systemLogLevel')?.value || 'info',

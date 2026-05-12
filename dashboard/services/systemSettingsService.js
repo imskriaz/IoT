@@ -230,11 +230,6 @@ function buildEnvironmentSummary(effective) {
             envNames: ['PHONE_COUNTRY_CODE']
         },
         {
-            key: 'publicBaseUrl',
-            label: 'Public base URL',
-            envNames: ['PUBLIC_BASE_URL']
-        },
-        {
             key: 'otaBaseUrl',
             label: 'OTA base URL',
             envNames: ['OTA_BASE_URL']
@@ -363,14 +358,6 @@ async function getEffectiveSystemSettings(db) {
         dashboardEnv
     });
 
-    const publicBaseUrl = resolveValue({
-        envNames: ['PUBLIC_BASE_URL'],
-        storedValue: undefined,
-        defaultValue: '',
-        parser: value => normalizeUrl(value),
-        dashboardEnv
-    });
-
     const otaBaseUrl = resolveValue({
         envNames: ['OTA_BASE_URL'],
         storedValue: undefined,
@@ -431,7 +418,6 @@ async function getEffectiveSystemSettings(db) {
         logLevel,
         timezone,
         phoneCountryCode,
-        publicBaseUrl,
         otaBaseUrl,
         mqttHost,
         mqttPort,
@@ -452,7 +438,6 @@ async function getEffectiveSystemSettings(db) {
             hostname: os.hostname(),
             timezone: timezone.value,
             phoneCountryCode: phoneCountryCode.value,
-            publicBaseUrl: publicBaseUrl.value,
             otaBaseUrl: otaBaseUrl.value,
             logLevel: logLevel.value,
             autoRestart: system.autoRestart ?? DEFAULTS.autoRestart,

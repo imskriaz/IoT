@@ -52,7 +52,7 @@
                 <span class="app-hidden badge bg-danger rounded-pill" id="unreadSmsBadge">0</span>
             </a>
         </li>
-        <li class="nav-item" data-device-nav="true" data-nav-section="communication" data-cap-any="calls,modem">
+        <li class="nav-item" data-device-nav="true" data-nav-section="communication" data-cap-any="calls,modem" data-hide-device-type="httpsms">
             <a href="/calls" class="nav-link <%= title === 'Call Management' ? 'active' : '' %>">
                 <i class="bi bi-telephone"></i>
                 <span>Calls</span>
@@ -64,13 +64,13 @@
                 <span>Contacts</span>
             </a>
         </li>
-        <li class="nav-item" data-device-nav="true" data-nav-section="communication" data-cap-any="ussd,modem">
+        <li class="nav-item" data-device-nav="true" data-nav-section="communication" data-cap-any="ussd,modem" data-hide-device-type="httpsms">
             <a href="/ussd" class="nav-link <%= title === 'USSD Services' ? 'active' : '' %>">
                 <i class="bi bi-telephone-forward"></i>
                 <span>USSD</span>
             </a>
         </li>
-        <li class="nav-item" data-device-nav="true" data-nav-section="communication" data-cap-any="internet,wifi,modem" data-hide-device-type="android">
+        <li class="nav-item" data-device-nav="true" data-nav-section="communication" data-cap-any="internet,wifi,modem" data-hide-device-type="android,httpsms">
             <a href="/modem" class="nav-link <%= title === 'Modem Control' ? 'active' : '' %>">
                 <i class="bi bi-wifi"></i>
                 <span>Internet</span>

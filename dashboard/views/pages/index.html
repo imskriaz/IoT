@@ -1,3 +1,60 @@
+<%
+    const formatSimSlotNumber = function(slot) {
+        return String(
+            (slot && (
+                slot.number
+                || slot.simNumber
+                || slot.sim_number
+                || slot.subscriberNumber
+                || slot.subscriber_number
+                || slot.msisdn
+                || slot.phoneNumber
+                || slot.phone_number
+            )) || ''
+        ).trim();
+    };
+    const formatSimNumbersDisplay = function(status, fallback) {
+        const safeFallback = fallback || 'Checking...';
+        const slots = Array.isArray(status && status.simSlots)
+            ? status.simSlots
+            : (Array.isArray(status && status.sim && status.sim.slots) ? status.sim.slots : []);
+        const reportedSlotCount = Number.parseInt(String(
+            (status && (status.simSlotCount || status.sim_slot_count))
+            || (status && status.sim && status.sim.slotCount)
+            || ''
+        ), 10);
+        const slotCount = Math.max(
+            Number.isFinite(reportedSlotCount) ? reportedSlotCount : 0,
+            slots.length,
+            status && (status.dualSim || (status.sim && status.sim.dualSim)) ? 2 : 0
+        );
+        const singleValue = String(
+            (status && (
+                status.simNumber
+                || status.sim_number
+                || status.subscriberNumber
+                || status.subscriber_number
+                || (status.sim && (status.sim.number || status.sim.subscriberNumber))
+            )) || ''
+        ).trim();
+        if (slotCount < 2) {
+            return singleValue || safeFallback;
+        }
+        const activeSlotIndexValue = status
+            ? (status.activeSimSlotIndex ?? status.sim_active_slot ?? (status.sim ? (status.sim.activeSlotIndex ?? status.sim.selectedSlotIndex) : ''))
+            : '';
+        const activeSlotIndex = Number.parseInt(String(activeSlotIndexValue), 10);
+        const labels = [];
+        for (let index = 0; index < Math.min(slotCount, 4); index += 1) {
+            const slot = slots.find(function(candidate) { return Number(candidate && candidate.slotIndex) === index; }) || null;
+            const slotNumber = formatSimSlotNumber(slot);
+            const number = slotNumber || ((Number.isFinite(activeSlotIndex) && activeSlotIndex === index) || (!Number.isFinite(activeSlotIndex) && index === 0) ? singleValue : '');
+            labels.push('SIM ' + (index + 1) + ': ' + (number || safeFallback));
+        }
+        return labels.join('  |  ');
+    };
+    const initialSimNumberDisplay = isDeviceConnected ? formatSimNumbersDisplay(deviceStatus, 'Checking...') : '-';
+%>
 <!-- Dashboard Overview -->
 <div class="d-flex flex-column flex-sm-row justify-content-between align-items-start align-items-sm-center mb-3 gap-2">
     <h2 class="mb-0">
@@ -21,6 +78,24 @@
 <% if (allDevices && allDevices.length > 0) { %>
 <div class="row g-3 mb-4">
     <% allDevices.forEach(function(d) { %>
+    <%
+        const deviceCardTypeText = String(d.type || d.deviceType || d.board || d.app || d.id || '').toLowerCase();
+        const deviceCardIsHttpSms = deviceCardTypeText.includes('httpsms') || (deviceCardTypeText.includes('http') && deviceCardTypeText.includes('sms'));
+        const deviceCardActiveLabel = deviceCardIsHttpSms ? 'Lane' : 'Active';
+        const deviceCardCurrentLabel = deviceCardIsHttpSms ? 'App' : 'Current';
+        const deviceCardSignalLabel = deviceCardIsHttpSms ? 'Status' : 'Signal';
+        const deviceCardActiveValue = deviceCardIsHttpSms
+            ? 'HTTP'
+            : (d.activePathLabel || (d.activePath === 'wifi' ? 'Wi-Fi' : (d.activePath === 'modem' ? 'Modem' : (d.network || 'Not reported'))));
+        const deviceCardCurrentValue = deviceCardIsHttpSms
+            ? (d.app || d.platform || 'httpSMS')
+            : (d.activePath === 'wifi' ? (d.wifiSsid || d.currentNetworkName || 'Not reported') : (d.operator || d.currentNetworkName || d.displayName || 'Not reported'));
+        const deviceCardSignalValue = deviceCardIsHttpSms
+            ? (d.online ? 'Online' : 'Offline')
+            : (d.activePath === 'wifi'
+                ? (d.wifiSignal !== null && d.wifiSignal !== undefined ? d.wifiSignal + '%' : 'N/A')
+                : (d.cellularSignal !== null && d.cellularSignal !== undefined ? d.cellularSignal + '%' : (d.signal !== null && d.signal !== undefined ? d.signal + '%' : 'N/A')));
+    %>
     <div class="col-12 col-sm-6 col-md-4 col-lg-3">
         <div class="card h-100 border-<%= d.online ? 'success' : 'secondary' %> hover-effect" <%= d.id === (deviceId || '') ? 'id="activeDeviceCard"' : '' %>>
             <div class="card-body">
@@ -34,16 +109,16 @@
                 <% if (d.online) { %>
                 <div class="row g-1 small mb-2">
                     <div class="col-4">
-                        <div class="text-muted">Active</div>
-                        <div class="fw-semibold active-card-primary"><%= d.activePathLabel || (d.activePath === 'wifi' ? 'Wi-Fi' : (d.activePath === 'modem' ? 'Modem' : (d.network || 'Not reported'))) %></div>
+                        <div class="text-muted"><%= deviceCardActiveLabel %></div>
+                        <div class="fw-semibold active-card-primary"><%= deviceCardActiveValue %></div>
                     </div>
                     <div class="col-4">
-                        <div class="text-muted">Current</div>
-                        <div class="fw-semibold text-truncate active-card-current" title="<%= d.activePath === 'wifi' ? (d.wifiSsid || d.currentNetworkName || 'Not reported') : (d.operator || d.currentNetworkName || d.displayName || 'Not reported') %>"><%= d.activePath === 'wifi' ? (d.wifiSsid || d.currentNetworkName || 'Not reported') : (d.operator || d.currentNetworkName || d.displayName || 'Not reported') %></div>
+                        <div class="text-muted"><%= deviceCardCurrentLabel %></div>
+                        <div class="fw-semibold text-truncate active-card-current" title="<%= deviceCardCurrentValue %>"><%= deviceCardCurrentValue %></div>
                     </div>
                     <div class="col-4">
-                        <div class="text-muted">Signal</div>
-                        <div class="fw-semibold active-card-signal"><%= d.activePath === 'wifi' ? (d.wifiSignal !== null ? d.wifiSignal + '%' : 'N/A') : (d.cellularSignal !== null ? d.cellularSignal + '%' : (d.signal !== null ? d.signal + '%' : 'N/A')) %></div>
+                        <div class="text-muted"><%= deviceCardSignalLabel %></div>
+                        <div class="fw-semibold active-card-signal"><%= deviceCardSignalValue %></div>
                     </div>
                     <% if (d.ip) { %>
                     <div class="col-12">
@@ -189,13 +264,15 @@
     </div>
 <% } %>
 <%
-    const homeCaps = caps || {};
-    const showSmsUi = Boolean(homeCaps.sms);
-    const showCallsUi = Boolean(homeCaps.calls);
+    const isHttpSmsLane = homeDeviceLane === 'httpSMS';
+    const homeCaps = isHttpSmsLane
+        ? { ...(caps || {}), sms: true, calls: false, ussd: false, modem: false, internet: false }
+        : (caps || {});
+    const showSmsUi = isHttpSmsLane || Boolean(homeCaps.sms);
+    const showCallsUi = !isHttpSmsLane && Boolean(homeCaps.calls);
     const showCallsCard = showCallsUi;
-    const showUssdUi = Boolean(homeCaps.ussd);
-    const showModemUi = Boolean(homeCaps.modem || homeCaps.internet);
-    const showQuickActions = showSmsUi || showUssdUi || showModemUi;
+    const showUssdUi = !isHttpSmsLane && Boolean(homeCaps.ussd);
+    const showModemUi = !isHttpSmsLane && Boolean(homeCaps.modem || homeCaps.internet);
     const showSecondCommunicationCard = showCallsCard;
     const activityColumnClass = showSmsUi && showSecondCommunicationCard ? 'col-12 col-lg-4' : ((showSmsUi || showSecondCommunicationCard) ? 'col-12 col-lg-6' : 'col-12');
     const communicationColumnClass = showSmsUi && showSecondCommunicationCard ? 'col-12 col-lg-4' : 'col-12 col-lg-6';
@@ -229,9 +306,147 @@
         : '-';
     const homeOfflinePlaceholder = '-';
     const homeOfflineMeta = 'Waiting for device heartbeat';
+    const homeLastSeenLabel = deviceStatus.lastSeen
+        ? moment(deviceStatus.lastSeen).fromNow()
+        : (isDeviceConnected ? 'Just now' : 'No heartbeat yet');
+    const homeHttpSmsPhoneLabel = deviceStatus.simNumber || deviceStatus.sim?.number || deviceStatus.subscriberNumber || 'Not reported';
+    const homeHttpSmsQueueOpen = Number(homeDashboardSummary.totalOpen || 0);
+    const homeHttpSmsQueueLabel = homeHttpSmsQueueOpen > 0
+        ? `${Number(homeDashboardSummary.pending || 0)} pending`
+        : 'Idle';
+    const homeHttpSmsRecentLabel = homeDashboardRecent.length > 0
+        ? `${homeDashboardRecent[0].command || 'SMS'} ${homeDashboardRecent[0].status || 'queued'}`
+        : 'No recent pickup';
 %>
 
 <!-- Status Cards Row -->
+<% if (isHttpSmsLane) { %>
+<div class="row g-2 mb-3 dashboard-overview dashboard-http-sms-overview">
+    <div class="col-12 col-md-6 col-xl-3 order-1">
+        <div id="dashHttpSmsStatusCard" class="card <%= isDeviceConnected ? 'border-success' : 'border-secondary' %> h-100">
+            <div class="card-body dashboard-card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="dashboard-kpi-label text-muted fw-semibold">Phone App</div>
+                        <div class="dashboard-hero" id="dashHttpSmsStatusValue"><%= isDeviceConnected ? 'Online' : 'Offline' %></div>
+                        <div class="dashboard-subtext" id="dashHttpSmsStatusMeta">HTTP adapter</div>
+                    </div>
+                    <div class="<%= isDeviceConnected ? 'bg-success' : 'bg-secondary' %> bg-opacity-10 p-2 rounded-circle" id="dashHttpSmsStatusIconWrap">
+                        <i class="bi bi-phone fs-4 <%= isDeviceConnected ? 'text-success' : 'text-secondary' %>" id="dashHttpSmsStatusIcon"></i>
+                    </div>
+                </div>
+                <div class="dashboard-card-section">
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Last seen</span>
+                        <span class="fw-semibold text-end" id="dashHttpSmsLastSeen"><%= homeLastSeenLabel %></span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Transport</span>
+                        <span class="fw-semibold text-end">HTTP</span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">App</span>
+                        <span class="fw-semibold text-end">httpSMS</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-md-6 col-xl-3 order-2">
+        <div class="card border-primary h-100">
+            <div class="card-body dashboard-card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="dashboard-kpi-label text-muted fw-semibold">SMS Traffic</div>
+                        <div class="dashboard-hero" id="dashHttpSmsTotalSms"><%= Number(dataUsage.smsSent || 0) + Number(dataUsage.smsReceived || 0) %></div>
+                        <div class="dashboard-subtext">messages</div>
+                    </div>
+                    <div class="bg-primary bg-opacity-10 p-2 rounded-circle">
+                        <i class="bi bi-chat-dots fs-4 text-primary"></i>
+                    </div>
+                </div>
+                <div class="dashboard-card-section">
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Sent</span>
+                        <span class="fw-semibold text-end"><%= dataUsage.smsSent || 0 %></span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Received</span>
+                        <span class="fw-semibold text-end"><%= dataUsage.smsReceived || 0 %></span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Unread</span>
+                        <span class="fw-semibold text-end"><%= unreadCount || 0 %></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-md-6 col-xl-3 order-3">
+        <div class="card <%= homeHttpSmsQueueOpen > 0 ? 'border-warning' : 'border-info' %> h-100">
+            <div class="card-body dashboard-card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="dashboard-kpi-label text-muted fw-semibold">Pickup Queue</div>
+                        <div class="dashboard-hero" id="dashHttpSmsQueueValue"><%= homeHttpSmsQueueOpen %></div>
+                        <div class="dashboard-subtext" id="dashHttpSmsQueueMeta"><%= homeHttpSmsQueueLabel %></div>
+                    </div>
+                    <div class="<%= homeHttpSmsQueueOpen > 0 ? 'bg-warning' : 'bg-info' %> bg-opacity-10 p-2 rounded-circle">
+                        <i class="bi bi-list-task fs-4 <%= homeHttpSmsQueueOpen > 0 ? 'text-warning' : 'text-info' %>"></i>
+                    </div>
+                </div>
+                <div class="dashboard-card-section">
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Active</span>
+                        <span class="fw-semibold text-end" id="dashHttpSmsQueueActive"><%= Number(homeDashboardSummary.active || 0) %></span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Failed</span>
+                        <span class="fw-semibold text-end" id="dashHttpSmsQueueFailed"><%= Number(homeDashboardSummary.failed || 0) %></span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Recent</span>
+                        <span class="fw-semibold text-end text-truncate" id="dashHttpSmsQueueRecent" title="<%= homeHttpSmsRecentLabel %>"><%= homeHttpSmsRecentLabel %></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-md-6 col-xl-3 order-4">
+        <div class="card border-secondary h-100">
+            <div class="card-body dashboard-card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="dashboard-kpi-label text-muted fw-semibold">Setup</div>
+                        <div class="dashboard-hero">Ready</div>
+                        <div class="dashboard-subtext">app key lane</div>
+                    </div>
+                    <div class="bg-secondary bg-opacity-10 p-2 rounded-circle">
+                        <i class="bi bi-qr-code fs-4 text-secondary"></i>
+                    </div>
+                </div>
+                <div class="dashboard-card-section">
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Phone</span>
+                        <span class="fw-semibold text-end text-truncate" id="dashHttpSmsPhone" title="<%= homeHttpSmsPhoneLabel %>"><%= homeHttpSmsPhoneLabel %></span>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Settings</span>
+                        <a class="fw-semibold text-end text-decoration-none" href="/devices/settings" data-device-aware-href="/devices/settings">Open</a>
+                    </div>
+                    <div class="dashboard-meta-row">
+                        <span class="text-muted">Messages</span>
+                        <a class="fw-semibold text-end text-decoration-none" href="/sms" data-device-aware-href="/sms">View</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<% } else { %>
 <div class="row g-2 mb-3 dashboard-overview">
     <!-- Wi-Fi Card -->
     <div class="col-12 col-md-6 col-xl-3 order-1">
@@ -304,7 +519,7 @@
                     </div>
                     <div class="dashboard-meta-row">
                         <span class="text-muted">SIM Number</span>
-                        <span class="fw-semibold text-end" id="dashSimNumber"><%= isDeviceConnected ? (deviceStatus.simNumber || deviceStatus.sim?.number || 'Checking...') : '-' %></span>
+                        <span class="fw-semibold text-end dashboard-sim-number-value" id="dashSimNumber" title="<%= initialSimNumberDisplay %>"><%= initialSimNumberDisplay %></span>
                     </div>
                     <div class="dashboard-meta-row">
                         <span class="text-muted">IP</span>
@@ -491,44 +706,6 @@
         </div>
     </div>
 </div>
-
-<!-- Quick Actions -->
-<% if (showQuickActions) { %>
-<div id="dashboardQuickActionsCard" class="card mb-4 <%= isDeviceConnected ? '' : 'border-secondary' %>">
-    <div class="card-header bg-white py-3">
-        <h5 class="mb-0 fs-6 fw-semibold">
-            <i class="bi bi-lightning-charge me-2"></i>Quick Actions
-        </h5>
-    </div>
-    <div class="card-body">
-        <div class="d-flex flex-wrap gap-2">
-            <% if (showSmsUi) { %>
-            <button type="button" class="btn btn-outline-primary flex-fill" data-bs-toggle="modal"
-                data-bs-target="#sendSmsModal" data-cap="sms" <%= isDeviceConnected ? '' : 'disabled aria-disabled="true"' %>>
-                <i class="bi bi-chat-dots me-2"></i>
-                <span class="d-none d-sm-inline">Send</span> SMS
-            </button>
-            <% } %>
-            <% if (showUssdUi) { %>
-            <button type="button" class="btn btn-outline-success flex-fill" onclick="quickBalance()" data-cap="ussd" <%= isDeviceConnected ? '' : 'disabled aria-disabled="true"' %>>
-                <i class="bi bi-cash-stack me-2"></i>
-                <span class="d-none d-sm-inline">Check</span> Balance
-            </button>
-            <button type="button" class="btn btn-outline-info flex-fill" onclick="quickSimNumber()" data-cap="ussd" <%= isDeviceConnected ? '' : 'disabled aria-disabled="true"' %>>
-                <i class="bi bi-sim me-2"></i>
-                <span class="d-none d-sm-inline">Detect</span> SIM Number
-            </button>
-            <% } %>
-            <% if (showModemUi) { %>
-            <button type="button" class="btn btn-outline-warning flex-fill" onclick="restartModem()" data-cap="modem" <%= isDeviceConnected ? '' : 'disabled aria-disabled="true"' %>>
-                <i class="bi bi-arrow-repeat me-2"></i>
-                <span class="d-none d-sm-inline">Restart</span> Modem
-            </button>
-            <% } %>
-        </div>
-        <div id="dashboardQuickActionsOfflineNote" class="small text-muted mt-3 <%= isDeviceConnected ? 'd-none' : '' %>"><%= homeOfflineMeta %></div>
-    </div>
-</div>
 <% } %>
 
 <!-- Recent Activity Row - Always show (cached data) -->
@@ -604,8 +781,8 @@
     </div>
     <% } %>
 
-    <!-- Recent Calls -->
     <% if (showCallsCard) { %>
+    <!-- Recent Calls -->
     <div class="<%= communicationColumnClass %>" data-cap="calls">
         <div class="card h-100 dashboard-list">
             <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
@@ -723,6 +900,7 @@
                             <%= homeDashboardQueueText %>
                         </span>
                     </div>
+                    <% if (!isHttpSmsLane) { %>
                     <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0">
                         <div>
                             <i class="bi bi-arrow-down-up text-info me-2"></i>
@@ -741,6 +919,7 @@
                             <%= homeStorageQueueText %>
                         </span>
                     </div>
+                    <% } %>
                     <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0">
                         <div>
                             <i class="bi bi-clock-history text-secondary me-2"></i>
@@ -773,57 +952,6 @@
     </div>
 </div>
 
-<!-- Send SMS Modal -->
-<% if (showSmsUi) { %>
-<div class="modal fade" id="sendSmsModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-chat-dots me-2"></i>Send SMS
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <form id="quickSmsForm">
-                    <div class="mb-3">
-                        <label class="form-label">Phone Number</label>
-                        <div class="input-group">
-                            <span class="input-group-text">+88</span>
-                            <input type="tel" class="form-control" name="to" placeholder="1712345678"
-                                pattern="[0-9]{10}" title="Please enter a 10-digit number" required>
-                        </div>
-                        <small class="text-muted">Enter 10-digit number without country code</small>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Message</label>
-                        <textarea class="form-control" name="message" rows="4"
-                            placeholder="Type your message..." required></textarea>
-                        <div class="d-flex justify-content-between mt-1">
-                            <small class="text-muted">
-                                <i class="bi bi-info-circle me-1"></i>
-                                Multipart SMS up to 1023 UTF-8 bytes and 15 parts
-                            </small>
-                            <small class="text-muted">
-                                <span id="charCount">0</span> chars
-                                <span class="ms-2"><span id="charBytes">0</span>/1023 bytes</span>
-                                <span class="ms-2" id="charParts">(1 part, GSM-7)</span>
-                            </small>
-                        </div>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="quickSendSms">
-                    <span class="spinner-border spinner-border-sm d-none" role="status"></span>
-                    Send SMS
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-<% } %>
 <% } %>
 
 <script>
@@ -882,104 +1010,6 @@
         window.location.assign(`${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
     }
 
-    function quickBalance() {
-        if (window.__dashboardLiveOnline === false) {
-            alert('Device is offline. Cannot check balance.');
-            return;
-        }
-        const simContext = window.getActiveDeviceSimContext ? window.getActiveDeviceSimContext() : {};
-        fetch('/api/quick/balance', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(simContext)
-        })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert('Balance check initiated. Check USSD history for response.');
-                } else {
-                    alert('Failed to check balance: ' + data.message);
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('Error checking balance');
-            });
-    }
-
-    function quickSimNumber() {
-        if (window.__dashboardLiveOnline === false) {
-            alert('Device is offline. Cannot detect SIM number.');
-            return;
-        }
-        const simContext = window.getActiveDeviceSimContext ? window.getActiveDeviceSimContext() : {};
-        fetch('/api/quick/sim-number', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(simContext)
-        })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert(data.message + '. Check USSD history if it takes a moment.');
-                } else {
-                    alert('Failed to detect SIM number: ' + data.message);
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('Error detecting SIM number');
-            });
-    }
-
-    function restartModem() {
-        if (window.__dashboardLiveOnline === false) {
-            alert('Device is offline. Cannot restart modem.');
-            return;
-        }
-        if (confirm('Restart modem? This will disconnect your internet connection temporarily.')) {
-            fetch('/api/quick/restart-modem', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        alert('Modem restart command sent');
-                    } else {
-                        alert('Failed to restart modem: ' + data.message);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('Error restarting modem');
-                });
-        }
-    }
-
-    // Character counter
-    document.addEventListener('DOMContentLoaded', function () {
-        const textarea = document.querySelector('#quickSmsForm textarea');
-        const charCount = document.getElementById('charCount');
-        const charBytes = document.getElementById('charBytes');
-        const charParts = document.getElementById('charParts');
-
-        if (textarea && charCount && window.smsComposeLimits) {
-            const updateCounter = function () {
-                const clamped = window.smsComposeLimits.clamp(textarea.value);
-                if (clamped !== textarea.value) {
-                    textarea.value = clamped;
-                }
-                const analysis = window.smsComposeLimits.analyze(textarea.value);
-                charCount.textContent = String(analysis.characters);
-                if (charBytes) charBytes.textContent = String(analysis.utf8Bytes);
-                if (charParts) {
-                    charParts.textContent = `(${analysis.parts} part${analysis.parts === 1 ? '' : 's'}, ${analysis.encoding === 'gsm7' ? 'GSM-7' : 'Unicode'})`;
-                }
-            };
-
-            textarea.addEventListener('input', updateCounter);
-            updateCounter();
-        }
-    });
-
     // Offline: show last-known device state from localStorage
     (function () {
         // Only runs on the dashboard (index) page
@@ -1006,6 +1036,75 @@
             }
             const deviceId = activeDashboardDeviceId();
             return deviceId ? `lastDeviceStatus:${deviceId}` : 'lastDeviceStatus';
+        }
+
+        function getDashboardSimSlotNumber(slot) {
+            return String(
+                slot?.number
+                || slot?.simNumber
+                || slot?.sim_number
+                || slot?.subscriberNumber
+                || slot?.subscriber_number
+                || slot?.msisdn
+                || slot?.phoneNumber
+                || slot?.phone_number
+                || ''
+            ).trim();
+        }
+
+        function normalizeDashboardSimSlots(status) {
+            const slots = Array.isArray(status?.simSlots)
+                ? status.simSlots
+                : (Array.isArray(status?.sim_slots)
+                    ? status.sim_slots
+                    : (Array.isArray(status?.sim?.slots) ? status.sim.slots : []));
+            return slots.map(function (slot, index) {
+                const slotIndex = Number.parseInt(String(slot?.slotIndex ?? slot?.slot_index ?? index), 10);
+                return {
+                    ...(slot || {}),
+                    slotIndex: Number.isFinite(slotIndex) ? slotIndex : index,
+                    number: getDashboardSimSlotNumber(slot)
+                };
+            });
+        }
+
+        function getDashboardSingleSimNumber(status) {
+            return String(
+                status?.simNumber
+                || status?.sim_number
+                || status?.subscriberNumber
+                || status?.subscriber_number
+                || status?.modem_subscriber_number
+                || status?.sim?.number
+                || status?.sim?.subscriberNumber
+                || status?.mobile?.simNumber
+                || status?.mobile?.subscriberNumber
+                || status?.mobile?.number
+                || ''
+            ).trim();
+        }
+
+        function getDashboardSimNumbersDisplayValue(status, fallback = 'Checking...') {
+            const slots = normalizeDashboardSimSlots(status);
+            const reportedSlotCount = Number.parseInt(String(status?.simSlotCount ?? status?.sim_slot_count ?? status?.sim?.slotCount ?? ''), 10);
+            const slotCount = Math.max(
+                Number.isFinite(reportedSlotCount) ? reportedSlotCount : 0,
+                slots.length,
+                status?.dualSim === true || status?.sim?.dualSim === true ? 2 : 0
+            );
+            if (slotCount < 2) {
+                return getDashboardSingleSimNumber(status) || fallback;
+            }
+
+            const activeSlotIndex = Number.parseInt(String(status?.activeSimSlotIndex ?? status?.sim_active_slot ?? status?.sim?.activeSlotIndex ?? status?.sim?.selectedSlotIndex ?? ''), 10);
+            const singleValue = getDashboardSingleSimNumber(status);
+            const labels = [];
+            for (let index = 0; index < Math.min(slotCount, 4); index += 1) {
+                const slot = slots.find((candidate) => candidate.slotIndex === index) || null;
+                const number = getDashboardSimSlotNumber(slot) || ((Number.isFinite(activeSlotIndex) && activeSlotIndex === index) || (!Number.isFinite(activeSlotIndex) && index === 0) ? singleValue : '');
+                labels.push(`SIM ${index + 1}: ${number || fallback}`);
+            }
+            return labels.join('  |  ');
         }
 
         function normalizeDashboardStatus(status) {
@@ -1428,19 +1527,76 @@
             const healthEl = document.getElementById('deviceHealth');
             const telemetryNoticeEl = document.getElementById('dashboardTelemetryNotice');
             const telemetryNoticeTextEl = document.getElementById('dashboardTelemetryNoticeText');
+            const httpSmsStatusCard = document.getElementById('dashHttpSmsStatusCard');
+            const httpSmsStatusValueEl = document.getElementById('dashHttpSmsStatusValue');
+            const httpSmsStatusIconWrap = document.getElementById('dashHttpSmsStatusIconWrap');
+            const httpSmsStatusIcon = document.getElementById('dashHttpSmsStatusIcon');
+            const httpSmsLastSeenEl = document.getElementById('dashHttpSmsLastSeen');
+            const httpSmsPhoneEl = document.getElementById('dashHttpSmsPhone');
+            const httpSmsQueueValueEl = document.getElementById('dashHttpSmsQueueValue');
+            const httpSmsQueueMetaEl = document.getElementById('dashHttpSmsQueueMeta');
+            const httpSmsQueueActiveEl = document.getElementById('dashHttpSmsQueueActive');
+            const httpSmsQueueFailedEl = document.getElementById('dashHttpSmsQueueFailed');
+            const httpSmsQueueRecentEl = document.getElementById('dashHttpSmsQueueRecent');
             const isOnline = status.online !== false;
             const offlinePlaceholder = '-';
             window.__dashboardLiveOnline = isOnline;
-            const quickActionsCard = document.getElementById('dashboardQuickActionsCard');
-            if (quickActionsCard) {
-                quickActionsCard.classList.toggle('border-secondary', !isOnline);
-                quickActionsCard.querySelectorAll('button').forEach((button) => {
-                    button.disabled = !isOnline;
-                    button.setAttribute('aria-disabled', isOnline ? 'false' : 'true');
-                });
+
+            const updateHttpSmsTone = () => {
+                if (httpSmsStatusCard) {
+                    httpSmsStatusCard.classList.toggle('border-success', isOnline);
+                    httpSmsStatusCard.classList.toggle('border-secondary', !isOnline);
+                }
+                if (httpSmsStatusIconWrap) {
+                    httpSmsStatusIconWrap.classList.toggle('bg-success', isOnline);
+                    httpSmsStatusIconWrap.classList.toggle('bg-secondary', !isOnline);
+                }
+                if (httpSmsStatusIcon) {
+                    httpSmsStatusIcon.classList.toggle('text-success', isOnline);
+                    httpSmsStatusIcon.classList.toggle('text-secondary', !isOnline);
+                }
+            };
+
+            const formatHttpSmsLastSeen = (value) => {
+                if (!value) return isOnline ? 'Just now' : 'No heartbeat yet';
+                const date = new Date(value);
+                if (Number.isNaN(date.getTime())) return String(value);
+                const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+                if (seconds < 45) return 'Just now';
+                if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+                if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+                return date.toLocaleDateString();
+            };
+
+            if (httpSmsStatusValueEl || httpSmsLastSeenEl || httpSmsQueueValueEl) {
+                updateHttpSmsTone();
+                if (httpSmsStatusValueEl) httpSmsStatusValueEl.textContent = isOnline ? 'Online' : 'Offline';
+                if (httpSmsLastSeenEl) httpSmsLastSeenEl.textContent = formatHttpSmsLastSeen(status.lastSeen || status.last_seen);
+                if (httpSmsPhoneEl) {
+                    const phoneLabel = getSimNumberDisplayValue(status, 'Not reported');
+                    httpSmsPhoneEl.textContent = phoneLabel;
+                    httpSmsPhoneEl.setAttribute('title', phoneLabel);
+                }
+                const dashboardQueue = status.queueState?.dashboard || {};
+                const queueSummary = dashboardQueue.summary || {};
+                const recentQueue = Array.isArray(dashboardQueue.recent) ? dashboardQueue.recent : [];
+                const queueOpen = Number(queueSummary.totalOpen || 0);
+                const recentLabel = recentQueue.length > 0
+                    ? `${recentQueue[0].command || 'SMS'} ${recentQueue[0].status || 'queued'}`
+                    : 'No recent pickup';
+                if (httpSmsQueueValueEl) httpSmsQueueValueEl.textContent = String(queueOpen);
+                if (httpSmsQueueMetaEl) {
+                    httpSmsQueueMetaEl.textContent = queueOpen > 0
+                        ? `${Number(queueSummary.pending || 0)} pending`
+                        : 'Idle';
+                }
+                if (httpSmsQueueActiveEl) httpSmsQueueActiveEl.textContent = String(Number(queueSummary.active || 0));
+                if (httpSmsQueueFailedEl) httpSmsQueueFailedEl.textContent = String(Number(queueSummary.failed || 0));
+                if (httpSmsQueueRecentEl) {
+                    httpSmsQueueRecentEl.textContent = recentLabel;
+                    httpSmsQueueRecentEl.setAttribute('title', recentLabel);
+                }
             }
-            const quickActionsOfflineNote = document.getElementById('dashboardQuickActionsOfflineNote');
-            if (quickActionsOfflineNote) quickActionsOfflineNote.classList.toggle('d-none', isOnline);
 
             const setLiveBlockPlaceholder = (id, iconClass) => {
                 const el = document.getElementById(id);
@@ -1473,7 +1629,11 @@
             if (cellSigBar) cellSigBar.style.width = (status.cellularSignal ?? 0) + '%';
             if (batBar) batBar.style.width = (status.battery ?? 0) + '%';
             if (opEl) opEl.textContent = isOnline ? (status.operator || 'Not reported') : offlinePlaceholder;
-            if (simNumberEl) simNumberEl.textContent = isOnline ? getSimNumberDisplayValue(status) : offlinePlaceholder;
+            if (simNumberEl) {
+                const simNumbersText = isOnline ? getDashboardSimNumbersDisplayValue(status) : offlinePlaceholder;
+                simNumberEl.textContent = simNumbersText;
+                simNumberEl.setAttribute('title', simNumbersText);
+            }
             if (chEl) chEl.textContent = isOnline ? (status.chargingLabel || (status.charging !== null && status.charging !== undefined ? (status.charging ? 'Yes' : 'No') : 'Unknown')) : offlinePlaceholder;
             if (voltageEl) voltageEl.textContent = isOnline ? (status.voltageLabel || 'Not reported') : offlinePlaceholder;
             if (batteryStateEl) batteryStateEl.textContent = isOnline ? (status.batteryStateLabel || 'Telemetry pending') : 'Offline';
@@ -1532,21 +1692,40 @@
 
             const activeCard = document.getElementById('activeDeviceCard');
             if (activeCard) {
+                const statusTypeText = [
+                    window.ACTIVE_DEVICE_TYPE,
+                    status.type,
+                    status.deviceType,
+                    status.device_type,
+                    status.bridge,
+                    status.app,
+                    status.platform,
+                    status.model,
+                    status.deviceId,
+                    status.device_id
+                ].map(value => String(value || '').toLowerCase()).join(' ');
+                const activeCardIsHttpSms = statusTypeText.includes('httpsms') || (statusTypeText.includes('http') && statusTypeText.includes('sms'));
                 const primaryEl = activeCard.querySelector('.active-card-primary');
                 const currentEl = activeCard.querySelector('.active-card-current');
                 const signalEl = activeCard.querySelector('.active-card-signal');
                 const ipEl = activeCard.querySelector('.active-card-ip');
 
                 if (primaryEl) {
-                    primaryEl.textContent = status.activePathLabel
+                    primaryEl.textContent = activeCardIsHttpSms
+                        ? 'HTTP'
+                        : (status.activePathLabel
                         || (status.activePath === 'wifi'
                             ? 'Wi-Fi'
-                            : (status.activePath === 'modem' ? 'Modem' : (status.network || 'Not reported')));
+                            : (status.activePath === 'modem' ? 'Modem' : (status.network || 'Not reported'))));
                 }
                 if (currentEl) {
-                    const currentValue = !isOnline ? offlinePlaceholder : (status.activePath === 'wifi'
-                        ? (status.wifiSsid || status.currentNetworkName || 'Not reported')
-                        : (status.operator || status.currentNetworkName || status.displayName || 'Not reported'));
+                    const currentValue = !isOnline
+                        ? offlinePlaceholder
+                        : (activeCardIsHttpSms
+                            ? (status.app || status.platform || 'httpSMS')
+                            : (status.activePath === 'wifi'
+                                ? (status.wifiSsid || status.currentNetworkName || 'Not reported')
+                                : (status.operator || status.currentNetworkName || status.displayName || 'Not reported')));
                     currentEl.textContent = currentValue;
                     currentEl.setAttribute('title', currentValue);
                 }
@@ -1554,7 +1733,9 @@
                     const activeSignal = status.activePath === 'wifi'
                         ? status.wifiSignal
                         : (status.cellularSignal ?? status.signal);
-                    signalEl.textContent = isOnline && activeSignal !== null && activeSignal !== undefined ? `${activeSignal}%` : offlinePlaceholder;
+                    signalEl.textContent = activeCardIsHttpSms
+                        ? (isOnline ? 'Online' : 'Offline')
+                        : (isOnline && activeSignal !== null && activeSignal !== undefined ? `${activeSignal}%` : offlinePlaceholder);
                 }
                 if (ipEl) ipEl.textContent = isOnline ? (status.ip || 'N/A') : offlinePlaceholder;
             }
@@ -1661,7 +1842,8 @@
         }
 
         function renderCachedNotice(cachedAt) {
-            const sigCard = document.getElementById('dashWifiPrimary')?.closest('.card');
+            const sigCard = document.getElementById('dashWifiPrimary')?.closest('.card')
+                || document.getElementById('dashHttpSmsStatusValue')?.closest('.card');
             if (!sigCard || !cachedAt) return;
 
             const cardBody = sigCard.querySelector('.card-body');
@@ -1889,6 +2071,14 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    .dashboard-meta-row .dashboard-sim-number-value {
+        max-width: 74%;
+        overflow: visible;
+        text-overflow: clip;
+        white-space: normal;
+        overflow-wrap: anywhere;
     }
 
     .dashboard-divider {
