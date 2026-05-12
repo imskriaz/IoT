@@ -1201,24 +1201,6 @@
                 return cachedValue || fallback;
             };
 
-            const maybeAutoDetectSimNumber = function (nextStatus) {
-                if (!nextStatus?.online || getSimNumberDisplayValue(nextStatus, '') !== '') return;
-                const deviceId = String(nextStatus?.deviceId || nextStatus?.device_id || (window.getActiveDeviceId ? window.getActiveDeviceId() : '') || '').trim();
-                const operator = String(nextStatus?.operator || nextStatus?.sim?.operatorName || nextStatus?.sim?.operator || nextStatus?.mobile?.operatorName || nextStatus?.mobile?.operator || '').trim();
-                if (!deviceId || !operator) return;
-                const key = `sim-auto-detect:${deviceId}`;
-                const lastAttempt = Number(sessionStorage.getItem(key) || 0);
-                if (Number.isFinite(lastAttempt) && Date.now() - lastAttempt < 10 * 60 * 1000) return;
-                sessionStorage.setItem(key, String(Date.now()));
-                const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
-                fetch(`/api/quick/sim-number?deviceId=${encodeURIComponent(deviceId)}`, {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    cache: 'no-store',
-                    headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {}
-                }).catch(() => {});
-            };
-
             const formatVoltage = function (value) {
                 const numeric = Number(value);
                 if (!Number.isFinite(numeric) || numeric <= 0) return 'Not reported';
@@ -1646,7 +1628,6 @@
             if (wifiSigMetaEl) wifiSigMetaEl.textContent = status.wifiStatusLabel || 'Not connected';
             if (cellSigMetaEl) cellSigMetaEl.textContent = status.cellularStatus || 'Unavailable';
             if (currentIpEl) currentIpEl.textContent = isOnline ? (status.ip || 'N/A') : offlinePlaceholder;
-            if (isOnline) maybeAutoDetectSimNumber(status);
             if (hardwareIdEl) {
                 const imei = status.imei || status?.modem?.imei || status?.device?.imei || null;
                 const androidId = status.androidId
