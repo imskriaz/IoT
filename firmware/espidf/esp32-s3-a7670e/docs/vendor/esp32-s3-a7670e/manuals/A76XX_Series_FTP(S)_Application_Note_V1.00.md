@@ -1,6 +1,6 @@
 # A76XX_Series_FTP(S)_Application_Note_V1.00
 
-Source PDF: [A76XX_Series_FTP(S)_Application_Note_V1.00.pdf](./A76XX_Series_FTP(S)_Application_Note_V1.00.pdf)
+Source PDF: [A76XX_Series_FTP(S)_Application_Note_V1.00.pdf](<./A76XX_Series_FTP(S)_Application_Note_V1.00.pdf>)
 
 Total pages: 18
 

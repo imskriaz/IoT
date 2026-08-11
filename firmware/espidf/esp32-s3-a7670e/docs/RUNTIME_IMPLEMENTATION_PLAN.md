@@ -267,11 +267,11 @@ Use this document before adding or redesigning any runtime feature.
 
 Files:
 
-- [RULEBOOK.md](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/RULEBOOK.md)
-- [RUNTIME_IMPLEMENTATION_PLAN.md](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/RUNTIME_IMPLEMENTATION_PLAN.md)
-- [dashboard/services/mqttService.js](/d:/Projects/IoT/dashboard/services/mqttService.js)
-- [firmware/esp32-s3-a7670e/espidf/components/shared_models/include/action_models.h](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/shared_models/include/action_models.h)
-- [firmware/esp32-s3-a7670e/espidf/components/api_bridge/include/api_bridge.h](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/api_bridge/include/api_bridge.h)
+- [RULEBOOK.md](./RULEBOOK.md)
+- [RUNTIME_IMPLEMENTATION_PLAN.md](./RUNTIME_IMPLEMENTATION_PLAN.md)
+- [dashboard/services/mqttService.js](../../../../dashboard/services/mqttService.js)
+- [shared_models/include/action_models.h](../components/shared_models/include/action_models.h)
+- [api_bridge/include/api_bridge.h](../components/api_bridge/include/api_bridge.h)
 
 Deliverables:
 
@@ -283,9 +283,9 @@ Deliverables:
 
 Files:
 
-- [dashboard/services/mqttService.js](/d:/Projects/IoT/dashboard/services/mqttService.js)
-- [dashboard/routes/status.js](/d:/Projects/IoT/dashboard/routes/status.js)
-- [dashboard/utils/dashboardStatus.js](/d:/Projects/IoT/dashboard/utils/dashboardStatus.js)
+- [dashboard/services/mqttService.js](../../../../dashboard/services/mqttService.js)
+- [dashboard/routes/status.js](../../../../dashboard/routes/status.js)
+- [dashboard/utils/dashboardStatus.js](../../../../dashboard/utils/dashboardStatus.js)
 
 Deliverables:
 
@@ -298,8 +298,8 @@ Deliverables:
 
 Files:
 
-- [firmware/esp32-s3-a7670e/espidf/components/automation_bridge/src/automation_bridge.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/automation_bridge/src/automation_bridge.c)
-- [firmware/esp32-s3-a7670e/espidf/components/api_bridge/src/api_bridge.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/api_bridge/src/api_bridge.c)
+- [automation_bridge/src/automation_bridge.c](../components/automation_bridge/src/automation_bridge.c)
+- [api_bridge/src/api_bridge.c](../components/api_bridge/src/api_bridge.c)
 
 Deliverables:
 
@@ -311,9 +311,9 @@ Deliverables:
 
 Files:
 
-- [firmware/esp32-s3-a7670e/espidf/components/mqtt_mgr/src/mqtt_mgr.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/mqtt_mgr/src/mqtt_mgr.c)
-- [firmware/esp32-s3-a7670e/espidf/components/wifi_mgr/src/wifi_mgr.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/wifi_mgr/src/wifi_mgr.c)
-- [firmware/esp32-s3-a7670e/espidf/components/modem_a7670/src/modem_a7670.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/modem_a7670/src/modem_a7670.c)
+- [mqtt_mgr/src/mqtt_mgr.c](../components/mqtt_mgr/src/mqtt_mgr.c)
+- [wifi_mgr/src/wifi_mgr.c](../components/wifi_mgr/src/wifi_mgr.c)
+- [modem_a7670/src/modem_a7670.c](../components/modem_a7670/src/modem_a7670.c)
 
 Deliverables:
 
@@ -326,8 +326,8 @@ Deliverables:
 
 Files:
 
-- [firmware/esp32-s3-a7670e/espidf/components/telemetry_service/src/telemetry_service.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/telemetry_service/src/telemetry_service.c)
-- [firmware/esp32-s3-a7670e/espidf/components/device_status/src/device_status.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/device_status/src/device_status.c)
+- [telemetry_service/src/telemetry_service.c](../components/telemetry_service/src/telemetry_service.c)
+- [device_status/src/device_status.c](../components/device_status/src/device_status.c)
 
 Deliverables:
 
@@ -340,9 +340,9 @@ Deliverables:
 
 Files:
 
-- [firmware/esp32-s3-a7670e/espidf/components/sms_service/src/sms_service.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/sms_service/src/sms_service.c)
-- [dashboard/routes/sms.js](/d:/Projects/IoT/dashboard/routes/sms.js)
-- [dashboard/public/js/sms.js](/d:/Projects/IoT/dashboard/public/js/sms.js)
+- [sms_service/src/sms_service.c](../components/sms_service/src/sms_service.c)
+- [dashboard/routes/sms.js](../../../../dashboard/routes/sms.js)
+- [dashboard/public/js/sms.js](../../../../dashboard/public/js/sms.js)
 
 Deliverables:
 
@@ -355,10 +355,10 @@ Deliverables:
 
 Files:
 
-- [dashboard/public/js/main.js](/d:/Projects/IoT/dashboard/public/js/main.js)
-- [dashboard/services/modemService.js](/d:/Projects/IoT/dashboard/services/modemService.js)
-- [dashboard/routes/modem.js](/d:/Projects/IoT/dashboard/routes/modem.js)
-- [dashboard/views/pages/index.html](/d:/Projects/IoT/dashboard/views/pages/index.html)
+- [dashboard/public/js/main.js](../../../../dashboard/public/js/main.js)
+- [dashboard/services/modemService.js](../../../../dashboard/services/modemService.js)
+- [dashboard/routes/modem.js](../../../../dashboard/routes/modem.js)
+- [dashboard/views/pages/index.html](../../../../dashboard/views/pages/index.html)
 
 Deliverables:
 

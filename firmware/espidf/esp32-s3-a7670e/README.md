@@ -55,12 +55,12 @@ Use this order when auditing the active dashboard against firmware: `SMS`, `Call
 - modem MQTT is used as the fallback path when Wi-Fi is not carrying the session
 - USB is reserved for debug, provisioning, config, or PC-side sharing support, not the normal device runtime transport
 - credentials are not meant to be hardcoded into firmware
-- vendor references for modem and board behavior live under `firmware/esp32-s3-a7670e/docs/`
+- vendor references for modem and board behavior live under `firmware/espidf/esp32-s3-a7670e/docs/`
 - heavy orchestration, retries, scheduling, and derived state belong on the dashboard
 - firmware should process only hardware-local work and should stay selective
 - device-side execution must be queue-driven and race-aware
 - resource-heavy work should be delegated to the dashboard whenever safe
-- vendor docs under `firmware/esp32-s3-a7670e/docs/vendor/` are the firmware source of truth for modem AT behavior, board wiring, and hardware limits
+- vendor docs under `firmware/espidf/esp32-s3-a7670e/docs/vendor/` are the firmware source of truth for modem AT behavior, board wiring, and hardware limits
 
 ## Build Status
 
@@ -74,10 +74,11 @@ These scripts resolve the active repo layout at `firmware/espidf/esp32-s3-a7670e
 
 ## References
 
-- use the repo [Docs Index](/d:/Projects/IoT/firmware/docs/README.md)
-- use the repo [Runtime Rulebook](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/RULEBOOK.md)
-- use the repo [Runtime Implementation Plan](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/RUNTIME_IMPLEMENTATION_PLAN.md)
-- use the vendor bundle [README](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/vendor/esp32-s3-a7670e/README.md)
+- use the repo [Docs Index](../../docs/README.md)
+- use the repo [Project Knowledge Base](../../docs/PROJECT_KNOWLEDGE.md)
+- use the repo [Runtime Rulebook](docs/RULEBOOK.md)
+- use the repo [Runtime Implementation Plan](docs/RUNTIME_IMPLEMENTATION_PLAN.md)
+- use the vendor bundle [README](docs/vendor/esp32-s3-a7670e/README.md)
 
 ## Practical Note
 

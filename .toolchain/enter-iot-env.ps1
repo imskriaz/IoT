@@ -5,12 +5,21 @@ $repoRoot = Split-Path -Parent $toolchainRoot
 $repoTemp = Join-Path $repoRoot 'temp'
 $userTemp = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Temp' } else { $null }
 $pythonRuntime = Join-Path $toolchainRoot 'python-runtime'
-$nodeDir = 'D:\Tools\nodejs'
+$toolsRoot = 'D:\Tools'
+$nodeDir = if (Test-Path 'C:\Program Files\nodejs\node.exe') {
+    'C:\Program Files\nodejs'
+} else {
+    Join-Path $toolsRoot 'nodejs'
+}
 $npmGlobal = 'D:\Tools\npm-global'
 $npmCache = 'D:\Tools\npm-cache'
-$idfPath = Join-Path $toolchainRoot 'esp-idf-v5.3.1'
-$idfToolsPath = Join-Path $toolchainRoot 'espressif'
+$idfPath = Join-Path $toolsRoot 'esp-idf-v5.3.1'
+$idfToolsPath = Join-Path $toolsRoot 'espressif'
 $idfPython = Join-Path $idfToolsPath 'python_env\idf5.3_py3.11_env\Scripts\python.exe'
+$javaHome = Join-Path $toolsRoot 'jdk-21'
+$androidSdk = Join-Path $toolsRoot 'android-sdk'
+$gradleHome = Join-Path $toolsRoot 'gradle-home'
+$flutterDir = Join-Path $toolsRoot 'flutter'
 
 if (-not (Test-Path $nodeDir)) {
     throw "Node.js was not found at $nodeDir"
@@ -43,6 +52,35 @@ foreach ($prefix in @($nodeDir, $npmGlobal)) {
         $env:Path = "$prefix;$env:Path"
     }
 }
+
+if (Test-Path (Join-Path $javaHome 'bin\java.exe')) {
+    $env:JAVA_HOME = $javaHome
+    $env:Path = "$javaHome\bin;$env:Path"
+}
+
+if (Test-Path (Join-Path $androidSdk 'platform-tools\adb.exe')) {
+    $env:ANDROID_HOME = $androidSdk
+    $env:ANDROID_SDK_ROOT = $androidSdk
+    foreach ($androidPath in @(
+        (Join-Path $androidSdk 'cmdline-tools\latest\bin'),
+        (Join-Path $androidSdk 'platform-tools'),
+        (Join-Path $androidSdk 'build-tools\35.0.0')
+    )) {
+        if (($env:Path -split ';') -notcontains $androidPath) {
+            $env:Path = "$androidPath;$env:Path"
+        }
+    }
+}
+
+if (Test-Path (Join-Path $flutterDir 'bin\flutter.bat')) {
+    $env:FLUTTER_ROOT = $flutterDir
+    $env:Path = "$flutterDir\bin;$flutterDir\bin\cache\dart-sdk\bin;$env:Path"
+}
+
+if (-not (Test-Path $gradleHome)) {
+    New-Item -ItemType Directory -Path $gradleHome -Force | Out-Null
+}
+$env:GRADLE_USER_HOME = $gradleHome
 
 if ($env:PYTHONPATH) {
     $env:PYTHONPATH = "$pythonRuntime;$env:PYTHONPATH"

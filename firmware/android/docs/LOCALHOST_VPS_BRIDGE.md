@@ -1,6 +1,6 @@
 # Localhost Dashboard Through VPS
 
-This is a generic fallback only. The preferred free setup is [Cloudflare Tunnel](/d:/Projects/IoT/server/CLOUDFLARE_TUNNEL.md).
+This is a generic fallback only. The preferred free setup is [Cloudflare Tunnel](../../../server/CLOUDFLARE_TUNNEL.md).
 
 If a VPS is ever used again, replace the placeholders below with that VPS public URL.
 

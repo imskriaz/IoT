@@ -42,4 +42,4 @@ Use `-Clean` only when Android reports a signature mismatch from a previously in
 
 Related docs:
 
-- [Android Device Bridge contract](/d:/Projects/IoT/firmware/android/docs/ANDROID_SMS_BRIDGE.md)
+- [Android Device Bridge contract](./docs/ANDROID_SMS_BRIDGE.md)

@@ -4,7 +4,7 @@ This document is the operating rulebook for the single-lane dashboard + firmware
 
 It exists to keep the ESP32-S3-A7670E firmware small, reliable, and selective, while pushing heavy orchestration to the dashboard where CPU, RAM, storage, retries, and audit history are cheaper.
 
-For the file-by-file execution roadmap, use [Runtime Implementation Plan](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/RUNTIME_IMPLEMENTATION_PLAN.md).
+For the file-by-file execution roadmap, use [Runtime Implementation Plan](./RUNTIME_IMPLEMENTATION_PLAN.md).
 
 ## Core Rules
 
@@ -199,11 +199,11 @@ Keep these responsibilities on the device:
 
 Current codebase findings that shape this rulebook:
 
-- The dashboard already has a durable queue and per-device serialization in [mqttService.js](/d:/Projects/IoT/dashboard/services/mqttService.js).
-- The firmware already has a slim command bridge and in-memory command queue in [automation_bridge.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/automation_bridge/src/automation_bridge.c).
-- Transport switching is already handled in firmware MQTT runtime code in [mqtt_mgr.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/mqtt_mgr/src/mqtt_mgr.c), but it should be treated as a formal state machine with stronger anti-flap rules.
-- Full status JSON work is still expensive enough to matter on-device, as shown by the recent stack-overflow regression around [device_status.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/device_status/src/device_status.c) and [app_main.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/main/app_main.c).
-- Telemetry is still periodic in [telemetry_service.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/telemetry_service/src/telemetry_service.c); this should become more selective and event-aware over time.
+- The dashboard already has a durable queue and per-device serialization in [mqttService.js](../../../../dashboard/services/mqttService.js).
+- The firmware already has a slim command bridge and in-memory command queue in [automation_bridge.c](../components/automation_bridge/src/automation_bridge.c).
+- Transport switching is already handled in firmware MQTT runtime code in [mqtt_mgr.c](../components/mqtt_mgr/src/mqtt_mgr.c), but it should be treated as a formal state machine with stronger anti-flap rules.
+- Full status JSON work is still expensive enough to matter on-device, as shown by the recent stack-overflow regression around [device_status.c](../components/device_status/src/device_status.c) and [app_main.c](../main/app_main.c).
+- Telemetry is still periodic in [telemetry_service.c](../components/telemetry_service/src/telemetry_service.c); this should become more selective and event-aware over time.
 
 ## Target Operating Model
 
@@ -275,7 +275,7 @@ Current codebase findings that shape this rulebook:
   - `gps-status`
   - `storage-info`
 
-- Dashboard priority should stay aligned with the current durable queue defaults in [mqttService.js](/d:/Projects/IoT/dashboard/services/mqttService.js):
+- Dashboard priority should stay aligned with the current durable queue defaults in [mqttService.js](../../../../dashboard/services/mqttService.js):
   - `telephony` domain: `50`
   - `network` domain: `80`
   - `control` domain: `100`

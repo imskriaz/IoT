@@ -51,6 +51,9 @@ npm run server:check -- --url https://your-generated-url.trycloudflare.com
 
 Use this only if you have your own hostname in Cloudflare.
 
+The current named-tunnel dashboard URL is
+[https://device.madebydevs.com/](https://device.madebydevs.com/).
+
 Install `cloudflared`, then authenticate:
 
 ```bash
@@ -74,7 +77,7 @@ npm run cloudflare -- --named --hostname your-hostname.example.com --tunnel dash
 Then use:
 
 ```env
-ANDROID_BRIDGE_PUBLIC_URL=https://your-hostname.example.com
-PUBLIC_BRIDGE_BASE_URL=https://your-hostname.example.com
-SOCKET_IO_CORS_ORIGIN=https://your-hostname.example.com
+ANDROID_BRIDGE_PUBLIC_URL=https://device.madebydevs.com
+PUBLIC_BRIDGE_BASE_URL=https://device.madebydevs.com
+SOCKET_IO_CORS_ORIGIN=https://device.madebydevs.com
 ```

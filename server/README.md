@@ -64,4 +64,4 @@ The local service target should be:
 http://127.0.0.1:3000
 ```
 
-Full guide: [CLOUDFLARE_TUNNEL.md](D:/Projects/IoT/server/CLOUDFLARE_TUNNEL.md)
+Full guide: [CLOUDFLARE_TUNNEL.md](./CLOUDFLARE_TUNNEL.md)

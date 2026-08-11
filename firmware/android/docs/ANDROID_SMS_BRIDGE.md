@@ -4,7 +4,7 @@ This document describes the supported Android bridge in this repo. It replaces t
 
 ## Purpose
 
-The Android app in [firmware/android](/d:/Projects/IoT/firmware/android) is a first-party `Device Bridge` client that turns an Android phone into a dashboard-managed SMS and status bridge.
+The Android app in [firmware/android](../) is a first-party `Device Bridge` client that turns an Android phone into a dashboard-managed SMS and status bridge.
 
 Supported transport modes:
 
@@ -37,6 +37,10 @@ The token contains:
 The app should onboard directly from QR scan or setup token import. Raw secrets are not shown in the dashboard UI when Android recovery QR is generated.
 
 When the dashboard process is running only on `localhost`, expose it with Cloudflare Tunnel before generating Android setup QR codes. Set `ANDROID_BRIDGE_PUBLIC_URL` or `PUBLIC_BRIDGE_BASE_URL` to the generated Cloudflare HTTPS URL. The Android app cannot call the operator laptop's `localhost`; it must receive a routable HTTPS URL that forwards to `/v1/android/bridge/*`. For browser Socket.IO through the same tunnel, set `SOCKET_IO_CORS_ORIGIN` or `CORS_ORIGIN` to the same Cloudflare origin.
+
+For the current deployment, use
+[https://device.madebydevs.com/](https://device.madebydevs.com/) as the public
+dashboard origin.
 
 ## Device Identity
 

@@ -2,7 +2,7 @@
 
 Source PDF:
 
-- [A76XX_Series_AT_Command_Manual_V1.09.pdf](/d:/Projects/IoT/firmware/esp32-s3-a7670e/docs/vendor/esp32-s3-a7670e/manuals/A76XX_Series_AT_Command_Manual_V1.09.pdf)
+- [A76XX_Series_AT_Command_Manual_V1.09.md](./A76XX_Series_AT_Command_Manual_V1.09.md)
 
 Source pages:
 
@@ -105,7 +105,7 @@ The current ESP32 firmware intentionally sends:
 AT+CUSD=1,"<code>",15
 ```
 
-See [modem_a7670_telephony.c](/d:/Projects/IoT/firmware/esp32-s3-a7670e/espidf/components/modem_a7670/src/modem_a7670_telephony.c:941).
+See [modem_a7670_telephony.c](../../../../components/modem_a7670/src/modem_a7670_telephony.c#L941).
 
 That local implementation note says:
 

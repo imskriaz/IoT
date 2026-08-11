@@ -98,6 +98,27 @@ firmware, or device contracts.
   actions such as dial and hangup. Do not assume hold, resume, mute, answer, or
   reject support without firmware implementation and vendor-doc validation.
 
+## Subagent Use
+
+- Use subagents when the user explicitly requests them or when a task has two or
+  more concrete, bounded, independent workstreams that can safely run in
+  parallel and materially shorten the work.
+- Keep small, sequential, or tightly coupled work with the primary agent. Do not
+  delegate overlapping edits, the final integration decision, or work whose
+  next step depends on the result of the current step.
+- Never run concurrent subagents against the same physical device, serial port,
+  modem lane, flash operation, mutable database, or other shared runtime state.
+- Give each subagent an exact scope, owned paths, read/write limits, expected
+  output, and validation command. Tell it to preserve unrelated working-tree
+  changes and to report blockers and files changed.
+- Prefer non-overlapping file ownership. If two investigations must inspect the
+  same area, keep at most one of them write-capable and make the others
+  read-only.
+- The primary agent must review every subagent result and the combined diff,
+  resolve conflicts, run the relevant integrated checks, and report the final
+  evidence. A subagent report alone is not proof that firmware, dashboard, or
+  hardware behavior is complete.
+
 ## Build And Validation
 
 - Build ESP32 firmware with `.\.toolchain\build-firmware.ps1`.
