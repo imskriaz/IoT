@@ -36,10 +36,6 @@
         return String(activeDeviceId || '').trim();
     }
 
-    function getUssdActiveSimSlot() {
-        return getUssdActiveSimContext().simSlot;
-    }
-
     function getUssdActiveSimContext() {
         if (typeof window.getActiveDeviceSimContext === 'function') {
             return window.getActiveDeviceSimContext() || {

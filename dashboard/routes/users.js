@@ -47,11 +47,6 @@ function canViewUser(user, userId) {
     return !!user && (Number(user.id) === Number(userId) || isAdminUser(user));
 }
 
-function normalizeNonNegativeInt(value, fallback = 0) {
-    const parsed = Number.parseInt(String(value ?? ''), 10);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
 async function loadUserRecord(db, userId) {
     return db.get(`SELECT * FROM users WHERE id = ?`, [userId]);
 }

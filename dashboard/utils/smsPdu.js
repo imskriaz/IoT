@@ -206,6 +206,18 @@ function resolvePduEncoding(text, options = {}) {
     return analyzeGsm7Text(text).encodable ? 'gsm7' : 'ucs2';
 }
 
+function resolveMultipartOptions(options) {
+    const reference = Number(options.concatReference);
+    const total = Number(options.totalParts);
+    const sequence = Number(options.partNumber);
+    if (!Number.isInteger(reference) || reference < 0 || reference > 0xFF ||
+        !Number.isInteger(total) || total < 2 || total > 0xFF ||
+        !Number.isInteger(sequence) || sequence < 1 || sequence > total) {
+        throw new Error('SMS multipart PDU options are invalid');
+    }
+    return { reference, total, sequence };
+}
+
 function buildGsm7SubmitPduSegment(number, text, options = {}) {
     const destination = normalizeDestinationNumber(number);
     const userData = encodeGsm7UserData(text);
@@ -220,15 +232,7 @@ function buildGsm7SubmitPduSegment(number, text, options = {}) {
     }
 
     if (multipart) {
-        const reference = Number(options.concatReference);
-        const total = Number(options.totalParts);
-        const sequence = Number(options.partNumber);
-        if (!Number.isInteger(reference) || reference < 0 || reference > 0xFF ||
-            !Number.isInteger(total) || total < 2 || total > 0xFF ||
-            !Number.isInteger(sequence) || sequence < 1 || sequence > total) {
-            throw new Error('SMS multipart PDU options are invalid');
-        }
-
+        const { reference, total, sequence } = resolveMultipartOptions(options);
         const udh = Buffer.from([0x05, 0x00, 0x03, reference, total, sequence]);
         const fillBits = (7 - ((udh.length * 8) % 7)) % 7;
         const totalBits = (udh.length * 8) + fillBits + (userData.septets.length * 7);
@@ -274,15 +278,7 @@ function buildUcs2SubmitPduSegment(number, text, options = {}) {
     }
 
     if (multipart) {
-        const reference = Number(options.concatReference);
-        const total = Number(options.totalParts);
-        const sequence = Number(options.partNumber);
-        if (!Number.isInteger(reference) || reference < 0 || reference > 0xFF ||
-            !Number.isInteger(total) || total < 2 || total > 0xFF ||
-            !Number.isInteger(sequence) || sequence < 1 || sequence > total) {
-            throw new Error('SMS multipart PDU options are invalid');
-        }
-
+        const { reference, total, sequence } = resolveMultipartOptions(options);
         const udh = [
             '05',
             '00',

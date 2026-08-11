@@ -259,19 +259,6 @@ async function requestFreshStatus(deviceId, timeoutMs = 8000, ignoreCooldown = f
     return refreshPromise;
 }
 
-async function requestFreshStatusViaSerial(req, deviceId) {
-    const serialBridge = req.app?.locals?.serialBridge;
-    if (!serialBridge || typeof serialBridge.refreshStatusSnapshot !== 'function') {
-        return null;
-    }
-    if (typeof serialBridge.isStatusFallbackEnabled === 'function' &&
-        serialBridge.isStatusFallbackEnabled() !== true) {
-        return null;
-    }
-
-    return serialBridge.refreshStatusSnapshot({ deviceId });
-}
-
 async function readStoredSimNumber(db, deviceId) {
     if (!db || typeof db.get !== 'function') {
         return null;

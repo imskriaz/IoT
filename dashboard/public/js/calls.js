@@ -86,10 +86,6 @@
         return String(activeDeviceId || '').trim();
     }
 
-    function getCallsActiveSimSlot() {
-        return getCallsActiveSimContext().simSlot;
-    }
-
     function getCallsActiveSimContext() {
         if (typeof window.getActiveDeviceSimContext === 'function') {
             return window.getActiveDeviceSimContext() || {

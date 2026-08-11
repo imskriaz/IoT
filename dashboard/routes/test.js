@@ -619,10 +619,6 @@ router.delete('/result/:runId', (req, res) => {
     }
 });
 
-// ==================== RETRY HELPER ====================
-
-const STEP_MAX_RETRIES = 2;       // total attempts = 1 + STEP_MAX_RETRIES
-const STEP_RETRY_DELAY_MS = 1500; // wait between attempts
 const DEVICE_SELF_TEST_EXPECTED_RESULTS = 6;
 
 function waitForMqttEvent(eventName, deviceId, timeoutMs, predicate = null) {
@@ -692,44 +688,6 @@ function waitForDeviceSelfTestResults(deviceId, timeoutMs = 25000, expectedCount
 
         global.mqttService.on('test:result', onResult);
     });
-}
-
-/**
- * Run a single test step via MQTT with automatic retry on failure.
- * Returns { name, command, response, success, attempts } or throws after all retries exhausted.
- */
-async function runStepWithRetry(deviceId, runId, step, commandTopic, progressMsg) {
-    let lastResult = null;
-    for (let attempt = 1; attempt <= 1 + STEP_MAX_RETRIES; attempt++) {
-        if (attempt > 1) {
-            updateTestProgress(deviceId, runId, null, `Retry ${attempt - 1}/${STEP_MAX_RETRIES}: ${step.name}`);
-            await new Promise(r => setTimeout(r, STEP_RETRY_DELAY_MS));
-        }
-        try {
-            const response = await publishTestCommand(
-                deviceId,
-                runId,
-                commandTopic,
-                { command: step.command },
-                true,
-                5000,
-                step.name
-            );
-            const success = checkResponse(response?.data, step);
-            lastResult = { name: step.name, command: step.command, response: response?.data, success, attempts: attempt };
-            if (success) return lastResult;
-            appendTestTrace(deviceId, runId, 'warning', `${step.name}: device responded but validation failed`, {
-                expected: step.expected || step.handler || null,
-                response: response?.data
-            });
-            // Step ran but check failed — retry
-        } catch (mqttErr) {
-            // Timeout or transport error — retry
-            lastResult = { name: step.name, command: step.command, response: null, success: false, attempts: attempt, error: mqttErr.message };
-        }
-    }
-    // All attempts exhausted
-    throw new Error(`${step.name} failed after ${1 + STEP_MAX_RETRIES} attempts`);
 }
 
 // ==================== TEST IMPLEMENTATIONS ====================
@@ -2022,17 +1980,6 @@ function updateTestStatus(deviceId, runId, status, message, details = null) {
         message,
         details
     });
-}
-
-function checkResponse(response, step) {
-    if (step.expected) {
-        return response?.includes(step.expected);
-    }
-    if (step.handler) {
-        // Custom handler would be implemented here
-        return true;
-    }
-    return !!response;
 }
 
 function getCategoryIcon(category) {

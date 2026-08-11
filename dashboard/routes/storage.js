@@ -142,14 +142,6 @@ function validateStorageName(nameValue = '', label = 'name') {
     return { ok: true, value: raw };
 }
 
-function splitPathAndName(fullPath) {
-    const normalized = normalizeStoragePath(fullPath);
-    const parts = normalized.split('/').filter(Boolean);
-    const filename = parts.pop() || '';
-    const dirPath = parts.join('/');
-    return { dirPath, filename };
-}
-
 function isCommandTimeout(error) {
     if (typeof error?.message !== 'string') return false;
     const normalized = error.message.toLowerCase();

@@ -5,6 +5,33 @@ const { body, param, validationResult } = require('express-validator');
 const logger  = require('../utils/logger');
 const { hasRole } = require('../middleware/auth');
 
+async function loadAuthorizedGroup(req, res) {
+    const group = await req.app.locals.db.get(
+        `SELECT * FROM device_groups WHERE id = ?`,
+        [req.params.id]
+    );
+    if (!group) {
+        res.status(404).json({ success: false, message: 'Group not found' });
+        return null;
+    }
+
+    const isAdmin = hasRole(req.session.user?.role, 'admin');
+    if (!isAdmin && group.owner_id !== req.session.user?.id) {
+        res.status(403).json({ success: false, message: 'Access denied' });
+        return null;
+    }
+
+    return group;
+}
+
+function hasValidationErrors(req, res) {
+    const errors = validationResult(req);
+    if (errors.isEmpty()) return false;
+
+    res.status(400).json({ success: false, message: errors.array()[0].msg });
+    return true;
+}
+
 /**
  * @swagger
  * tags:
@@ -89,13 +116,8 @@ router.get('/', async (req, res) => {
 router.get('/:id', [param('id').isInt({ min: 1 })], async (req, res) => {
     try {
         const db = req.app.locals.db;
-        const group = await db.get(`SELECT * FROM device_groups WHERE id = ?`, [req.params.id]);
-        if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
-
-        const isAdmin = hasRole(req.session.user?.role, 'admin');
-        if (!isAdmin && group.owner_id !== req.session.user?.id) {
-            return res.status(403).json({ success: false, message: 'Access denied' });
-        }
+        const group = await loadAuthorizedGroup(req, res);
+        if (!group) return;
 
         const devices = await db.all(`
             SELECT d.id, d.name, d.status, d.type
@@ -120,8 +142,7 @@ router.post('/', [
     body('device_ids').optional().isArray()
 ], async (req, res) => {
     try {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array()[0].msg });
+        if (hasValidationErrors(req, res)) return;
 
         const db = req.app.locals.db;
         const { name, description, color, device_ids } = req.body;
@@ -158,17 +179,10 @@ router.put('/:id', [
     body('color').optional({ nullable: true }).matches(/^#[0-9a-fA-F]{6}$/)
 ], async (req, res) => {
     try {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array()[0].msg });
+        if (hasValidationErrors(req, res)) return;
 
         const db = req.app.locals.db;
-        const group = await db.get(`SELECT * FROM device_groups WHERE id = ?`, [req.params.id]);
-        if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
-
-        const isAdmin = hasRole(req.session.user?.role, 'admin');
-        if (!isAdmin && group.owner_id !== req.session.user?.id) {
-            return res.status(403).json({ success: false, message: 'Access denied' });
-        }
+        if (!await loadAuthorizedGroup(req, res)) return;
 
         const { name, description, color } = req.body;
         await db.run(
@@ -192,17 +206,10 @@ router.post('/:id/members', [
     body('device_id').trim().notEmpty()
 ], async (req, res) => {
     try {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array()[0].msg });
+        if (hasValidationErrors(req, res)) return;
 
         const db = req.app.locals.db;
-        const group = await db.get(`SELECT * FROM device_groups WHERE id = ?`, [req.params.id]);
-        if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
-
-        const isAdmin = hasRole(req.session.user?.role, 'admin');
-        if (!isAdmin && group.owner_id !== req.session.user?.id) {
-            return res.status(403).json({ success: false, message: 'Access denied' });
-        }
+        if (!await loadAuthorizedGroup(req, res)) return;
 
         await db.run(
             `INSERT OR IGNORE INTO device_group_members (group_id, device_id) VALUES (?, ?)`,
@@ -221,13 +228,7 @@ router.delete('/:id/members/:deviceId', [
 ], async (req, res) => {
     try {
         const db = req.app.locals.db;
-        const group = await db.get(`SELECT * FROM device_groups WHERE id = ?`, [req.params.id]);
-        if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
-
-        const isAdmin = hasRole(req.session.user?.role, 'admin');
-        if (!isAdmin && group.owner_id !== req.session.user?.id) {
-            return res.status(403).json({ success: false, message: 'Access denied' });
-        }
+        if (!await loadAuthorizedGroup(req, res)) return;
 
         await db.run(
             `DELETE FROM device_group_members WHERE group_id = ? AND device_id = ?`,
@@ -244,13 +245,7 @@ router.delete('/:id/members/:deviceId', [
 router.delete('/:id', [param('id').isInt({ min: 1 })], async (req, res) => {
     try {
         const db = req.app.locals.db;
-        const group = await db.get(`SELECT * FROM device_groups WHERE id = ?`, [req.params.id]);
-        if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
-
-        const isAdmin = hasRole(req.session.user?.role, 'admin');
-        if (!isAdmin && group.owner_id !== req.session.user?.id) {
-            return res.status(403).json({ success: false, message: 'Access denied' });
-        }
+        if (!await loadAuthorizedGroup(req, res)) return;
 
         await db.run(`DELETE FROM device_groups WHERE id = ?`, [req.params.id]);
         logger.info(`Device group deleted: id=${req.params.id}`);

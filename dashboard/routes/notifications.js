@@ -33,6 +33,36 @@ function requestDeviceId(req) {
     return String(req.body?.deviceId || req.body?.device || req.query.deviceId || req.query.device || '').trim();
 }
 
+function buildSelectedNotificationTarget(req) {
+    const ids = parseIdList(req.body?.ids || req.body?.id);
+    if (!ids.length) return null;
+
+    const placeholders = ids.map(() => '?').join(',');
+    const deviceId = requestDeviceId(req);
+    return {
+        ids,
+        where: `id IN (${placeholders})${deviceId ? ' AND device_id = ?' : ''}`,
+        params: deviceId ? [...ids, deviceId] : ids
+    };
+}
+
+function selectedNotificationHandler({ buildSql, resultKey, logMessage, errorMessage }) {
+    return async (req, res) => {
+        try {
+            const target = buildSelectedNotificationTarget(req);
+            if (!target) {
+                return res.status(400).json({ success: false, message: 'No notifications selected' });
+            }
+
+            await req.app.locals.db.run(buildSql(target.where), target.params);
+            res.json({ success: true, [resultKey]: target.ids.length });
+        } catch (error) {
+            req.app.locals.logger?.error?.(logMessage, error);
+            res.status(500).json({ success: false, message: errorMessage });
+        }
+    };
+}
+
 function parseMetadata(row) {
     if (!row) return row;
     let metadata = null;
@@ -188,51 +218,19 @@ router.post('/capture', async (req, res) => {
     }
 });
 
-router.post('/read', async (req, res) => {
-    try {
-        const db = req.app.locals.db;
-        const ids = parseIdList(req.body?.ids || req.body?.id);
-        if (!ids.length) {
-            return res.status(400).json({ success: false, message: 'No notifications selected' });
-        }
-        const placeholders = ids.map(() => '?').join(',');
-        const deviceId = requestDeviceId(req);
-        const deviceWhere = deviceId ? ' AND device_id = ?' : '';
-        await db.run(
-            `UPDATE notifications
-             SET read = 1, read_at = CURRENT_TIMESTAMP
-             WHERE id IN (${placeholders})${deviceWhere}`,
-            deviceId ? [...ids, deviceId] : ids
-        );
-        res.json({ success: true, updated: ids.length });
-    } catch (error) {
-        req.app.locals.logger?.error?.('Notifications read error:', error);
-        res.status(500).json({ success: false, message: 'Failed to mark notifications read' });
-    }
-});
+router.post('/read', selectedNotificationHandler({
+    buildSql: where => `UPDATE notifications SET read = 1, read_at = CURRENT_TIMESTAMP WHERE ${where}`,
+    resultKey: 'updated',
+    logMessage: 'Notifications read error:',
+    errorMessage: 'Failed to mark notifications read'
+}));
 
-router.post('/unread', async (req, res) => {
-    try {
-        const db = req.app.locals.db;
-        const ids = parseIdList(req.body?.ids || req.body?.id);
-        if (!ids.length) {
-            return res.status(400).json({ success: false, message: 'No notifications selected' });
-        }
-        const placeholders = ids.map(() => '?').join(',');
-        const deviceId = requestDeviceId(req);
-        const deviceWhere = deviceId ? ' AND device_id = ?' : '';
-        await db.run(
-            `UPDATE notifications
-             SET read = 0, read_at = NULL
-             WHERE id IN (${placeholders})${deviceWhere}`,
-            deviceId ? [...ids, deviceId] : ids
-        );
-        res.json({ success: true, updated: ids.length });
-    } catch (error) {
-        req.app.locals.logger?.error?.('Notifications unread error:', error);
-        res.status(500).json({ success: false, message: 'Failed to mark notifications unread' });
-    }
-});
+router.post('/unread', selectedNotificationHandler({
+    buildSql: where => `UPDATE notifications SET read = 0, read_at = NULL WHERE ${where}`,
+    resultKey: 'updated',
+    logMessage: 'Notifications unread error:',
+    errorMessage: 'Failed to mark notifications unread'
+}));
 
 router.post('/read-all', async (req, res) => {
     try {
@@ -251,27 +249,12 @@ router.post('/read-all', async (req, res) => {
     }
 });
 
-router.post('/delete', async (req, res) => {
-    try {
-        const db = req.app.locals.db;
-        const ids = parseIdList(req.body?.ids || req.body?.id);
-        if (!ids.length) {
-            return res.status(400).json({ success: false, message: 'No notifications selected' });
-        }
-        const placeholders = ids.map(() => '?').join(',');
-        const deviceId = requestDeviceId(req);
-        const deviceWhere = deviceId ? ' AND device_id = ?' : '';
-        await db.run(
-            `DELETE FROM notifications
-             WHERE id IN (${placeholders})${deviceWhere}`,
-            deviceId ? [...ids, deviceId] : ids
-        );
-        res.json({ success: true, deleted: ids.length });
-    } catch (error) {
-        req.app.locals.logger?.error?.('Notifications delete error:', error);
-        res.status(500).json({ success: false, message: 'Failed to remove notifications' });
-    }
-});
+router.post('/delete', selectedNotificationHandler({
+    buildSql: where => `DELETE FROM notifications WHERE ${where}`,
+    resultKey: 'deleted',
+    logMessage: 'Notifications delete error:',
+    errorMessage: 'Failed to remove notifications'
+}));
 
 router.post('/delete-all', async (req, res) => {
     try {

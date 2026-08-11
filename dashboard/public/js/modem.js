@@ -460,12 +460,6 @@
         renderAvailableWifiNetworks(lastWifiScanResults);
     }
 
-    function setCapabilityHint(element, enabled, message, tone = 'secondary') {
-        if (!element) return;
-        element.textContent = message;
-        element.className = `alert alert-${tone} small${enabled ? '' : ' d-none'}`;
-    }
-
     function setFormControlsDisabled(controls, disabled) {
         controls.forEach((control) => {
             if (control) {

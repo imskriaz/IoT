@@ -78,39 +78,6 @@ function Remove-FirmwareBuildDirectory {
     Remove-Item -LiteralPath $resolvedBuildDirectory -Recurse -Force
 }
 
-function Remove-LegacyFirmwareBuildDirs {
-    param(
-        [string]$RepoRoot,
-        [string]$CanonicalBuildDirectory
-    )
-
-    $legacyBuildDirs = @(
-        @{
-            Path = (Join-Path $RepoRoot 'build')
-            Parent = $RepoRoot
-            Reason = 'repo-root'
-        },
-        @{
-            Path = (Join-Path $CanonicalBuildDirectory 'build')
-            Parent = $CanonicalBuildDirectory
-            Reason = 'nested'
-        }
-    )
-
-    foreach ($entry in $legacyBuildDirs) {
-        $candidate = [System.IO.Path]::GetFullPath($entry.Path)
-        $canonical = [System.IO.Path]::GetFullPath($CanonicalBuildDirectory)
-        if ($candidate -ieq $canonical) {
-            continue
-        }
-
-        Remove-FirmwareBuildDirectory `
-            -BuildDirectory $candidate `
-            -AllowedParentDirectory $entry.Parent `
-            -Reason $entry.Reason
-    }
-}
-
 function Reset-MismatchedBuildDir {
     param(
         [string]$BuildDirectory,
@@ -148,4 +115,62 @@ function Reset-MismatchedBuildDir {
         -BuildDirectory $BuildDirectory `
         -AllowedParentDirectory $ExpectedProjectDir `
         -Reason 'stale'
+}
+
+function Initialize-FirmwareBuildContext {
+    param(
+        [string]$Project,
+        [string]$BuildDirectory
+    )
+
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $projectDirectory = Join-Path $repoRoot "firmware\espidf\$Project"
+
+    if (-not $BuildDirectory) {
+        $BuildDirectory = Get-FirmwareBuildDirectory -ProjectDirectory $projectDirectory
+    }
+
+    if (-not (Test-Path $projectDirectory)) {
+        throw "Firmware project not found: $projectDirectory"
+    }
+
+    Reset-MismatchedBuildDir -BuildDirectory $BuildDirectory -ExpectedProjectDir $projectDirectory
+
+    return [PSCustomObject]@{
+        ProjectDirectory = $projectDirectory
+        BuildDirectory   = $BuildDirectory
+    }
+}
+
+function Get-IotCandidateSerialPorts {
+    $ports = Get-PnpDevice -Class Ports -ErrorAction SilentlyContinue |
+        Where-Object { $_.FriendlyName -match '\(COM\d+\)' } |
+        ForEach-Object {
+            $match = [regex]::Match($_.FriendlyName, '\((COM\d+)\)')
+            $portName = if ($match.Success) { $match.Groups[1].Value } else { $null }
+            $friendly = $_.FriendlyName
+            $instanceId = $_.InstanceId
+
+            $score = 0
+            if ($friendly -match 'CH343|CH340') { $score += 100 }
+            if ($friendly -match 'CP210|Silicon Labs|FTDI') { $score += 90 }
+            if ($friendly -match 'USB Serial Device') { $score += 70 }
+            if ($friendly -match 'UART|JTAG') { $score += 20 }
+            if ($friendly -match 'Bluetooth') { $score -= 100 }
+            if ($instanceId -match '^USB\\') { $score += 20 }
+            if ($_.Status -eq 'OK') { $score += 20 }
+            if ($_.Status -eq 'Unknown') { $score += 5 }
+
+            [PSCustomObject]@{
+                Port       = $portName
+                Friendly   = $friendly
+                Status     = $_.Status
+                InstanceId = $instanceId
+                Score      = $score
+            }
+        } |
+        Where-Object { $_.Port } |
+        Sort-Object -Property @{ Expression = 'Score'; Descending = $true }, @{ Expression = 'Port'; Descending = $false }
+
+    return @($ports)
 }

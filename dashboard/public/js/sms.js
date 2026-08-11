@@ -38,10 +38,6 @@
         return String(activeDeviceId || '').trim();
     }
 
-    function getSmsActiveSimSlot() {
-        return getSmsActiveSimContext().simSlot;
-    }
-
     function getSmsActiveSimContext() {
         if (typeof window.getActiveDeviceSimContext === 'function') {
             return window.getActiveDeviceSimContext() || {
@@ -1538,11 +1534,6 @@
             default:
                 return { label: normalized || 'Queued', className: 'bg-secondary' };
         }
-    }
-
-    function renderSmsStatusBadge(status) {
-        const meta = smsStatusMeta(status);
-        return `<span class="badge ${meta.className}"><i class="bi bi-check-circle me-1"></i>${esc(meta.label)}</span>`;
     }
 
     function renderSmsStatusIcon(status) {

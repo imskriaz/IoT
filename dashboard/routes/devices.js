@@ -32,42 +32,6 @@ const { validateDeviceIdPrefix } = require('../utils/deviceIdPolicy');
 
 const DEFAULT_MQTT_PORT = 1883;
 const DEFAULT_TOPIC_PREFIX = normalizeTopicPrefix(process.env.MQTT_TOPIC_PREFIX || 'device');
-const DEVICE_PACKAGE_OFFERS = Object.freeze([
-    {
-        code: 'starter',
-        name: 'Starter',
-        priceBdt: 499,
-        limits: {
-            sms_per_day: 250,
-            sms_per_month: 5000,
-            api_requests_per_minute: 30,
-            assigned_users: 2
-        }
-    },
-    {
-        code: 'growth',
-        name: 'Growth',
-        priceBdt: 999,
-        limits: {
-            sms_per_day: 1000,
-            sms_per_month: 25000,
-            api_requests_per_minute: 90,
-            assigned_users: 5
-        }
-    },
-    {
-        code: 'business',
-        name: 'Business',
-        priceBdt: 1999,
-        limits: {
-            sms_per_day: 5000,
-            sms_per_month: 100000,
-            api_requests_per_minute: 240,
-            assigned_users: 20
-        }
-    }
-]);
-
 function normalizeDeviceId(value) {
     return String(value || '').trim();
 }
@@ -283,20 +247,6 @@ function formatUnregisteredDevice(row = {}) {
         last_number: row.last_number || '',
         notes: row.notes || '',
         identity
-    };
-}
-
-function getDevicePackageOffer(packageCode) {
-    const normalized = String(packageCode || '').trim().toLowerCase();
-    return DEVICE_PACKAGE_OFFERS.find((offer) => offer.code === normalized) || null;
-}
-
-function serializePackageOffer(offer) {
-    return {
-        code: offer.code,
-        name: offer.name,
-        price_bdt: offer.priceBdt,
-        limits: offer.limits
     };
 }
 

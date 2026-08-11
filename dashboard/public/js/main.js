@@ -486,29 +486,6 @@ function getDeviceHardwareIdentity(status, fallback = 'Not reported by device') 
     };
 }
 
-function formatDeviceHardwareIdLabel(status, fallback = 'Not reported by device') {
-    const imei = status?.imei || status?.modem?.imei || status?.device?.imei || null;
-    if (imei) {
-        return `IMEI • ${imei}`;
-    }
-
-    const androidId = status?.androidId
-        || status?.android_id
-        || status?.device?.androidId
-        || status?.device?.android_id
-        || null;
-    if (androidId) {
-        return `Android ID • ${androidId}`;
-    }
-
-    const installId = status?.installId || status?.device?.installId || null;
-    if (installId) {
-        return `Install ID • ${installId}`;
-    }
-
-    return fallback;
-}
-
 function getActiveDeviceTypeLabel() {
     try {
         if (typeof window.getActiveDeviceType === 'function') {
@@ -3450,13 +3427,6 @@ function startConnectionMonitoring() {
             includeDeviceStatus: true
         });
     }, statusRefreshIntervalMs);
-}
-
-// Legacy hook kept for compatibility; status refresh is now handled centrally.
-function startDeviceStatusUpdates() {
-    if (window.deviceStatusInterval) {
-        clearInterval(window.deviceStatusInterval);
-    }
 }
 
 // Update device status via API

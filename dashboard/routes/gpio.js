@@ -2011,38 +2011,6 @@ function evaluateCondition(condition, values) {
     }
 }
 
-// ==================== CRON EXPRESSION MATCHER ====================
-// Match a simple cron expression against the current local time.
-// Format: "HH:MM"  or  "HH:MM:DOW" where DOW is comma-separated day abbreviations
-// e.g.  "08:30"  — every day at 08:30
-//       "08:30:Mon,Wed,Fri" — Mon/Wed/Fri at 08:30
-//       "*\/5"  — every 5 minutes (minute divisible by 5, use star-slash in expr string)
-// Returns true once per minute (checked every second; cooldown prevents multiple fires).
-function matchCronExpr(expr) {
-    if (!expr || typeof expr !== 'string') return false;
-    const now = new Date();
-    const hh = now.getHours();
-    const mm = now.getMinutes();
-    const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][now.getDay()];
-
-    const parts = expr.trim().split(':');
-    // "*/N" — every N minutes
-    if (parts[0].startsWith('*/')) {
-        const n = parseInt(parts[0].slice(2));
-        return !isNaN(n) && n > 0 && mm % n === 0;
-    }
-    // "HH:MM" or "HH:MM:DOW,..."
-    const exprHH = parseInt(parts[0]);
-    const exprMM = parseInt(parts[1]);
-    if (isNaN(exprHH) || isNaN(exprMM)) return false;
-    if (exprHH !== hh || exprMM !== mm) return false;
-    if (parts[2]) {
-        const days = parts[2].toUpperCase().split(',').map(d => d.trim().slice(0, 3));
-        return days.includes(dow.toUpperCase());
-    }
-    return true;
-}
-
 // ==================== RULE EVALUATION LOOP ====================
 // Runs every 1 second. Evaluates each enabled rule against current pin states
 // and fires the action via MQTT if the condition is true and the cooldown has passed.
