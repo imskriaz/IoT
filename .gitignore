@@ -1,0 +1,115 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/tasks.json
+
+# Documentation is kept local and is not published with the source tree
+*.md
+*.markdown
+*.mdown
+docs/
+**/docs/
+
+# Local environment and secrets
+.tmp-cookies*.txt
+dashboard/.tmp-cookies*.txt
+.env
+.env.*
+!.env.example
+dashboard/.env
+dashboard/.env.*
+!dashboard/.env.example
+*.local
+*.secret
+*.secrets
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.crt
+*.csr
+*-passwords*
+passwords
+credentials.json
+
+# Dependency directories and package-manager caches
+node_modules/
+.gradle/
+.cxx/
+local.properties
+captures/
+*.apk
+*.aab
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm/
+.pnpm-store/
+
+# Runtime output and local application state
+logs/
+*.log
+dashboard/logs/
+dashboard/temp/
+dashboard/data/*.sqlite
+dashboard/data/*.sqlite-*
+dashboard/data/firmware/*.bin
+temp/
+tmp/
+.tmp/
+.cache/
+coverage/
+dist/
+out/
+
+# ESP-IDF and embedded build output
+build/
+build-*/
+**/build/
+**/build-*/
+sdkconfig
+sdkconfig.old
+*.bin
+*.elf
+*.map
+*.hex
+*.uf2
+*.o
+*.obj
+*.a
+*.so
+*.d
+*.gcda
+*.gcno
+
+# Generated firmware and toolchain archives
+.espressif/
+.toolchain/cache/
+*.tar.gz
+*.zip
+*.msi
+
+# Local captures and generated reports
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.ndjson
+*.pcap
+*.dump
+*.bak
+
+# Public trust material and example configuration templates remain source files.
+!firmware/**/components/mqtt_mgr/mqtt_root_ca.pem
+!.env.example
+!dashboard/.env.example
+.toolchain/
+
+# Local archives and backups
+.archive/

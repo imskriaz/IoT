@@ -1,0 +1,477 @@
+'use strict';
+
+const express = require('express');
+const request = require('supertest');
+
+jest.mock('../utils/logger', () => ({
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn()
+}));
+
+jest.mock('../services/smsConversations', () => ({
+    attachSmsToConversation: jest.fn().mockResolvedValue(0),
+    refreshSmsConversationBySmsId: jest.fn().mockResolvedValue()
+}));
+
+function makeDbMock(overrides = {}) {
+    return {
+        get: jest.fn().mockResolvedValue(null),
+        all: jest.fn().mockResolvedValue([]),
+        run: jest.fn().mockResolvedValue({ lastID: 0, changes: 0 }),
+        ...overrides
+    };
+}
+
+function buildApp(router, dbMock, options = {}) {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+        req.session = { user: { id: 1, role: 'admin', username: 'admin' } };
+        req.user = req.session.user;
+        req.apiKey = {
+            id: 11,
+            scopes: 'write',
+            device_ids: JSON.stringify(options.deviceIds || ['android-http-01'])
+        };
+        next();
+    });
+    app.locals.db = dbMock;
+    app.use('/v1/android/bridge', router);
+    return app;
+}
+
+describe('androidBridgeAdapter routes', () => {
+    afterEach(() => {
+        delete global.modemService;
+        delete global.io;
+        jest.restoreAllMocks();
+        jest.clearAllMocks();
+    });
+
+    test('POST /status stores HTTP Android status and updates runtime device status', async () => {
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue({ id: 'android-http-01' })
+        });
+        global.modemService = {
+            updateDeviceStatus: jest.fn()
+        };
+
+        const router = require('../routes/androidBridgeAdapter');
+        const app = buildApp(router, db, { deviceIds: ['android-http-01', 'android-unknown-01'] });
+        const res = await request(app)
+            .post('/v1/android/bridge/status')
+            .send({
+                device_id: 'android-http-01',
+                name: 'Android HTTP',
+                status: {
+                    battery: 81,
+                    active_path: 'http',
+                    wifi_ssid: 'Office'
+                }
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(global.modemService.updateDeviceStatus).toHaveBeenCalledWith(
+            'android-http-01',
+            expect.objectContaining({
+                battery: 81,
+                active_path: 'http',
+                bridge_transport: 'http',
+                transport_mode: 'http'
+            })
+        );
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('UPDATE devices'),
+            ['android-http-01']
+        );
+    });
+
+    test('POST /status applies HTTP call status to active call records and emits call updates', async () => {
+        const emit = jest.fn();
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue({ id: 'android-http-01' }),
+            run: jest.fn()
+                .mockResolvedValueOnce({ lastID: 0, changes: 1 })
+                .mockResolvedValueOnce({ lastID: 0, changes: 1 })
+        });
+        global.modemService = {
+            updateDeviceStatus: jest.fn()
+        };
+        global.io = {
+            to: jest.fn().mockReturnValue({ emit })
+        };
+
+        const router = require('../routes/androidBridgeAdapter');
+        const app = buildApp(router, db, { deviceIds: ['android-http-01'] });
+        const res = await request(app)
+            .post('/v1/android/bridge/status')
+            .send({
+                device_id: 'android-http-01',
+                status: {
+                    active_path: 'http',
+                    timestamp: '2026-04-21T00:10:45.000Z',
+                    call: {
+                        status: 'ended',
+                        direction: 'outgoing',
+                        number: '+8801628301525',
+                        updatedAt: '2026-04-21T00:10:45.000Z'
+                    }
+                }
+            });
+
+        expect(res.status).toBe(200);
+        expect(db.run).toHaveBeenNthCalledWith(
+            2,
+            expect.stringContaining('UPDATE calls'),
+            ['ended', 0, 'android-http-01', '8801628301525', '1628301525']
+        );
+        expect(emit).toHaveBeenCalledWith(
+            'call:status',
+            expect.objectContaining({
+                deviceId: 'android-http-01',
+                status: 'ended',
+                direction: 'outgoing',
+                number: '+8801628301525'
+            })
+        );
+        expect(emit).toHaveBeenCalledWith(
+            'call:ended',
+            expect.objectContaining({
+                deviceId: 'android-http-01',
+                status: 'ended'
+            })
+        );
+    });
+
+    test('POST /status normalizes Android HTTP call status aliases before updating active call rows', async () => {
+        const emit = jest.fn();
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue({ id: 'android-http-01' }),
+            run: jest.fn()
+                .mockResolvedValueOnce({ lastID: 0, changes: 1 })
+                .mockResolvedValueOnce({ lastID: 0, changes: 1 })
+        });
+        global.modemService = {
+            updateDeviceStatus: jest.fn()
+        };
+        global.io = {
+            to: jest.fn().mockReturnValue({ emit })
+        };
+
+        const router = require('../routes/androidBridgeAdapter');
+        const app = buildApp(router, db, { deviceIds: ['android-http-01'] });
+        const res = await request(app)
+            .post('/v1/android/bridge/status')
+            .send({
+                device_id: 'android-http-01',
+                status: {
+                    active_path: 'http',
+                    timestamp: '2026-04-23T17:42:45.000Z',
+                    call: {
+                        status: 'online',
+                        direction: 'outgoing',
+                        number: '+8801313712494',
+                        updatedAt: '2026-04-23T17:42:45.000Z'
+                    }
+                }
+            });
+
+        expect(res.status).toBe(200);
+        expect(db.run).toHaveBeenNthCalledWith(
+            2,
+            expect.stringContaining('UPDATE calls'),
+            ['connected', 0, 'android-http-01', '8801313712494', '1313712494']
+        );
+        expect(emit).toHaveBeenCalledWith(
+            'call:status',
+            expect.objectContaining({
+                deviceId: 'android-http-01',
+                status: 'connected',
+                number: '+8801313712494'
+            })
+        );
+    });
+
+    test('POST /status reconciles Android HTTP inactive call payloads into ended events', async () => {
+        const emit = jest.fn();
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue({ id: 'android-http-01' }),
+            run: jest.fn()
+                .mockResolvedValueOnce({ lastID: 0, changes: 1 })
+                .mockResolvedValueOnce({ lastID: 0, changes: 1 })
+        });
+        global.modemService = {
+            updateDeviceStatus: jest.fn()
+        };
+        global.io = {
+            to: jest.fn().mockReturnValue({ emit })
+        };
+
+        const router = require('../routes/androidBridgeAdapter');
+        const app = buildApp(router, db, { deviceIds: ['android-http-01'] });
+        const res = await request(app)
+            .post('/v1/android/bridge/status')
+            .send({
+                device_id: 'android-http-01',
+                status: {
+                    active_path: 'http',
+                    timestamp: '2026-04-23T17:43:09.000Z',
+                    call: {
+                        active: false,
+                        direction: 'outgoing',
+                        number: '+8801313712494',
+                        updatedAt: '2026-04-23T17:43:09.000Z'
+                    }
+                }
+            });
+
+        expect(res.status).toBe(200);
+        expect(db.run).toHaveBeenNthCalledWith(
+            2,
+            expect.stringContaining('UPDATE calls'),
+            ['ended', 0, 'android-http-01', '8801313712494', '1313712494']
+        );
+        expect(emit).toHaveBeenCalledWith(
+            'call:status',
+            expect.objectContaining({
+                deviceId: 'android-http-01',
+                status: 'ended',
+                number: '+8801313712494'
+            })
+        );
+        expect(emit).toHaveBeenCalledWith(
+            'call:ended',
+            expect.objectContaining({
+                deviceId: 'android-http-01',
+                status: 'ended'
+            })
+        );
+    });
+
+    test('POST /messages/receive stores synced read SMS without marking it unread', async () => {
+        const emit = jest.fn();
+        const { attachSmsToConversation } = require('../services/smsConversations');
+        attachSmsToConversation.mockResolvedValueOnce(77);
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue({ id: 'android-http-01' }),
+            run: jest.fn().mockResolvedValue({ lastID: 42, changes: 1 })
+        });
+        global.io = {
+            to: jest.fn().mockReturnValue({ emit })
+        };
+
+        const router = require('../routes/androidBridgeAdapter');
+        const app = buildApp(router, db, { deviceIds: ['android-http-01'] });
+        const res = await request(app)
+            .post('/v1/android/bridge/messages/receive')
+            .send({
+                device_id: 'android-http-01',
+                type: 'sms_sync',
+                sync: true,
+                from: '+8801555000000',
+                content: 'historical message',
+                encrypted: true,
+                timestamp: '2026-04-03T09:00:00.000Z',
+                read: 1,
+                external_id: 'android-sms-42'
+            });
+
+        expect(res.status).toBe(200);
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT OR IGNORE INTO sms'),
+            [
+                'android-http-01',
+                '+8801555000000',
+                null,
+                'historical message',
+                'incoming',
+                'received',
+                '2026-04-03T09:00:00.000Z',
+                1,
+                'android-http-sync',
+                null,
+                'android-sms-42',
+                null,
+                null,
+                null,
+                null,
+                1
+            ]
+        );
+        expect(emit).toHaveBeenCalledWith(
+            'sms:received',
+            expect.objectContaining({
+                deviceId: 'android-http-01',
+                id: 42,
+                conversationId: 77,
+                sync: true,
+                read: 1,
+                external_id: 'android-sms-42'
+            })
+        );
+    });
+
+    test('GET /messages/outstanding returns queued Android HTTP messages and marks them sending', async () => {
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue({ id: 'android-http-01' }),
+            all: jest.fn().mockResolvedValue([
+                {
+                    id: 41,
+                    external_id: 'send-sms_abc123',
+                    to_number: '+8801700000000',
+                    message: 'Queue me',
+                    timestamp: '2026-04-18T12:00:00.000Z',
+                    encrypted: 1
+                }
+            ])
+        });
+
+        const router = require('../routes/androidBridgeAdapter');
+        const app = buildApp(router, db);
+        const res = await request(app)
+            .get('/v1/android/bridge/messages/outstanding')
+            .query({ device_id: 'android-http-01' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.messages).toEqual([
+            expect.objectContaining({
+                id: 'send-sms_abc123',
+                to: '+8801700000000',
+                content: 'Queue me',
+                encrypted: true
+            })
+        ]);
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining("SET status = 'sending'"),
+            ['android-http-01', 41]
+        );
+    });
+
+    test('POST /status ignores unknown Android HTTP devices and records them as unregistered', async () => {
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue(null)
+        });
+        global.modemService = {
+            updateDeviceStatus: jest.fn()
+        };
+
+        const router = require('../routes/androidBridgeAdapter');
+        const app = buildApp(router, db, { deviceIds: ['android-http-01', 'android-unknown-01'] });
+        const res = await request(app)
+            .post('/v1/android/bridge/status')
+            .send({
+                device_id: 'android-unknown-01',
+                name: 'Unknown Android',
+                status: {
+                    battery: 61
+                }
+            });
+
+        expect(res.status).toBe(202);
+        expect(res.body.ignored).toBe(true);
+        expect(global.modemService.updateDeviceStatus).not.toHaveBeenCalled();
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO unregistered_devices'),
+            expect.arrayContaining(['android-unknown-01', 'status'])
+        );
+    });
+
+    test('POST /messages/:id/events stores Android HTTP SMS delivery results', async () => {
+        const db = makeDbMock();
+        db.get
+            .mockResolvedValueOnce({ id: 'android-http-01' })
+            .mockResolvedValueOnce({
+                id: 41,
+                device_id: 'android-http-01',
+                to_number: '+8801700000000'
+            });
+        global.io = {
+            to: jest.fn().mockReturnValue({ emit: jest.fn() })
+        };
+
+        const router = require('../routes/androidBridgeAdapter');
+        const app = buildApp(router, db);
+        const res = await request(app)
+            .post('/v1/android/bridge/messages/send-sms_abc123/events')
+            .send({
+                device_id: 'android-http-01',
+                event_name: 'DELIVERED',
+                timestamp: '2026-04-18T12:10:00.000Z'
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('UPDATE sms'),
+            ['delivered', 'delivered', '2026-04-18T12:10:00.000Z', 'delivered', 'Android bridge failed', 'send-sms_abc123', 'android-http-01']
+        );
+        const { refreshSmsConversationBySmsId } = require('../services/smsConversations');
+        expect(refreshSmsConversationBySmsId).toHaveBeenCalledWith(db, 41);
+    });
+
+    test('POST /messages/receive stores multipart metadata for Android HTTP inbound SMS', async () => {
+        const emit = jest.fn();
+        const { attachSmsToConversation } = require('../services/smsConversations');
+        attachSmsToConversation.mockResolvedValueOnce(81);
+        const db = makeDbMock({
+            get: jest.fn().mockResolvedValue({ id: 'android-http-01' }),
+            run: jest.fn().mockResolvedValue({ lastID: 64, changes: 1 })
+        });
+        global.io = {
+            to: jest.fn().mockReturnValue({ emit })
+        };
+
+        const router = require('../routes/androidBridgeAdapter');
+        const app = buildApp(router, db, { deviceIds: ['android-http-01'] });
+        const res = await request(app)
+            .post('/v1/android/bridge/messages/receive')
+            .send({
+                device_id: 'android-http-01',
+                from: '3=:24;82=8<3=86<2:41',
+                content: ', second part',
+                timestamp: '2026-05-06T11:02:09.420Z',
+                multipart_ref: '44',
+                multipart_part_index: 2,
+                multipart_part_count: 3,
+                sim_slot: 0
+            });
+
+        expect(res.status).toBe(200);
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('multipart_group_key'),
+            [
+                'android-http-01',
+                '3=:24;82=8<3=86<2:41',
+                null,
+                ', second part',
+                'incoming',
+                'received',
+                '2026-05-06T11:02:09.421Z',
+                0,
+                'android-http',
+                0,
+                null,
+                '44',
+                2,
+                3,
+                'multipart:android-http-01:incoming:3=:24;82=8<3=86<2:41:0:44:3',
+                0
+            ]
+        );
+        expect(emit).toHaveBeenCalledWith(
+            'sms:received',
+            expect.objectContaining({
+                id: 64,
+                conversationId: 81,
+                multipart_ref: '44',
+                multipart_part_index: 2,
+                multipart_part_count: 3,
+                timestamp: '2026-05-06T11:02:09.421Z'
+            })
+        );
+    });
+});

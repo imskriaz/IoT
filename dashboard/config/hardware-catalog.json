@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "catalogVersion": "2026-09-06.1",
+  "qualification": "draft",
+  "boards": [
+    {
+      "id": "waveshare-esp32-s3-a7670e-4g-v2",
+      "version": "1",
+      "qualification": "reference_only",
+      "source": "components/board_bsp/include/board_bsp.h",
+      "pins": {
+        "17": {"capabilities":["gpio","uart_rx"],"reservedBy":"modem"},
+        "18": {"capabilities":["gpio","uart_tx"],"reservedBy":"modem"},
+        "21": {"capabilities":["gpio"],"reservedBy":"modem_enable"},
+        "4": {"capabilities":["gpio","sd_cmd"],"reservedBy":"sd"},
+        "5": {"capabilities":["gpio","sd_clk"],"reservedBy":"sd"},
+        "6": {"capabilities":["gpio","sd_data"],"reservedBy":"sd"},
+        "46": {"capabilities":["gpio","input"],"reservedBy":"sd_card_detect"}
+      },
+      "buses": {"i2c0":{"type":"i2c","pins":{"sda":8,"scl":9}},"spi2":{"type":"spi","pins":{"sck":12,"mosi":11,"miso":13,"cs":10}}},
+      "limits": {"modules":16,"configBytes":32768,"displayWidth":1024,"displayHeight":1024}
+    }
+  ],
+  "modules": [
+    {"type":"display.generic-i2c","version":"1","category":"display","qualification":"draft","driver":"display_i2c","buses":["i2c"],"signals":{},"limits":{"width":1024,"height":1024,"frameBytes":1048576}},
+    {"type":"display.generic-spi","version":"1","category":"display","qualification":"draft","driver":"display_spi","buses":["spi"],"signals":{"cs":"output","dc":"output","reset":"output"},"limits":{"width":1024,"height":1024,"frameBytes":1048576}},
+    {"type":"sensor.generic-i2c","version":"1","category":"sensor","qualification":"draft","driver":"sensor_i2c","buses":["i2c"],"signals":{},"limits":{"sampleHz":100}}
+  ]
+}

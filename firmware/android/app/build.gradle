@@ -1,0 +1,94 @@
+import java.util.Properties
+
+plugins {
+    id 'com.android.application'
+}
+
+// SEC-07: release signing comes from an external keystore.properties file
+// (NOT committed) so release APKs are never debug-signed. Place next to
+// app/build.gradle:
+//   storeFile=/absolute/path/to/release.keystore
+//   storePassword=...
+//   keyAlias=...
+//   keyPassword=...
+def keystorePropertiesFile = rootProject.file("app/keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
+android {
+    namespace = 'com.devicebridge.android'
+    compileSdk = 35
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    defaultConfig {
+        applicationId = 'com.devicebridge.android'
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 2
+        versionName = '0.2.0'
+    }
+
+    splits {
+        abi {
+            enable = true
+            reset()
+            include 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+            universalApk = false
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // Sideload APKs should stay small; Android can extract compressed
+            // native libs during install instead of storing them raw.
+            useLegacyPackaging = true
+            excludes += ['**/libVkLayer_khronos_validation.so']
+        }
+    }
+
+    signingConfigs {
+        releaseSigning {
+            if (keystorePropertiesFile.exists()) {
+                storeFile = file(keystoreProperties['storeFile'])
+                storePassword = keystoreProperties['storePassword']
+                keyAlias = keystoreProperties['keyAlias']
+                keyPassword = keystoreProperties['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.releaseSigning
+            } else {
+                // Explicit failure instead of silently debug-signing a
+                // release artifact (SEC-07). `assembleDebug` remains usable.
+                logger.warn('SEC-07: app/keystore.properties not found — assembleRelease will FAIL. Create it with storeFile/storePassword/keyAlias/keyPassword.')
+                signingConfig = null
+            }
+            minifyEnabled = false   // Paho/zxing reflection needs rules first
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+    implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+    implementation 'org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5'
+    testImplementation 'junit:junit:4.13.2'
+    // org.json on the JVM so provisioning/describe logic is unit-testable
+    // (Android's bundled org.json classes are stubs in local unit tests).
+    testImplementation 'org.json:json:20240303'
+}

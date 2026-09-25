@@ -1,0 +1,9 @@
+{
+  "host": "YOUR_VPS_IP",
+  "user": "root",
+  "publicUrl": "https://your-public-url.example.com",
+  "preset": "all",
+  "skipMissing": true,
+  "reconnect": true,
+  "followRedirects": false
+}

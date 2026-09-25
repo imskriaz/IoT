@@ -1,0 +1,2008 @@
+'use strict';
+
+const express = require('express');
+const request = require('supertest');
+
+jest.mock('../utils/logger', () => ({
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn()
+}));
+
+function buildApp(router, db) {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+        req.session = { user: { id: 7, role: "admin", username: "admin" } };
+        next();
+    });
+    app.locals.db = db;
+    app.use('/api/sms', router);
+    return app;
+}
+
+let roomEmit;
+
+function expectDeviceEvent(deviceId, eventName, payload) {
+    expect(global.io.to).toHaveBeenCalledWith(`device:${deviceId}`);
+    expect(roomEmit).toHaveBeenCalledWith(eventName, payload);
+}
+
+function addAtomicQueueMock(db, smsId) {
+    const queued = [];
+    db._raw = {
+        transaction: (callback) => ({ immediate: callback }),
+        prepare: (sql) => ({
+            run: (...args) => {
+                if (sql.includes('INSERT INTO sms')) return { lastInsertRowid: smsId };
+                if (sql.includes('INSERT INTO device_command_queue')) {
+                    queued.push({ id: args[0], payload: JSON.parse(args[2]), messageId: args[3] });
+                }
+                return { changes: 1 };
+            }
+        })
+    };
+    global.mqttService.processPersistentQueue = jest.fn(async () => {
+        expect(queued.length).toBeGreaterThan(1);
+    });
+    return queued;
+}
+
+describe('sms route queue-first delivery', () => {
+    const originalPhoneCountryCode = process.env.PHONE_COUNTRY_CODE;
+
+    beforeEach(() => {
+        jest.resetModules();
+        process.env.PHONE_COUNTRY_CODE = '880';
+        roomEmit = jest.fn();
+        global.io = {
+            emit: jest.fn(),
+            to: jest.fn(() => ({ emit: roomEmit }))
+        };
+        global.mqttService = {
+            publishCommand: jest.fn().mockResolvedValue({
+                success: true,
+                queued: true,
+                queueId: 'queue-1',
+                messageId: 'send-sms_test123',
+                status: 'pending'
+            })
+        };
+    });
+
+    afterEach(() => {
+        if (originalPhoneCountryCode === undefined) delete process.env.PHONE_COUNTRY_CODE;
+        else process.env.PHONE_COUNTRY_CODE = originalPhoneCountryCode;
+        delete global.io;
+        delete global.mqttService;
+        delete global.modemService;
+    });
+
+    test('queues outgoing SMS instead of failing when broker is offline', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (String(sql).includes('INSERT INTO sms')) {
+                    return { lastID: 41, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('SELECT id FROM devices')) return { id: 'device-1' };
+                return null;
+            }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/send')
+            .send({
+                to: '+8801555123456',
+                message: 'queued hello',
+                deviceId: 'device-1'
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            queued: true,
+            id: 41,
+            queueId: 'queue-1',
+            status: 'queued'
+        }));
+        expect(global.mqttService.publishCommand).toHaveBeenCalledWith(
+            'device-1',
+            'send-sms',
+            expect.objectContaining({
+                to: '+8801555123456',
+                message: '',
+                smsId: 41,
+                sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
+                sms_pdu_encoding: 'gsm7',
+                sms_status_report_requested: true
+            }),
+            false,
+            45000,
+            expect.objectContaining({
+                source: 'dashboard-sms',
+                userId: 7,
+                priority: 50,
+                messageId: expect.stringMatching(/^sms_/)
+            })
+        );
+    });
+
+    test('pull messages waits for device sync result and closes the sync cycle', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+        global.mqttService.publishCommand.mockResolvedValueOnce({
+            success: true,
+            payload: { count: 2, synced: 2 }
+        });
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/sync')
+            .send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(global.mqttService.publishCommand).toHaveBeenCalledWith(
+            'device-1',
+            'sync-sms',
+            expect.objectContaining({ reason: 'dashboard_pull' }),
+            true,
+            90000,
+            expect.objectContaining({ source: 'dashboard' })
+        );
+        expectDeviceEvent('device-1', 'sms:sync-started', {
+            deviceId: 'device-1',
+            total: 0,
+            requested: true
+        });
+        expectDeviceEvent('device-1', 'sms:sync-completed', expect.objectContaining({
+            deviceId: 'device-1',
+            device_id: 'device-1',
+            total: 2,
+            synced: 2,
+            requested: true
+        }));
+    });
+
+    test('pull messages stores flash history entries from the device action payload', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                const text = String(sql);
+                if (text.includes('INSERT OR IGNORE INTO sms')) {
+                    return { lastID: 501, changes: 1 };
+                }
+                if (text.includes('INSERT INTO sms_conversations')) {
+                    return { lastID: 701, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                const text = String(sql);
+                if (text.includes('firmware_storage_id')) return null;
+                if (text.includes('FROM sms_conversations')) return null;
+                if (text.includes('COUNT(*) AS total_count')) return { total_count: 1, unread_count: 0 };
+                if (text.includes('SELECT id, message, timestamp, type, status')) {
+                    return {
+                        id: 501,
+                        message: 'Pulled from flash',
+                        timestamp: '2026-05-08T10:00:00.000Z',
+                        type: 'incoming',
+                        status: 'received'
+                    };
+                }
+                return null;
+            }),
+            all: jest.fn(async () => [])
+        };
+        global.mqttService.publishCommand.mockResolvedValueOnce({
+            success: true,
+            payload: {
+                count: 1,
+                entries: [
+                    {
+                        storage_id: 44,
+                        from: '+8801712345678',
+                        text: 'Pulled from flash',
+                        timestamp_ms: Date.parse('2026-05-08T10:00:00.000Z'),
+                        sim_slot: 0,
+                        outgoing: false
+                    }
+                ]
+            }
+        });
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/sync')
+            .send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            imported: 1,
+            skipped: 0,
+            total: 1,
+            deviceHistoryAck: expect.objectContaining({
+                requested: 1,
+                queued: 1
+            })
+        }));
+        expect(db.run).toHaveBeenCalledWith('BEGIN IMMEDIATE');
+        expect(db.run).toHaveBeenCalledWith('COMMIT');
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT OR IGNORE INTO sms'),
+            expect.arrayContaining([
+                'device-1',
+                '+8801712345678',
+                null,
+                'Pulled from flash',
+                '2026-05-08T10:00:00.000Z',
+                1,
+                'incoming',
+                'received',
+                'esp32-flash-sync',
+                'esp32-sms:44',
+                null,
+                44
+            ])
+        );
+        expectDeviceEvent('device-1', 'sms:sync-completed', expect.objectContaining({
+            deviceId: 'device-1',
+            total: 1,
+            synced: 1,
+            imported: 1,
+            skipped: 0
+        }));
+        expect(global.mqttService.publishCommand).toHaveBeenNthCalledWith(
+            2,
+            'device-1',
+            'delete-sms',
+            { storage_id: 44 },
+            false,
+            30000,
+            expect.objectContaining({
+                source: 'dashboard-sms-history-ack',
+                persistent: true,
+                replaySafe: true
+            })
+        );
+    });
+
+    test('pull messages rolls back the DB batch and does not acknowledge device history when import fails', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                const text = String(sql);
+                if (text.includes('INSERT OR IGNORE INTO sms')) throw new Error('db write failed');
+                return { changes: 1 };
+            }),
+            get: jest.fn(async () => null),
+            all: jest.fn(async () => [])
+        };
+        global.mqttService.publishCommand.mockResolvedValueOnce({
+            success: true,
+            payload: {
+                count: 1,
+                entries: [{ storage_id: 45, from: '+8801712345678', text: 'Keep until DB commit', outgoing: false }]
+            }
+        });
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const res = await request(app).post('/api/sms/sync').send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(500);
+        expect(db.run).toHaveBeenCalledWith('BEGIN IMMEDIATE');
+        expect(db.run).toHaveBeenCalledWith('ROLLBACK');
+        expect(global.mqttService.publishCommand).toHaveBeenCalledTimes(1);
+    });
+
+    test('pull messages acknowledges a duplicate only after finding its durable DB row', async () => {
+        const db = {
+            run: jest.fn(async () => ({ changes: 1 })),
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('firmware_storage_id')) return { id: 600 };
+                return null;
+            }),
+            all: jest.fn(async () => [])
+        };
+        global.mqttService.publishCommand.mockResolvedValueOnce({
+            success: true,
+            payload: {
+                count: 1,
+                entries: [{ storage_id: 46, from: '+8801712345678', text: 'Already stored', outgoing: false }]
+            }
+        });
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const res = await request(app).post('/api/sms/sync').send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({ imported: 0, skipped: 1 }));
+        expect(db.run).toHaveBeenCalledWith('COMMIT');
+        expect(global.mqttService.publishCommand).toHaveBeenNthCalledWith(
+            2,
+            'device-1',
+            'delete-sms',
+            { storage_id: 46 },
+            false,
+            30000,
+            expect.objectContaining({ source: 'dashboard-sms-history-ack' })
+        );
+    });
+
+    test('pull messages drains every firmware history page with a stable cursor', async () => {
+        const db = {
+            run: jest.fn(async () => ({ changes: 1 })),
+            get: jest.fn(async (sql, params) => {
+                if (String(sql).includes('firmware_storage_id')) {
+                    return { id: 600 + Number(params?.[1] || 0) };
+                }
+                return null;
+            }),
+            all: jest.fn(async () => [])
+        };
+        global.mqttService.publishCommand.mockImplementation(async (_deviceId, command, payload) => {
+            if (command === 'delete-sms') return { queued: true };
+            if (command === 'sync-sms' && payload.before_storage_id === 80) {
+                return {
+                    success: true,
+                    payload: {
+                        count: 1,
+                        total: 3,
+                        has_more: false,
+                        next_cursor: 0,
+                        entries: [{ storage_id: 70, storage_index: 7, from: '+8803', text: 'third' }]
+                    }
+                };
+            }
+            return {
+                success: true,
+                payload: {
+                    count: 2,
+                    total: 3,
+                    has_more: true,
+                    next_cursor: 80,
+                    entries: [
+                        { storage_id: 90, storage_index: 9, from: '+8801', text: 'first' },
+                        { storage_id: 80, storage_index: 8, from: '+8802', text: 'second' }
+                    ]
+                }
+            };
+        });
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const res = await request(app).post('/api/sms/sync').send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            imported: 0,
+            skipped: 3,
+            total: 3,
+            deviceHistoryAck: expect.objectContaining({ requested: 3, queued: 3 }),
+            diagnostics: expect.objectContaining({ pages: 2 })
+        }));
+        const syncCalls = global.mqttService.publishCommand.mock.calls
+            .filter((call) => call[1] === 'sync-sms');
+        expect(syncCalls).toHaveLength(2);
+        expect(syncCalls[0][2]).toEqual(expect.objectContaining({ max_entries: 8 }));
+        expect(syncCalls[1][2]).toEqual(expect.objectContaining({ before_storage_id: 80, max_entries: 8 }));
+        expect(db.run).toHaveBeenCalledWith('BEGIN IMMEDIATE');
+        expect(db.run).toHaveBeenCalledWith('COMMIT');
+    });
+
+    test('pull messages rebinds a migrated firmware ID to the existing durable SMS row', async () => {
+        const db = {
+            run: jest.fn(async () => ({ changes: 1 })),
+            get: jest.fn(async (sql) => {
+                const text = String(sql);
+                if (text.includes('device_id = ? AND firmware_storage_id = ?')) return null;
+                if (text.includes("ABS(strftime('%s', timestamp)")) return { id: 620 };
+                return null;
+            }),
+            all: jest.fn(async () => [])
+        };
+        global.mqttService.publishCommand.mockResolvedValueOnce({
+            success: true,
+            payload: {
+                count: 1,
+                entries: [{
+                    storage_id: 2147483649,
+                    storage_index: null,
+                    identity_migrated: true,
+                    from: '+8801712345678',
+                    text: 'Already imported before spool upgrade ',
+                    timestamp_ms: Date.parse('2026-05-08T10:00:00.000Z') / 1000,
+                    outgoing: false
+                }]
+            }
+        }).mockResolvedValueOnce({ queued: true });
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const res = await request(app).post('/api/sms/sync').send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            imported: 0,
+            skipped: 1,
+            diagnostics: expect.objectContaining({ reconciled: 1 })
+        }));
+        expect(db.get).toHaveBeenCalledWith(
+            expect.stringContaining('message = ?'),
+            expect.arrayContaining(['Already imported before spool upgrade '])
+        );
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('SET firmware_storage_id = ?'),
+            [2147483649, 'esp32-sms:2147483649', 620]
+        );
+        expect(db.run).not.toHaveBeenCalledWith(
+            expect.stringContaining('INSERT OR IGNORE INTO sms'),
+            expect.anything()
+        );
+        expect(global.mqttService.publishCommand).toHaveBeenNthCalledWith(
+            2,
+            'device-1',
+            'delete-sms',
+            { storage_id: 2147483649 },
+            false,
+            30000,
+            expect.objectContaining({ source: 'dashboard-sms-history-ack' })
+        );
+    });
+
+    test('pull messages warns when SIM storage has records but firmware returns no readable entries', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+        global.modemService = {
+            getDeviceStatus: jest.fn(() => ({
+                hardware: {
+                    smsStorage: {
+                        name: 'ME',
+                        used: 111,
+                        total: 180
+                    }
+                }
+            }))
+        };
+        global.mqttService.publishCommand.mockResolvedValueOnce({
+            success: true,
+            detail: 'sms_pull_empty',
+            payload: {
+                count: 0,
+                synced: 0,
+                entries: []
+            }
+        });
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/sync')
+            .send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            imported: 0,
+            total: 0,
+            warning: expect.stringContaining('111/180')
+        }));
+        expect(res.body.diagnostics).toEqual(expect.objectContaining({
+            blocker: 'sms_storage_has_no_readable_pull_entries',
+            requiresSerialValidation: true,
+            pullDetail: 'sms_pull_empty'
+        }));
+        expectDeviceEvent('device-1', 'sms:sync-completed', expect.objectContaining({
+            deviceId: 'device-1',
+            total: 0,
+            synced: 0,
+            imported: 0,
+            deviceSmsStorage: expect.objectContaining({ used: 111, total: 180 }),
+            warning: expect.stringContaining('firmware returned no readable SMS entries')
+        }));
+    });
+
+    test('pull messages emits a closing sync event when device sync fails', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+        global.mqttService.publishCommand.mockRejectedValueOnce(new Error('sync timed out'));
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/sync')
+            .send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(500);
+        expect(res.body.success).toBe(false);
+        expectDeviceEvent('device-1', 'sms:sync-started', {
+            deviceId: 'device-1',
+            total: 0,
+            requested: true
+        });
+        expect(roomEmit).toHaveBeenCalledWith('sms:sync-failed', expect.objectContaining({
+            deviceId: 'device-1',
+            device_id: 'device-1',
+            synced: 0,
+            requested: true,
+            error: 'sync timed out'
+        }));
+        expect(roomEmit).toHaveBeenCalledWith('sms:sync-completed', expect.objectContaining({
+            deviceId: 'device-1',
+            device_id: 'device-1',
+            synced: 0,
+            requested: true,
+            error: 'sync timed out'
+        }));
+    });
+
+    test('pull messages includes storage diagnostics when device execution fails', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+        const error = new Error('sms_pull_failed');
+        error.response = {
+            success: false,
+            result: 'failed',
+            detail: 'sms_pull_failed',
+            payload: {
+                synced: 0,
+                count: 0,
+                entries: [],
+                pull_detail: 'sms_pull_failed',
+                pull_result_code: 260,
+                sms_storage_used: 111,
+                sms_storage_total: 180,
+                sms_storage_free: 69
+            }
+        };
+        global.mqttService.publishCommand.mockRejectedValueOnce(error);
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/sync')
+            .send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(502);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: false,
+            message: 'sms_pull_failed',
+            warning: expect.stringContaining('111/180'),
+            deviceSmsStorage: expect.objectContaining({ used: 111, total: 180, free: 69 })
+        }));
+        expect(res.body.diagnostics).toEqual(expect.objectContaining({
+            blocker: 'sms_storage_has_no_readable_pull_entries',
+            failure: true,
+            pullDetail: 'sms_pull_failed',
+            pullResultCode: 260
+        }));
+        expect(roomEmit).toHaveBeenCalledWith('sms:sync-failed', expect.objectContaining({
+            deviceId: 'device-1',
+            error: 'sms_pull_failed',
+            warning: expect.stringContaining('firmware returned no readable SMS entries')
+        }));
+    });
+
+    test('pull messages treats resolved modem-not-ready payload as device execution failure', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+        global.mqttService.publishCommand.mockResolvedValueOnce({
+            success: true,
+            result: 'completed',
+            detail: 'sms_pull_empty',
+            payload: {
+                synced: 0,
+                count: 0,
+                entries: [],
+                pull_detail: 'modem_not_ready',
+                pull_result_code: 259,
+                sms_storage_used: 111,
+                sms_storage_total: 180,
+                sms_storage_free: 69
+            }
+        });
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/sync')
+            .send({ deviceId: 'device-1' });
+
+        expect(res.status).toBe(502);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: false,
+            message: 'modem_not_ready',
+            warning: expect.stringContaining('111/180')
+        }));
+        expect(res.body.diagnostics).toEqual(expect.objectContaining({
+            failure: true,
+            pullDetail: 'modem_not_ready',
+            pullResultCode: 259
+        }));
+    });
+
+    test('accepts multipart SMS under the device limit and queues dashboard-built PDU parts', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (String(sql).includes('INSERT INTO sms')) {
+                    return { lastID: 61, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('SELECT id FROM devices')) return { id: 'device-1' };
+                return null;
+            }),
+            all: jest.fn()
+        };
+        const queued = addAtomicQueueMock(db, 61);
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const multipartMessage = 'x'.repeat(900);
+
+        const res = await request(app)
+            .post('/api/sms/send')
+            .send({
+                to: '+8801555123456',
+                message: multipartMessage,
+                deviceId: 'device-1'
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            queued: true,
+            id: 61
+        }));
+        expect(global.mqttService.publishCommand).not.toHaveBeenCalled();
+        expect(global.mqttService.processPersistentQueue).toHaveBeenCalledTimes(1);
+        expect(queued).toHaveLength(6);
+        expect(queued[0]).toEqual(expect.objectContaining({
+            messageId: expect.stringMatching(/^sms_.*_p1$/),
+            payload: expect.objectContaining({
+                to: '+8801555123456',
+                message: '',
+                smsId: 61,
+                sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
+                sms_pdu_encoding: 'gsm7',
+                sms_status_report_requested: true
+            })
+        }));
+        expect(queued[5].messageId).toMatch(/^sms_.*_p6$/);
+    });
+
+    test('accepts Bangla SMS and keeps the single-part MQTT contract when it fits Unicode limits', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (String(sql).includes('INSERT INTO sms')) {
+                    return { lastID: 71, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('SELECT id FROM devices')) return { id: 'device-1' };
+                return null;
+            }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const banglaMessage = '\u09AC\u09BE\u0982\u09B2\u09BE';
+
+        const res = await request(app)
+            .post('/api/sms/send')
+            .send({
+                to: '+8801555123456',
+                message: banglaMessage,
+                deviceId: 'device-1'
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            queued: true,
+            id: 71
+        }));
+        expect(global.mqttService.publishCommand).toHaveBeenCalledWith(
+            'device-1',
+            'send-sms',
+            expect.objectContaining({
+                to: '+8801555123456',
+                message: '',
+                smsId: 71,
+                sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
+                sms_pdu_encoding: 'ucs2',
+                sms_status_report_requested: true
+            }),
+            false,
+            45000,
+            expect.objectContaining({
+                messageId: expect.stringMatching(/^sms_/)
+            })
+        );
+    });
+
+    test('accepts Bangla multipart SMS and uses the multipart MQTT contract', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (String(sql).includes('INSERT INTO sms')) {
+                    return { lastID: 72, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('SELECT id FROM devices')) return { id: 'device-1' };
+                return null;
+            }),
+            all: jest.fn()
+        };
+        const queued = addAtomicQueueMock(db, 72);
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const banglaMultipartMessage = '\u0985'.repeat(80);
+
+        const res = await request(app)
+            .post('/api/sms/send')
+            .send({
+                to: '+8801555123456',
+                message: banglaMultipartMessage,
+                deviceId: 'device-1'
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            success: true,
+            queued: true,
+            id: 72
+        }));
+        expect(global.mqttService.publishCommand).not.toHaveBeenCalled();
+        expect(global.mqttService.processPersistentQueue).toHaveBeenCalledTimes(1);
+        expect(queued).toHaveLength(5);
+        expect(queued[0]).toEqual(expect.objectContaining({
+            messageId: expect.stringMatching(/^sms_.*_p1$/),
+            payload: expect.objectContaining({
+                to: '+8801555123456',
+                message: '',
+                smsId: 72,
+                sms_pdu: expect.stringMatching(/^00[0-9A-F]+$/),
+                sms_pdu_encoding: 'ucs2'
+            })
+        }));
+        expect(queued[4].messageId).toMatch(/^sms_.*_p5$/);
+    });
+
+    test('send SMS stays MQTT-only even when a serial bridge exists', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (String(sql).includes('INSERT INTO sms')) {
+                    return { lastID: 52, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('SELECT id FROM devices')) return { id: 'device-1' };
+                return null;
+            }),
+            all: jest.fn()
+        };
+
+        global.mqttService = {
+            publishCommand: jest.fn().mockRejectedValue(new Error('MQTT not connected'))
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const serialBridge = {
+            _port: { isOpen: true },
+            sendSms: jest.fn()
+        };
+        app.locals.serialBridge = serialBridge;
+
+        const res = await request(app)
+            .post('/api/sms/send')
+            .send({
+                to: '+8801555123456',
+                message: 'mqtt only',
+                deviceId: 'device-1'
+            });
+
+        expect(res.status).toBe(503);
+        expect(res.body).toMatchObject({
+            success: false,
+            message: 'MQTT not connected'
+        });
+        expect(serialBridge.sendSms).not.toHaveBeenCalled();
+    });
+
+    test('queues one SMS per recipient when multiple numbers are provided', async () => {
+        let insertId = 60;
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (String(sql).includes('INSERT INTO sms')) {
+                    insertId += 1;
+                    return { lastID: insertId, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('SELECT id FROM devices')) return { id: 'device-1' };
+                return null;
+            }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/send')
+            .send({
+                to: '01700000001, 01700000002',
+                message: 'fanout hello',
+                deviceId: 'device-1'
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            success: true,
+            multiRecipient: true,
+            count: 2,
+            recipients: ['+8801700000001', '+8801700000002']
+        });
+        expect(global.mqttService.publishCommand).toHaveBeenCalledTimes(2);
+    });
+
+    test('queues bulk compose rows with each row message', async () => {
+        let insertId = 80;
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (String(sql).includes('INSERT INTO sms')) {
+                    insertId += 1;
+                    return { lastID: insertId, changes: 1 };
+                }
+                return { changes: 1 };
+            }),
+            get: jest.fn(async (sql) => {
+                if (String(sql).includes('SELECT id FROM devices')) return { id: 'device-1' };
+                return null;
+            }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/send')
+            .send({
+                deviceId: 'device-1',
+                bulkRows: [
+                    { sender: '01700000001', message: 'first row message' },
+                    { sender: '01700000002', message: 'second row message' }
+                ]
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            success: true,
+            multiRecipient: true,
+            bulkQueue: true,
+            count: 2,
+            recipients: ['+8801700000001', '+8801700000002']
+        });
+        expect(global.mqttService.publishCommand).toHaveBeenCalledTimes(2);
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO sms'),
+            expect.arrayContaining(['+8801700000001', 'first row message'])
+        );
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO sms'),
+            expect.arrayContaining(['+8801700000002', 'second row message'])
+        );
+    });
+
+    test('returns unread count scoped to the requested device', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue({ count: 3 }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/unread?deviceId=device-2');
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            success: true,
+            deviceId: 'device-2',
+            count: 3
+        });
+        expect(res.headers['cache-control']).toContain('no-store');
+        expect(res.headers.pragma).toBe('no-cache');
+        expect(res.headers.expires).toBe('0');
+        expect(db.get).toHaveBeenCalledWith(
+            expect.stringContaining('WHERE device_id = ? AND read = 0 AND type = \'incoming\''),
+            ['device-2']
+        );
+    });
+
+    test('returns unread count scoped to the requested sim slot', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue({ count: 2 }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/unread?deviceId=device-2&simSlot=1');
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            success: true,
+            deviceId: 'device-2',
+            count: 2
+        });
+        expect(db.get).toHaveBeenCalledWith(
+            expect.stringContaining('sim_slot = ?'),
+            ['device-2', 1]
+        );
+    });
+
+    test('unread count stays slot-scoped in sim-scoped mode', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue({ count: 2 }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/unread?deviceId=device-2&simSlot=1');
+
+        expect(res.status).toBe(200);
+        expect(db.get).toHaveBeenCalledWith(
+            expect.stringContaining('sim_slot = ?'),
+            ['device-2', 1]
+        );
+    });
+
+    test('bulk import emits a live update for the active device', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (sql === 'BEGIN' || sql === 'COMMIT') return { changes: 0 };
+                if (String(sql).includes('INSERT OR IGNORE INTO sms')) return { changes: 1 };
+                return { changes: 0 };
+            }),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/bulk-import')
+            .send({
+                deviceId: 'device-4',
+                messages: [
+                    {
+                        from: '+8801628301525',
+                        message: 'hello import',
+                        type: 'incoming',
+                        timestamp: '2026-04-12T10:00:00.000Z'
+                    },
+                    {
+                        from: '+8801628301525',
+                        message: '',
+                        type: 'incoming'
+                    }
+                ]
+            });
+
+        expect(res.status).toBe(201);
+        expect(res.body).toMatchObject({
+            success: true,
+            imported: 1,
+            skipped: 1
+        });
+        expectDeviceEvent('device-4', 'sms:bulk-imported', {
+            deviceId: 'device-4',
+            imported: 1,
+            skipped: 1
+        });
+    });
+
+    test('bulk import skips invalid timestamps instead of failing the whole batch', async () => {
+        const db = {
+            run: jest.fn(async (sql) => {
+                if (sql === 'BEGIN' || sql === 'COMMIT') return { changes: 0 };
+                if (String(sql).includes('INSERT OR IGNORE INTO sms')) return { changes: 1 };
+                return { changes: 0 };
+            }),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/bulk-import')
+            .send({
+                deviceId: 'device-5',
+                messages: [
+                    {
+                        from: '+8801628301525',
+                        message: 'valid import',
+                        type: 'incoming',
+                        timestamp: '2026-04-12T10:00:00.000Z'
+                    },
+                    {
+                        from: '+8801628301525',
+                        message: 'bad import',
+                        type: 'incoming',
+                        timestamp: 'not-a-date'
+                    }
+                ]
+            });
+
+        expect(res.status).toBe(201);
+        expect(res.body).toMatchObject({
+            success: true,
+            imported: 1,
+            skipped: 1
+        });
+        expect(db.run.mock.calls.length).toBeGreaterThanOrEqual(3);
+        expectDeviceEvent('device-5', 'sms:bulk-imported', {
+            deviceId: 'device-5',
+            imported: 1,
+            skipped: 1
+        });
+    });
+
+    test('lists SMS with fresh-only headers and requested device scope', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue({ count: 0 }),
+            all: jest.fn().mockResolvedValue([])
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms?deviceId=device-9&limit=1');
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            success: true,
+            data: []
+        });
+        expect(res.headers['cache-control']).toContain('no-store');
+        expect(res.headers.pragma).toBe('no-cache');
+        expect(res.headers.expires).toBe('0');
+        expect(db.all).toHaveBeenCalledWith(
+            expect.stringContaining('WHERE device_id = ?'),
+            ['device-9', 1, 0]
+        );
+        expect(db.get).toHaveBeenCalledWith(
+            expect.stringContaining('SELECT COUNT(*) as count FROM sms'),
+            ['device-9']
+        );
+    });
+
+    test('returns a thread scoped to the selected device with fresh-only headers', async () => {
+        const rows = [
+            {
+                id: 22,
+                device_id: 'device-8',
+                from_number: '+8801628301525',
+                to_number: null,
+                message: 'reply two',
+                timestamp: '2026-04-12T10:05:00.000Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                source: 'device',
+                error: null,
+                external_id: null,
+                sent_by: null
+            },
+            {
+                id: 21,
+                device_id: 'device-8',
+                from_number: 'self',
+                to_number: '+8801628301525',
+                message: 'reply one',
+                timestamp: '2026-04-12T10:00:00.000Z',
+                read: 1,
+                type: 'outgoing',
+                status: 'queued',
+                user_id: 7,
+                source: 'dashboard',
+                error: null,
+                external_id: 'send-sms_abc123',
+                sent_by: 'admin'
+            }
+        ];
+
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn().mockResolvedValue(rows)
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/thread?deviceId=device-8&number=01628301525&limit=20');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.meta).toMatchObject({
+            deviceId: 'device-8',
+            number: '01628301525',
+            count: 2
+        });
+        expect(res.body.data.map((entry) => entry.id)).toEqual([21, 22]);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            source: 'dashboard',
+            sent_by: 'admin',
+            external_id: 'send-sms_abc123'
+        }));
+        expect(res.body.data[1]).toEqual(expect.objectContaining({
+            source: 'device'
+        }));
+        expect(res.headers['cache-control']).toContain('no-store');
+        expect(res.headers.pragma).toBe('no-cache');
+        expect(res.headers.expires).toBe('0');
+        expect(db.all).toHaveBeenCalledWith(
+            expect.stringContaining('LEFT JOIN users u ON s.user_id = u.id'),
+            ['device-8', '01628301525', '1628301525', '01628301525', 20]
+        );
+    });
+
+    test('thread lookup excludes rows with unknown SIM metadata when a SIM scope is selected', async () => {
+        const rows = [
+            {
+                id: 22,
+                device_id: 'device-8',
+                from_number: '+8801628301525',
+                to_number: null,
+                message: 'reply two',
+                timestamp: '2026-04-12T10:05:00.000Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                source: 'device',
+                error: null,
+                external_id: null,
+                sent_by: null
+            },
+            {
+                id: 21,
+                device_id: 'device-8',
+                from_number: 'self',
+                to_number: '+8801628301525',
+                message: 'reply one',
+                timestamp: '2026-04-12T10:00:00.000Z',
+                read: 1,
+                type: 'outgoing',
+                status: 'queued',
+                user_id: 7,
+                source: 'dashboard',
+                error: null,
+                external_id: 'send-sms_abc123',
+                sent_by: 'admin'
+            }
+        ];
+
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn().mockResolvedValue(rows)
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/thread?deviceId=device-8&number=01628301525&simSlot=0&limit=20');
+
+        expect(res.status).toBe(200);
+        expect(res.body.meta).toMatchObject({ count: 2, simSlot: 0 });
+        expect(db.all).toHaveBeenCalledWith(
+            expect.stringContaining('s.sim_slot = ?'),
+            ['device-8', '01628301525', '1628301525', '01628301525', 0, 20]
+        );
+    });
+
+    test('stale conversation deep link falls back to thread number lookup', async () => {
+        const rows = [
+            {
+                id: 343,
+                device_id: 'device-8',
+                from_number: '3=:24;82=8<3=86<2:41',
+                to_number: null,
+                message: 'পেতে ডায়াল বা ভিজিট https://cutt.ly/myRobiOffer',
+                timestamp: '2026-05-04T07:36:28.123Z',
+                read: 1,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 49,
+                source: 'device',
+                error: null,
+                external_id: null,
+                sent_by: null
+            }
+        ];
+
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue(null),
+            all: jest.fn()
+                .mockResolvedValueOnce([])
+                .mockResolvedValueOnce(rows)
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/thread?deviceId=device-8&conversationId=56&number=%2B880324828386241&limit=20');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.meta).toMatchObject({
+            deviceId: 'device-8',
+            conversationId: 49,
+            title: 'Robi',
+            count: 1
+        });
+        expect(db.all).toHaveBeenNthCalledWith(
+            2,
+            expect.stringContaining('s.device_id = ?'),
+            ['device-8', '880324828386241', '4828386241', '+880324828386241', 20]
+        );
+    });
+
+    test('thread view merges Android multipart fragments with explicit metadata into one rendered message', async () => {
+        const rows = [
+            {
+                id: 348,
+                device_id: 'device-8',
+                from_number: '3=:24;82=8<3=86<2:41',
+                to_number: null,
+                message: ', \u09f3\u09e8\u09eb\u09ec-\u09e8\u09e6\u099c\u09bf\u09ac\u09bf+\u09e7\u09eb\u09e6\u09ae\u09bf\u09a8\u09bf\u099f-\u09e9\u09e6\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09ec#; \u09f3\u09e8\u09ee\u09ea-\u09e8\u09eb\u099c\u09bf\u09ac\u09bf-\u09e9\u09e6\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09e7#',
+                timestamp: '2026-05-06T11:02:09.420Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 49,
+                source: 'android-mqtt',
+                error: null,
+                external_id: null,
+                multipart_ref: '44',
+                multipart_part_index: 2,
+                multipart_part_count: 2,
+                multipart_group_key: 'multipart:device-8:incoming:3=:24;82=8<3=86<2:41:0:44:2',
+                sent_by: null
+            },
+            {
+                id: 347,
+                device_id: 'device-8',
+                from_number: '3=:24;82=8<3=86<2:41',
+                to_number: null,
+                message: '\u09b8\u09aa\u09cd\u09a4\u09be\u09b9 \u0995\u09bf\u0982\u09ac\u09be \u09ae\u09be\u09b8\u09c7\u09b0- \u09b8\u09c1\u09aa\u09be\u09b0 \u0985\u09ab\u09be\u09b0 \u09b0\u09ac\u09bf\'\u09a4\u09c7\u0987! \u0986\u099c \u09f3\u09ef\u09eb-\u09eb\u099c\u09bf\u09ac\u09bf-\u09ed\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ee\u09e7#',
+                timestamp: '2026-05-06T11:01:48.808Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 49,
+                source: 'android-mqtt',
+                error: null,
+                external_id: null,
+                multipart_ref: '44',
+                multipart_part_index: 1,
+                multipart_part_count: 2,
+                multipart_group_key: 'multipart:device-8:incoming:3=:24;82=8<3=86<2:41:0:44:2',
+                sent_by: null
+            }
+        ];
+
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue({ primary_number: '+880324828386241', title: 'Robi' }),
+            all: jest.fn().mockResolvedValue(rows)
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/thread?deviceId=device-8&conversationId=49&number=%2B880324828386241&limit=20');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.meta).toMatchObject({
+            conversationId: 49,
+            title: 'Robi',
+            count: 1
+        });
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            id: 347,
+            display_from: 'Robi',
+            merged_multipart: true,
+            merged_sms_count: 2,
+            merged_sms_ids: [347, 348],
+            message: '\u09b8\u09aa\u09cd\u09a4\u09be\u09b9 \u0995\u09bf\u0982\u09ac\u09be \u09ae\u09be\u09b8\u09c7\u09b0- \u09b8\u09c1\u09aa\u09be\u09b0 \u0985\u09ab\u09be\u09b0 \u09b0\u09ac\u09bf\'\u09a4\u09c7\u0987! \u0986\u099c \u09f3\u09ef\u09eb-\u09eb\u099c\u09bf\u09ac\u09bf-\u09ed\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ee\u09e7#, \u09f3\u09e8\u09eb\u09ec-\u09e8\u09e6\u099c\u09bf\u09ac\u09bf+\u09e7\u09eb\u09e6\u09ae\u09bf\u09a8\u09bf\u099f-\u09e9\u09e6\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09ec#; \u09f3\u09e8\u09ee\u09ea-\u09e8\u09eb\u099c\u09bf\u09ac\u09bf-\u09e9\u09e6\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09e7#'
+        }));
+    });
+
+    test('thread view merges close Android multipart fragments when metadata is missing', async () => {
+        const rows = [
+            {
+                id: 352,
+                device_id: '7hd7g-xkdvx7-kv753n',
+                from_number: '2<2?<9>112693<<6',
+                to_number: null,
+                message: '\u09aa\u09c7\u09a4\u09c7 \u09a1\u09be\u09df\u09be\u09b2 \u09ac\u09be \u09ad\u09bf\u099c\u09bf\u099f https://cutt.ly/myRobiOffer',
+                timestamp: '2026-05-07T10:03:03.405Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 56,
+                source: 'android-mqtt',
+                error: null,
+                external_id: null,
+                multipart_ref: null,
+                multipart_part_index: null,
+                multipart_part_count: null,
+                multipart_group_key: null,
+                sent_by: null
+            },
+            {
+                id: 351,
+                device_id: '7hd7g-xkdvx7-kv753n',
+                from_number: '2<2?<9>112693<<6',
+                to_number: null,
+                message: '\u09bf\u09ac\u09bf+\u09e9\u09e6\u09ae\u09bf\u09a8\u09bf\u099f-\u09e9\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09e6# \u0993 \u09f3\u09e7\u09ec\u09e7-\u09e7\u09e6\u099c\u09bf\u09ac\u09bf+\u09e7\u09e6\u09e6\u09ae\u09bf\u09a8\u09bf\u099f-\u09e9\u09e6\u09a6\u09bf\u09a8 *\u09ea\u09e7\u09e8*\u09ef\u09ed\u09eb#; ',
+                timestamp: '2026-05-07T10:03:02.396Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 56,
+                source: 'android-mqtt',
+                error: null,
+                external_id: null,
+                multipart_ref: null,
+                multipart_part_index: null,
+                multipart_part_count: null,
+                multipart_group_key: null,
+                sent_by: null
+            },
+            {
+                id: 350,
+                device_id: '7hd7g-xkdvx7-kv753n',
+                from_number: '2<2?<9>112693<<6',
+                to_number: null,
+                message: '\u09b0\u09ac\u09bf \u09ae\u09be\u09a8\u09c7\u0987 \u09b8\u09c1\u09aa\u09be\u09b0 \u0985\u09ab\u09be\u09b0! \u0986\u099c \u09f3\u09e8\u09ee-\u09e8\u099c\u09bf\u09ac\u09bf-\u09ee \u0998\u09a8\u09cd\u099f\u09be (\u09e7\u09ac\u09be\u09b0) *\u09ea\u09e7\u09e8*\u09ef\u09ef\u09e7#; \u09f3\u09ec\u09ed-\u09ea\u099c',
+                timestamp: '2026-05-07T10:03:01.276Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 56,
+                source: 'android-mqtt',
+                error: null,
+                external_id: null,
+                multipart_ref: null,
+                multipart_part_index: null,
+                multipart_part_count: null,
+                multipart_group_key: null,
+                sent_by: null
+            }
+        ];
+
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue({ primary_number: '+880324828386241', title: 'Robi' }),
+            all: jest.fn().mockResolvedValue(rows)
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/thread?deviceId=7hd7g-xkdvx7-kv753n&conversationId=56&number=%2B880324828386241&limit=20');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.meta.count).toBe(1);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            id: 350,
+            display_from: 'Robi',
+            merged_multipart: true,
+            merged_sms_count: 3,
+            merged_sms_ids: [350, 351, 352],
+            message: expect.stringContaining('https://cutt.ly/myRobiOffer')
+        }));
+    });
+
+    test('returns conversation summaries scoped to the selected device', async () => {
+        const conversationRows = [
+            {
+                conversation_id: 33,
+                device_id: 'device-10',
+                thread_number: '+8801628301525',
+                display_from: '+8801628301525',
+                message: 'latest inbound',
+                timestamp: '2026-04-12T10:05:00.000Z',
+                status: 'received',
+                unread_count: 2,
+                total_count: 3,
+                last_direction: 'incoming'
+            },
+            {
+                conversation_id: 31,
+                device_id: 'device-10',
+                thread_number: '+8801888888888',
+                display_from: '+8801888888888',
+                message: 'queued outbound',
+                timestamp: '2026-04-12T09:00:00.000Z',
+                status: 'queued',
+                unread_count: 0,
+                total_count: 1,
+                last_direction: 'outgoing'
+            }
+        ];
+
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue({ count: 2 }),
+            all: jest.fn().mockResolvedValue(conversationRows)
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/conversations?deviceId=device-10&limit=20');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.meta).toMatchObject({
+            deviceId: 'device-10',
+            total: 2,
+            limit: 20
+        });
+        expect(res.body.data).toEqual([
+            expect.objectContaining({
+                conversation_id: 33,
+                thread_number: '+8801628301525',
+                total_count: 3,
+                unread_count: 2,
+                last_direction: 'incoming'
+            }),
+            expect.objectContaining({
+                conversation_id: 31,
+                thread_number: '+8801888888888',
+                total_count: 1,
+                unread_count: 0,
+                last_direction: 'outgoing'
+            })
+        ]);
+        expect(res.headers['cache-control']).toContain('no-store');
+        expect(res.headers.pragma).toBe('no-cache');
+        expect(res.headers.expires).toBe('0');
+        expect(db.all).toHaveBeenCalledWith(
+            expect.stringContaining('FROM sms_conversations'),
+            ['device-10', 20]
+        );
+        expect(db.get).toHaveBeenCalledWith(
+            'SELECT COUNT(*) AS count FROM sms_conversations WHERE device_id = ?',
+            ['device-10']
+        );
+    });
+
+    test('conversation fallback stays slot-scoped in SIM-scoped mode', async () => {
+        const smsRows = [
+            {
+                id: 12,
+                device_id: 'device-10',
+                from_number: '+8801628301525',
+                to_number: null,
+                message: 'latest inbound',
+                timestamp: '2026-04-12T10:05:00.000Z',
+                read: 0,
+                type: 'incoming',
+                status: 'received',
+                user_id: null,
+                conversation_id: 33
+            },
+            {
+                id: 11,
+                device_id: 'device-10',
+                from_number: 'self',
+                to_number: '+8801628301525',
+                message: 'queued outbound',
+                timestamp: '2026-04-12T09:00:00.000Z',
+                read: 1,
+                type: 'outgoing',
+                status: 'queued',
+                user_id: 7,
+                conversation_id: 33
+            }
+        ];
+
+        const db = {
+            run: jest.fn(),
+            get: jest.fn().mockResolvedValue({ count: 0 }),
+            all: jest.fn().mockResolvedValue(smsRows)
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/conversations?deviceId=device-10&simSlot=1&limit=20');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.data).toEqual([
+            expect.objectContaining({
+                thread_number: '+8801628301525',
+                total_count: 2
+            })
+        ]);
+        expect(db.all).toHaveBeenCalledWith(
+            expect.stringContaining('sim_slot = ?'),
+            ['device-10', 1, 250]
+        );
+    });
+
+    test('SIM-scoped conversation preview assembles multipart and counts one unread logical message', async () => {
+        const smsRows = [2, 1].map((index) => ({
+            id: index, device_id: 'device-10', from_number: '+8801000000000', to_number: '',
+            source: 'esp32-mqtt', type: 'incoming', sim_slot: 1, read: 0,
+            timestamp: `2026-09-13T10:00:0${index}.000Z`,
+            multipart_ref: '42', multipart_part_count: 2, multipart_part_index: index,
+            message: index === 1 ? 'বাংলা ' : 'পরীক্ষা'
+        }));
+        const db = { run: jest.fn(), get: jest.fn(), all: jest.fn().mockResolvedValue(smsRows) };
+        const app = buildApp(require('../routes/sms'), db);
+        const res = await request(app).get('/api/sms/conversations?deviceId=device-10&simSlot=1&limit=20');
+        expect(res.status).toBe(200);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).toMatchObject({ message: 'বাংলা পরীক্ষা', total_count: 1, unread_count: 1,
+            conversation_id: null, timestamp: '2026-09-13T10:00:02.000Z' });
+        expect(db.all).toHaveBeenCalledWith(expect.stringContaining('multipart_part_index'), ['device-10', 1, 250]);
+        expect(db.all).toHaveBeenCalledWith(expect.stringContaining('sim_slot = ?'), ['device-10', 1, 250]);
+    });
+
+    test('exports CSV for the active device with no-store headers', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn().mockResolvedValue([
+                {
+                    id: 5,
+                    device_id: 'device-12',
+                    from_number: '+8801000000000',
+                    to_number: '+8801628301525',
+                    message: 'csv hello',
+                    type: 'outgoing',
+                    status: 'sent',
+                    timestamp: '2026-04-12T10:00:00.000Z',
+                    sent_by: 'admin'
+                }
+            ])
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).get('/api/sms/export/csv?deviceId=device-12');
+
+        expect(res.status).toBe(200);
+        expect(res.headers['content-type']).toContain('text/csv');
+        expect(res.headers['cache-control']).toContain('no-store');
+        expect(res.headers.pragma).toBe('no-cache');
+        expect(res.headers.expires).toBe('0');
+        expect(res.headers['content-disposition']).toContain('sms-export-device-12-');
+        expect(res.text).toContain('id,device_id,from_number,to_number,message,type,status,timestamp,sim_slot,sent_by');
+        expect(res.text).toContain('5,device-12,+8801000000000,+8801628301525,"csv hello",outgoing,sent,2026-04-12T10:00:00.000Z,,admin');
+        expect(db.all).toHaveBeenCalledWith(
+            expect.stringContaining('WHERE s.device_id = ?'),
+            ['device-12']
+        );
+    });
+
+    test('clears only the selected device inbox messages', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 4 }),
+            get: jest.fn().mockResolvedValue({ count: 0 }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .delete('/api/sms/clear?deviceId=device-3')
+            .send({ type: 'incoming' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            success: true,
+            deviceId: 'device-3',
+            deleted: 4
+        });
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('DELETE FROM sms WHERE device_id = ? AND type != \'outgoing\''),
+            ['device-3']
+        );
+        expect(db.get).toHaveBeenCalledWith(
+            expect.stringContaining('WHERE device_id = ? AND read = 0 AND type = \'incoming\''),
+            ['device-3']
+        );
+        expectDeviceEvent('device-3', 'sms:bulk-deleted', expect.objectContaining({
+            deviceId: 'device-3',
+            count: 4,
+            unreadCount: 0
+        }));
+    });
+
+    test('deletes only a message owned by the active device', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 1 }),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).delete('/api/sms/99?deviceId=device-4');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(db.run).toHaveBeenCalledWith(
+            'DELETE FROM sms WHERE id = ? AND device_id = ?',
+            ['99', 'device-4']
+        );
+    });
+
+    test('bulk read is scoped to the active device and returns a fresh unread count', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 2 }),
+            get: jest.fn().mockResolvedValue({ count: 1 }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/bulk-read?deviceId=device-5')
+            .send({ ids: [10, 11] });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            success: true,
+            marked: 2,
+            unreadCount: 1
+        });
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('UPDATE sms SET read = 1 WHERE device_id = ? AND id IN (?,?) AND read = 0'),
+            ['device-5', 10, 11]
+        );
+        expect(db.get).toHaveBeenCalledWith(
+            expect.stringContaining('WHERE device_id = ? AND read = 0 AND type = \'incoming\''),
+            ['device-5']
+        );
+    });
+
+    test('mark all read updates the full unread inbox for the active device', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 5 }),
+            get: jest.fn().mockResolvedValue({ count: 0 }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/mark-all-read?deviceId=device-15')
+            .send({});
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            success: true,
+            marked: 5,
+            unreadCount: 0
+        });
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining("WHERE device_id = ?"),
+            ['device-15']
+        );
+        expect(db.get).toHaveBeenCalledWith(
+            expect.stringContaining('WHERE device_id = ? AND read = 0 AND type = \'incoming\''),
+            ['device-15']
+        );
+        expectDeviceEvent('device-15', 'sms:bulk-read', {
+            deviceId: 'device-15',
+            count: 5,
+            unreadCount: 0
+        });
+    });
+
+    test('template create returns the same joined shape used by template list', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ lastID: 12, changes: 1 }),
+            get: jest.fn().mockResolvedValue({
+                id: 12,
+                title: 'Hello',
+                message: 'Template body',
+                created_at: '2026-04-12T10:00:00.000Z',
+                created_by: 'admin'
+            }),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app)
+            .post('/api/sms/templates')
+            .send({
+                title: 'Hello',
+                message: 'Template body'
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            success: true,
+            data: {
+                id: 12,
+                title: 'Hello',
+                message: 'Template body',
+                created_by: 'admin'
+            }
+        });
+        expect(db.get).toHaveBeenCalledWith(
+            expect.stringContaining('LEFT JOIN users u ON t.created_by = u.id'),
+            [12]
+        );
+        expect(global.io.emit).toHaveBeenCalledWith('sms:template-added', expect.objectContaining({
+            id: 12,
+            created_by: 'admin'
+        }));
+    });
+
+    test('creates scheduled SMS with normalized phone number and active device scope', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ lastID: 77, changes: 1 }),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const sendAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+        const res = await request(app)
+            .post('/api/sms/scheduled?deviceId=device-6')
+            .send({
+                to: '01628301525',
+                message: 'scheduled hello',
+                send_at: sendAt
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            success: true,
+            id: 77
+        });
+        expect(db.run).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO scheduled_sms'),
+            ['device-6', '+8801628301525', 'scheduled hello', sendAt, null, 7]
+        );
+        expectDeviceEvent('device-6', 'sms:scheduled-created', {
+            id: 77,
+            deviceId: 'device-6',
+            to_number: '+8801628301525',
+            message: 'scheduled hello',
+            send_at: sendAt,
+            sim_slot: null,
+            status: 'pending',
+            created_by: 'admin'
+        });
+    });
+
+    test('creates one scheduled SMS per recipient when multiple numbers are provided', async () => {
+        let nextId = 90;
+        const db = {
+            run: jest.fn(async () => ({ lastID: ++nextId, changes: 1 })),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const sendAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+        const res = await request(app)
+            .post('/api/sms/scheduled?deviceId=device-6')
+            .send({
+                recipients: ['01628301525', '01700000001'],
+                message: 'scheduled multi',
+                send_at: sendAt
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            success: true,
+            multiRecipient: true,
+            count: 2,
+            recipients: ['+8801628301525', '+8801700000001']
+        });
+        expect(db.run).toHaveBeenCalledTimes(2);
+        expectDeviceEvent('device-6', 'sms:scheduled-created', expect.objectContaining({
+            id: 91,
+            to_number: '+8801628301525'
+        }));
+        expectDeviceEvent('device-6', 'sms:scheduled-created', expect.objectContaining({
+            id: 92,
+            to_number: '+8801700000001'
+        }));
+    });
+
+    test('rejects scheduled SMS longer than the firmware send payload allows', async () => {
+        const db = {
+            run: jest.fn(),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+        const sendAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+        const res = await request(app)
+            .post('/api/sms/scheduled?deviceId=device-6')
+            .send({
+                to: '01628301525',
+                message: 'x'.repeat(1024),
+                send_at: sendAt
+            });
+
+        expect(res.status).toBe(400);
+        expect(res.body).toMatchObject({
+            success: false,
+            message: 'Message exceeds device SMS limit (max 1023 UTF-8 bytes)'
+        });
+        expect(db.run).not.toHaveBeenCalled();
+    });
+
+    test('scheduled SMS delete is scoped to the active device', async () => {
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 1 }),
+            get: jest.fn(),
+            all: jest.fn()
+        };
+
+        const router = require('../routes/sms');
+        const app = buildApp(router, db);
+
+        const res = await request(app).delete('/api/sms/scheduled/77?deviceId=device-7');
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(db.run).toHaveBeenCalledWith(
+            `DELETE FROM scheduled_sms WHERE id = ? AND device_id = ? AND status = 'pending'`,
+            ['77', 'device-7']
+        );
+        expectDeviceEvent('device-7', 'sms:scheduled-cancelled', {
+            id: 77,
+            deviceId: 'device-7'
+        });
+    });
+
+    test('scheduled processor emits failed events when queueing fails', async () => {
+        jest.useFakeTimers();
+
+        const dueSms = {
+            id: 91,
+            device_id: 'device-11',
+            to_number: '+8801628301525',
+            message: 'scheduled fail',
+            user_id: 7
+        };
+
+        const db = {
+            run: jest.fn().mockResolvedValue({ changes: 1 }),
+            get: jest.fn(),
+            all: jest.fn().mockResolvedValue([dueSms])
+        };
+
+        global.mqttService = {
+            publishCommand: jest.fn().mockRejectedValue(new Error('broker unavailable'))
+        };
+
+        const router = require('../routes/sms');
+        const interval = router.startScheduledSmsProcessor({ locals: { db } });
+
+        await jest.advanceTimersByTimeAsync(30000);
+
+        expect(db.all).toHaveBeenCalledWith(
+            `SELECT * FROM scheduled_sms WHERE status = 'pending' AND datetime(send_at) <= datetime('now') LIMIT 20`
+        );
+        // QUEUE-02: the row is claimed before dispatch (no double-send window).
+        expect(db.run).toHaveBeenCalledWith(
+            `UPDATE scheduled_sms SET status = 'claiming', claimed_at = ? WHERE id = ? AND status = 'pending'`,
+            [expect.any(String), 91]
+        );
+        // Transient failures release the claim back to pending with a retry
+        // budget instead of double-sending on the next tick.
+        expect(db.run).toHaveBeenCalledWith(
+            `UPDATE scheduled_sms SET status = ?, error = ?, attempt_count = COALESCE(attempt_count, 0) + 1 WHERE id = ?`,
+            ['pending', 'broker unavailable', 91]
+        );
+        expectDeviceEvent('device-11', 'sms:scheduled-failed', {
+            id: 91,
+            deviceId: 'device-11',
+            to: '+8801628301525',
+            error: 'broker unavailable'
+        });
+
+        clearInterval(interval);
+        jest.useRealTimers();
+    });
+});

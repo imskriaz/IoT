@@ -1,0 +1,24 @@
+idf_component_register(
+    SRCS "app_main.c"
+    REQUIRES
+        api_bridge
+        automation_bridge
+        battery_monitor
+        board_bsp
+        config_mgr
+        device_status
+        diagnostics
+        health_monitor
+        modem_a7670
+        mqtt_mgr
+        nvs_flash
+        app_update
+        serial_config
+        sms_service
+        state_mgr
+        status_watch
+        storage_mgr
+        telemetry_service
+        wifi_mgr
+        log
+)

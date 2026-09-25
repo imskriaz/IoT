@@ -1,0 +1,293 @@
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary fixed-top app-navbar" aria-label="Application header">
+    <script>
+        window.PREFERRED_PHONE_COUNTRY_CODE = '<%= process.env.PHONE_COUNTRY_CODE || "" %>';
+    </script>
+    <% const sidebarEnabled = (typeof showSidebar === 'undefined') ? true : showSidebar !== false; %>
+    <% const statusChromeEnabled = (typeof showStatusChrome === 'undefined') ? true : showStatusChrome !== false; %>
+    <% const initialStatus = (typeof initialDeviceStatus !== 'undefined' && initialDeviceStatus) ? initialDeviceStatus : null; %>
+    <% const initialDeviceOnline = !!(initialStatus && initialStatus.online); %>
+    <% const initialStatusTokens = initialStatus ? [initialStatus.type, initialStatus.deviceType, initialStatus.device_type, initialStatus.model, initialStatus.bridge, initialStatus.bridge_type, initialStatus.app, initialStatus.platform, initialStatus.activePath, initialStatus.active_path, initialStatus.transport_mode, initialStatus.bridge_transport, initialStatus.deviceId, initialStatus.device_id].map(v => String(v || '').toLowerCase()) : []; %>
+    <% const initialHttpSmsLane = initialStatusTokens.some(t => t === 'httpsms' || t === 'httpsms-bridge' || t.includes('httpsms') || (t.includes('http') && t.includes('sms'))); %>
+    <% const initialBrokerOnline = (typeof initialMqttConnected !== 'undefined') ? !!initialMqttConnected : false; %>
+    <% const initialBrokerRequired = !initialHttpSmsLane; %>
+    <% const initialStatusLabel = initialDeviceOnline && (!initialBrokerRequired || initialBrokerOnline) ? 'All Operational' : (initialBrokerRequired && !initialBrokerOnline ? 'MQTT Offline' : (initialStatus ? (initialHttpSmsLane ? 'Phone Offline' : 'Device Offline') : 'No Device Selected')); %>
+    <div class="container-fluid px-3 px-md-4 app-navbar-inner">
+        <% if (sidebarEnabled) { %>
+            <button class="btn btn-link text-white p-1 d-md-none app-header-icon" id="sidebarToggle" type="button" onclick="toggleSidebar()" aria-label="Open sidebar menu" title="Sidebar menu" aria-controls="sidebar" aria-expanded="false">
+                <i class="bi bi-list fs-4"></i>
+            </button>
+        <% } %>
+
+        <a class="navbar-brand d-flex align-items-center" href="<%= user ? '/dashboard' : '/' %>">
+            <i class="bi bi-cpu fs-4 me-2 d-none d-sm-inline" aria-hidden="true"></i>
+            <span class="d-none d-sm-inline">Device Bridge</span>
+            <span class="d-sm-none">IoT</span>
+        </a>
+        
+        <div class="d-flex align-items-center gap-2 app-header-controls">
+            <% if (statusChromeEnabled) { %>
+            <!-- Status Indicator -->
+            <div class="position-relative app-header-status">
+                <button class="status-pill btn btn-sm px-2 py-1 rounded-pill fw-semibold d-flex align-items-center gap-1"
+                        id="statusPill"
+                        onclick="toggleStatusPanel()"
+                        title="System status">
+                    <span id="statusDot" class="status-dot" style="background:<%= initialStatus ? (initialDeviceOnline && (!initialBrokerRequired || initialBrokerOnline) ? '#22c55e' : '#ef4444') : '#6c757d' %>;"></span>
+                    <span id="statusLabel"><%= initialStatusLabel %></span>
+                </button>
+
+                <!-- Status Dropdown Panel -->
+                <div id="statusPanel" class="status-panel">
+                    <div id="statusPanelGrid" class="status-panel-grid">
+                        <!-- Header row -->
+                        <div class="status-panel-section status-panel-header status-panel-header-full">
+                            <span class="status-panel-title">System Status</span>
+                            <button type="button" onclick="toggleStatusPanel()" class="status-close" aria-label="Close system status" title="Close system status">&#x2715;</button>
+                        </div>
+
+                        <div class="status-panel-column">
+                            <!-- Connection rows -->
+                            <div class="status-panel-section">
+                                <div class="status-row">
+                                    <span class="status-label">Server</span>
+                                    <span id="panelServerStatus" class="status-value" style="color:#22c55e;">Connected</span>
+                                </div>
+                                <div class="status-row">
+                                    <span class="status-label">MQTT Broker</span>
+                                    <span id="panelMqttStatus" class="status-value" style="color:<%= initialHttpSmsLane ? '#22c55e' : (initialBrokerOnline ? '#22c55e' : '#ef4444') %>;"><%= initialHttpSmsLane ? 'HTTP lane' : (initialBrokerOnline ? 'Connected' : 'Disconnected') %></span>
+                                </div>
+                                <div class="status-row status-linkable" data-status-href="/devices/about" tabindex="0" role="link" title="Open Device About">
+                                    <span class="status-label">Device</span>
+                                    <span id="panelDeviceStatus" class="status-value" style="color:<%= initialStatus ? (initialDeviceOnline ? '#22c55e' : '#ef4444') : '#6c757d' %>;"><%= initialStatus ? (initialDeviceOnline ? 'Online' : 'Offline') : 'No device' %></span>
+                                </div>
+                            </div>
+
+                            <!-- Device metrics -->
+                            <div id="panelMetrics" class="status-panel-section app-hidden">
+                                <div class="status-section-label">Device Metrics</div>
+                                <div class="status-metrics-grid">
+                                    <div class="status-linkable" data-status-href="/modem" tabindex="0" role="link" title="Open Internet">
+                                        <div class="status-metric-label">Signal</div>
+                                        <div id="panelSignal" class="status-metric-value">--%</div>
+                                        <div class="progress status-thin-progress mt-1"><div id="panelSignalBar" class="progress-bar bg-success"></div></div>
+                                    </div>
+                                    <div class="status-linkable" data-status-href="/devices/about" tabindex="0" role="link" title="Open Device About">
+                                        <div class="status-metric-label">Battery</div>
+                                        <div id="panelBattery" class="status-metric-value">--%</div>
+                                        <div class="progress status-thin-progress mt-1"><div id="panelBatteryBar" class="progress-bar bg-success"></div></div>
+                                    </div>
+                                    <div class="status-linkable" data-status-href="/devices/about" tabindex="0" role="link" title="Open Device About">
+                                        <div class="status-metric-label">Temperature</div>
+                                        <div id="panelTemperature" class="status-metric-value">---</div>
+                                    </div>
+                                    <div class="status-linkable" data-status-href="/devices/about" tabindex="0" role="link" title="Open Device About">
+                                        <div class="status-metric-label">Battery voltage</div>
+                                        <div id="panelVoltage" class="status-metric-value">---</div>
+                                    </div>
+                                    <div class="status-linkable" data-status-href="/modem" tabindex="0" role="link" title="Open Internet">
+                                        <div class="status-metric-label">Network</div>
+                                        <div id="panelNetwork" class="status-metric-value">---</div>
+                                    </div>
+                                    <div class="status-linkable" data-status-href="/devices/about" tabindex="0" role="link" title="Open Device About">
+                                        <div class="status-metric-label">Uptime</div>
+                                        <div id="panelUptime" class="status-metric-value">---</div>
+                                    </div>
+                                    <div>
+                                        <div class="status-metric-label">Charging</div>
+                                        <div id="panelCharging" class="status-metric-value">Not reported</div>
+                                    </div>
+                                    <div>
+                                        <div class="status-metric-label">Power source</div>
+                                        <div id="panelPowerSource" class="status-metric-value">Not reported</div>
+                                    </div>
+                                    <div class="status-linkable" data-status-href="/modem" tabindex="0" role="link" title="Open Internet">
+                                        <div class="status-metric-label">Active route</div>
+                                        <div id="panelActivePath" class="status-metric-value">---</div>
+                                    </div>
+                                    <div class="status-linkable" data-status-href="/devices/about" tabindex="0" role="link" title="Open Device About">
+                                        <div class="status-metric-label">Health</div>
+                                        <div id="panelHealth" class="status-metric-value">---</div>
+                                    </div>
+                                    <div class="status-linkable" data-status-href="/modem" tabindex="0" role="link" title="Open Internet">
+                                        <div class="status-metric-label">Wi-Fi IP</div>
+                                        <div id="panelWifiIp" class="status-metric-value font-monospace">---</div>
+                                    </div>
+                                    <div class="status-linkable" data-status-href="/modem" tabindex="0" role="link" title="Open Internet">
+                                        <div class="status-metric-label">Modem IP</div>
+                                        <div id="panelModemIp" class="status-metric-value font-monospace">---</div>
+                                    </div>
+                                    <div class="status-metric-full status-linkable" data-status-href="/modem" tabindex="0" role="link" title="Open Internet">
+                                        <div class="status-metric-label">Transport</div>
+                                        <div id="panelTransport" class="status-metric-value">---</div>
+                                        <div id="panelTransportPaths" class="status-metric-detail text-muted">---</div>
+                                    </div>
+                                    <div class="status-linkable" data-status-href="/devices/about" tabindex="0" role="link" title="Open Device About">
+                                        <div class="status-metric-label">Internal RAM free</div>
+                                        <div id="panelRamFree" class="status-metric-value">---</div>
+                                    </div>
+                                    <div class="status-linkable" data-status-href="/devices/about" tabindex="0" role="link" title="Open Device About">
+                                        <div class="status-metric-label">PSRAM free</div>
+                                        <div id="panelPsramFree" class="status-metric-value">---</div>
+                                    </div>
+                                    <div class="status-metric-full status-linkable" data-status-href="/modem" tabindex="0" role="link" title="Open Internet">
+                                        <div class="status-metric-label">Operator</div>
+                                        <div id="panelOperator" class="status-metric-value">---</div>
+                                    </div>
+                                    <div class="status-metric-full status-linkable" data-status-href="/modem" tabindex="0" role="link" title="Open Internet">
+                                        <div class="status-metric-label">SIM Number</div>
+                                        <div id="panelSimNumber" class="status-metric-value status-sim-numbers">---</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="statusPanelDetailColumn" class="status-panel-column app-hidden">
+                            <div id="panelQueueSection" class="status-panel-section app-hidden">
+                                <div class="status-section-label">Queue State</div>
+                                <div class="status-row status-linkable" data-status-href="/devices/queue" tabindex="0" role="link" title="Open Queue Manager">
+                                    <span class="status-label">Dashboard Queue</span>
+                                    <span id="panelDashboardQueue" class="status-value">0 pending</span>
+                                </div>
+                                <div class="status-row status-linkable" data-status-href="/devices/queue" tabindex="0" role="link" title="Open Queue Manager">
+                                    <span class="status-label">Device Queue</span>
+                                    <span id="panelDeviceQueue" class="status-value">0 pending</span>
+                                </div>
+                                <div class="status-row status-linkable" data-status-href="/devices/queue" tabindex="0" role="link" title="Open Queue Manager">
+                                    <span class="status-label">Recent Queue</span>
+                                    <span id="panelQueueRecent" class="status-value">No recent actions</span>
+                                </div>
+                            </div>
+
+                            <!-- Module health -->
+                            <div id="panelModuleHealthSection" class="status-panel-section status-panel-section-fill app-hidden">
+                                <div class="status-section-label">Module Health</div>
+                                <div id="panelModuleHealth" class="status-module-health">Waiting for diagnostics&hellip;</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <% } %>
+
+            <button class="btn btn-link text-white p-1 position-relative app-header-icon" type="button" data-bs-toggle="modal" data-bs-target="#dashboardNotificationsModal" title="Notifications" aria-label="Open notifications">
+                <i class="bi bi-bell-fill"></i>
+                <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger app-hidden" id="headerNotificationBadge">0</span>
+            </button>
+
+            <!-- Theme preference: light, dark, system -->
+            <button class="dark-mode-toggle btn btn-link text-white p-1 app-header-icon" type="button" id="darkModeToggle" onclick="toggleDarkMode()" title="Change theme" aria-label="Change theme">
+                <i class="bi bi-display" id="darkModeIcon" aria-hidden="true"></i>
+            </button>
+
+            <!-- User Menu -->
+            <% if (user) { %>
+                <div class="dropdown">
+                    <button class="btn btn-link text-white text-decoration-none dropdown-toggle p-0 d-flex align-items-center app-header-account" 
+                            type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Account menu" title="Account menu">
+                        <i class="bi bi-person-circle fs-5 me-1"></i>
+                        <span class="d-none d-md-inline"><%= user.name || user.username %></span>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li>
+                            <a class="dropdown-item d-flex align-items-center py-2" href="/admin/account">
+                                <i class="bi bi-person me-2"></i> Profile
+                            </a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item d-flex align-items-center py-2" href="/settings">
+                                <i class="bi bi-gear me-2"></i> System Settings
+                            </a>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <form method="POST" action="/auth/logout" class="m-0">
+                                <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                                <button type="submit" class="dropdown-item d-flex align-items-center py-2 text-danger border-0 bg-transparent w-100">
+                                    <i class="bi bi-box-arrow-right me-2"></i> Logout
+                                </button>
+                            </form>
+                        </li>
+                    </ul>
+                </div>
+            <% } %>
+        </div>
+    </div>
+</nav>
+
+<div class="modal fade" id="dashboardNotificationsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable dashboard-notifications-dialog">
+        <div class="modal-content text-dark">
+            <div class="modal-header align-items-start gap-3">
+                <div>
+                    <h5 class="modal-title"><i class="bi bi-bell me-2"></i>Notifications</h5>
+                    <div class="text-muted small" id="dashboardNotificationSubtitle">Live device and dashboard events</div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-0">
+                <div class="notification-modal-toolbar border-bottom">
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Notification read filter">
+                        <input type="radio" class="btn-check" name="notificationModalReadFilter" id="notificationModalUnread" value="unread" autocomplete="off" checked onchange="window.setHeaderNotificationFilter && window.setHeaderNotificationFilter('read', this.value)">
+                        <label class="btn btn-outline-primary" for="notificationModalUnread">Unread</label>
+                        <input type="radio" class="btn-check" name="notificationModalReadFilter" id="notificationModalAll" value="all" autocomplete="off" onchange="window.setHeaderNotificationFilter && window.setHeaderNotificationFilter('read', this.value)">
+                        <label class="btn btn-outline-primary" for="notificationModalAll">All</label>
+                    </div>
+                    <select class="form-select form-select-sm notification-modal-select" id="notificationModalCategory" onchange="window.setHeaderNotificationFilter && window.setHeaderNotificationFilter('category', this.value)" aria-label="Notification category">
+                        <option value="all">All categories</option>
+                        <option value="device">Device</option>
+                        <option value="sms">SMS</option>
+                        <option value="call">Calls</option>
+                        <option value="automation">Automation</option>
+                        <option value="queue">Queue</option>
+                        <option value="network">Network</option>
+                        <option value="system">System</option>
+                    </select>
+                    <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" onclick="window.refreshHeaderNotificationPreview && window.refreshHeaderNotificationPreview()">
+                        <i class="bi bi-arrow-repeat me-1"></i>Refresh
+                    </button>
+                </div>
+                <div class="list-group list-group-flush" id="dashboardNotificationPreview">
+                    <div class="list-group-item text-muted small">Loading notifications...</div>
+                </div>
+                <div class="notification-modal-footer border-top">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="window.markHeaderNotificationsRead && window.markHeaderNotificationsRead()">
+                        <i class="bi bi-check2-all me-1"></i>Mark filtered read
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="window.clearHeaderNotifications && window.clearHeaderNotifications()">
+                        <i class="bi bi-trash3 me-1"></i>Clear filtered
+                    </button>
+                    <div class="notification-modal-pagination ms-auto">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="notificationModalPrev" onclick="window.changeHeaderNotificationPage && window.changeHeaderNotificationPage(-1)">
+                            <i class="bi bi-chevron-left"></i>
+                        </button>
+                        <span class="small text-muted" id="notificationModalPageLabel">Page 1</span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="notificationModalNext" onclick="window.changeHeaderNotificationPage && window.changeHeaderNotificationPage(1)">
+                            <i class="bi bi-chevron-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .status-panel .status-linkable {
+        cursor: pointer;
+        border-radius: 0.5rem;
+        transition: background-color 0.15s ease, transform 0.15s ease;
+    }
+
+    .status-panel .status-linkable:hover {
+        background: rgba(255, 255, 255, 0.06);
+    }
+
+    .status-panel .status-linkable:focus-visible {
+        outline: 2px solid rgba(255, 255, 255, 0.45);
+        outline-offset: 2px;
+    }
+
+    .status-panel .status-metrics-grid > .status-linkable {
+        padding: 0.3rem;
+    }
+</style>

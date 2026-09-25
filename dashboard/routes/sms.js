@@ -1,0 +1,2324 @@
+const express = require('express');
+const router = express.Router();
+const { body, validationResult } = require('express-validator');
+const multer = require('multer');
+const logger = require('../utils/logger');
+const {
+    formatPhoneNumber,
+    isShortCode,
+    getPhoneLookupKeys,
+    sqlNormalizePhone,
+    sqlPhoneLastDigits
+} = require('../utils/phoneNumber');
+const { DEFAULT_DEVICE_ID } = require('../config/device');
+const { resolveDeviceId } = require('../utils/deviceResolver');
+const { decodeSmsRecord } = require('../utils/smsUnicode');
+const { validateSmsMessageSize } = require('../utils/smsLimits');
+const { mergeMultipartThreadMessages } = require('../utils/smsMultipart');
+const { conversationDisplayMessages } = require('../utils/smsConversationSummary');
+const smsCache = require('../services/smsCache');
+const { createRateLimiter } = require('../utils/rateLimiter');
+const { requireDeviceAccess, requireRole, withEffectiveRole } = require('../middleware/auth');
+const { queueSmsForDelivery } = require('../services/smsQueue');
+const {
+    attachSmsToConversation,
+    buildMessagePreview,
+    refreshSmsConversation,
+    refreshSmsConversationBySmsId,
+    refreshSmsConversationsForDevice
+} = require('../services/smsConversations');
+const {
+    resolveRequestSimScope,
+    appendSimScopeCondition,
+    hasSimScope
+} = require('../utils/simScope');
+
+const smsRateLimit = createRateLimiter({ windowMs: 60000, max: 10, message: 'SMS rate limit exceeded. Max 10 per minute.' });
+const scheduleImportUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }
+});
+
+async function assertTemplateOwnership(req, db, id) {
+    const user = withEffectiveRole(req.user || req.session?.user);
+    if (user?.role === 'admin' || user?.role === 'superadmin') return;
+    const row = await db.get('SELECT created_by FROM sms_templates WHERE id = ?', [id]);
+    if (!row) return; // 404 handled by the route
+    if (Number(row.created_by) !== Number(user?.id)) {
+        const err = new Error('Template not owned by you'); err.statusCode = 403; throw err;
+    }
+}
+
+function isValidNumericId(id) {
+    return /^[0-9]+$/.test(String(id));
+}
+
+function setNoStoreHeaders(res) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+}
+
+function emitDeviceEvent(deviceId, event, payload) {
+    const normalizedDeviceId = String(deviceId || '').trim();
+    if (!global.io) return;
+    if (normalizedDeviceId) {
+        const room = global.io.to?.('device:' + normalizedDeviceId);
+        if (room?.emit) room.emit(event, payload);
+        else global.io.emit?.(event, payload);
+    } else {
+        global.io.emit?.(event, payload);
+    }
+}
+
+function normalizeSmsStorageIndex(value) {
+    const numeric = Number(value);
+    return Number.isInteger(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function normalizeFirmwareSmsStorageId(value) {
+    const numeric = Number(value);
+    return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
+async function queueDeviceSmsDelete(deviceId, payload, reason) {
+    const normalizedDeviceId = String(deviceId || '').trim();
+    if (!normalizedDeviceId || !global.mqttService?.publishCommand) {
+        return { queued: false, reason: 'device_command_service_unavailable' };
+    }
+
+    try {
+        const response = await global.mqttService.publishCommand(
+            normalizedDeviceId,
+            'delete-sms',
+            payload,
+            false,
+            30000,
+            {
+                source: reason || 'dashboard-sms-delete',
+                domain: 'telephony',
+                persistent: true,
+                replaySafe: true,
+                maxAttempts: 3
+            }
+        );
+        return {
+            queued: true,
+            queueId: response?.queueId || null,
+            messageId: response?.messageId || null,
+            mode: payload.mode || null,
+            storageIndex: payload.storage_index ?? null,
+            storageId: payload.storage_id ?? null
+        };
+    } catch (error) {
+        logger.warn(`Device SMS delete queue failed for ${normalizedDeviceId}: ${error.message}`);
+        return { queued: false, reason: error.message || 'device_delete_queue_failed' };
+    }
+}
+
+async function queueDeviceSmsDeletesForRows(deviceId, rows = [], reason) {
+    const seen = new Set();
+    const queued = [];
+    const skipped = [];
+
+    for (const row of rows) {
+        const storageIndex = normalizeSmsStorageIndex(row?.modem_storage_index);
+        const storageId = normalizeFirmwareSmsStorageId(row?.firmware_storage_id);
+        if (storageIndex === null && storageId === null) {
+            skipped.push({ id: row?.id || null, reason: 'missing_device_storage_target' });
+            continue;
+        }
+        const dedupeKey = `${storageIndex ?? ''}:${storageId ?? ''}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        queued.push(await queueDeviceSmsDelete(deviceId, {
+            ...(storageIndex !== null ? { storage_index: storageIndex } : {}),
+            ...(storageId !== null ? { storage_id: storageId } : {})
+        }, reason));
+    }
+
+    return {
+        requested: rows.length,
+        queued: queued.filter((entry) => entry.queued).length,
+        skipped: skipped.length,
+        results: queued,
+        skippedRows: skipped
+    };
+}
+
+function splitRecipientInput(value) {
+    if (Array.isArray(value)) {
+        return value.flatMap((item) => splitRecipientInput(item));
+    }
+    return String(value || '')
+        .split(/[\n,;]+/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+}
+
+function normalizeSmsRecipients(value) {
+    const seen = new Set();
+    const recipients = [];
+    const invalid = [];
+
+    splitRecipientInput(value).forEach((entry) => {
+        const formatted = formatPhoneNumber(entry);
+        if (!formatted) {
+            invalid.push(entry);
+            return;
+        }
+        if (seen.has(formatted)) return;
+        seen.add(formatted);
+        recipients.push(formatted);
+    });
+
+    return { recipients, invalid };
+}
+
+function getBulkSmsRecipientValue(row) {
+    if (!row || typeof row !== 'object') return '';
+    return row.to ?? row.sender ?? row.phone ?? row.number ?? row.recipient ?? row.mobile ?? '';
+}
+
+function normalizeBulkSmsQueueRows(value) {
+    if (!Array.isArray(value) || !value.length) {
+        return { queueRows: [], invalid: [] };
+    }
+    if (value.length > 500) {
+        return { queueRows: [], invalid: ['Cannot queue more than 500 SMS at once'] };
+    }
+
+    const queueRows = [];
+    const invalid = [];
+    value.forEach((row, index) => {
+        const rowNumber = Number(row?.rowNumber || 0) || index + 1;
+        const rawRecipient = getBulkSmsRecipientValue(row);
+        const message = String(row?.message || '').trim();
+        const normalized = normalizeSmsRecipients(rawRecipient);
+        if (!normalized.recipients.length) {
+            invalid.push(normalized.invalid.length
+                ? `Row ${rowNumber} has invalid phone number: ${normalized.invalid[0]}`
+                : `Row ${rowNumber} has no phone number`);
+            return;
+        }
+        if (normalized.invalid.length) {
+            invalid.push(`Row ${rowNumber} has invalid phone number: ${normalized.invalid[0]}`);
+            return;
+        }
+        try {
+            validateSmsMessageSize(message);
+        } catch (error) {
+            invalid.push(`Row ${rowNumber}: ${error.message || 'Invalid message'}`);
+            return;
+        }
+        normalized.recipients.forEach((recipient) => {
+            queueRows.push({ recipient, message, rowNumber });
+        });
+    });
+
+    return { queueRows, invalid };
+}
+
+function parseDelimitedLine(line) {
+    const cells = [];
+    let current = '';
+    let quoted = false;
+    const raw = String(line || '');
+    for (let i = 0; i < raw.length; i += 1) {
+        const ch = raw[i];
+        if (ch === '"') {
+            if (quoted && raw[i + 1] === '"') {
+                current += '"';
+                i += 1;
+            } else {
+                quoted = !quoted;
+            }
+        } else if ((ch === ',' || ch === '\t') && !quoted) {
+            cells.push(current.trim());
+            current = '';
+        } else {
+            current += ch;
+        }
+    }
+    cells.push(current.trim());
+    return cells;
+}
+
+function csvColumnIndex(columns, names) {
+    const allowed = new Set(names.map((name) => String(name).trim().toLowerCase()));
+    return columns.findIndex((column) => allowed.has(String(column || '').trim().toLowerCase()));
+}
+
+function parseScheduleImport(buffer) {
+    const text = buffer.toString('utf8').replace(/^\uFEFF/, '');
+    const lines = text.split(/\r?\n/).filter((line) => line.trim());
+    if (!lines.length) return { rows: [], errors: ['Template is empty'] };
+    const columns = parseDelimitedLine(lines[0]);
+    const phoneIndex = csvColumnIndex(columns, ['phone', 'number', 'to', 'recipient']);
+    const messageIndex = csvColumnIndex(columns, ['message', 'body', 'text']);
+    const sendAtIndex = csvColumnIndex(columns, ['send_at', 'send at', 'schedule_at', 'scheduled_at']);
+    const simIndex = csvColumnIndex(columns, ['sim_slot', 'sim', 'sim slot']);
+    const errors = [];
+    if (phoneIndex < 0) errors.push('Missing phone column');
+    if (messageIndex < 0) errors.push('Missing message column');
+    if (sendAtIndex < 0) errors.push('Missing send_at column');
+    if (errors.length) return { rows: [], errors };
+
+    const rows = [];
+    for (let i = 1; i < lines.length; i += 1) {
+        const cells = parseDelimitedLine(lines[i]);
+        const phone = cells[phoneIndex] || '';
+        const message = cells[messageIndex] || '';
+        const sendAtRaw = cells[sendAtIndex] || '';
+        const sendAt = new Date(sendAtRaw);
+        const simRaw = simIndex >= 0 ? cells[simIndex] : '';
+        const simSlot = simRaw === '' || simRaw == null ? null : Number.parseInt(simRaw, 10);
+        if (!phone.trim() && !message.trim()) continue;
+        if (!phone.trim() || !message.trim() || !Number.isFinite(sendAt.getTime())) {
+            errors.push(`Row ${i + 1} is invalid`);
+            continue;
+        }
+        rows.push({
+            phone: phone.trim(),
+            message: message.trim(),
+            sendAt,
+            simSlot: Number.isFinite(simSlot) ? Math.max(0, simSlot > 0 && simSlot <= 2 ? simSlot - 1 : simSlot) : null
+        });
+    }
+    return { rows, errors };
+}
+
+async function getSmsTemplateById(db, id) {
+    return db.get(
+        `SELECT t.id, t.title, t.message, t.created_at, u.username as created_by
+         FROM sms_templates t
+         LEFT JOIN users u ON t.created_by = u.id
+         WHERE t.id = ?`,
+        [id]
+    );
+}
+
+async function getUnreadCountForDevice(db, deviceId, simScope = {}) {
+    const conditions = ['device_id = ?', 'read = 0', "type = 'incoming'"];
+    const params = [deviceId];
+    appendSimScopeCondition(conditions, params, simScope);
+    const row = await db.get(
+        `SELECT COUNT(*) as count
+         FROM sms
+         WHERE ${conditions.join(' AND ')}`,
+        params
+    );
+    const count = Number(row?.count || 0);
+    smsCache.set(count, deviceId);
+    return count;
+}
+
+const COUNTERPART_EXPR = `CASE WHEN type = 'outgoing' THEN COALESCE(to_number, from_number) ELSE from_number END`;
+const COUNTERPART_NORM_SQL = sqlNormalizePhone(COUNTERPART_EXPR);
+const COUNTERPART_LAST10_SQL = sqlPhoneLastDigits(COUNTERPART_EXPR);
+
+function getSmsThreadNumber(row) {
+    const isOutgoing = String(row?.type || '').toLowerCase() === 'outgoing';
+    return String(isOutgoing ? (row?.to_number || row?.from_number || '') : (row?.from_number || row?.to_number || '')).trim();
+}
+
+function getSmsThreadKey(number) {
+    const raw = String(number || '').trim();
+    if (!raw) return '';
+    const lookup = getPhoneLookupKeys(raw);
+    return String(lookup.last10 || lookup.digits || raw).toLowerCase();
+}
+
+function getLiveDeviceSmsStorage(deviceId) {
+    const status = global.modemService?.getDeviceStatus?.(deviceId) || null;
+    if (!status || typeof status !== 'object') {
+        return null;
+    }
+    const storage = status?.hardware?.smsStorage || status?.sim?.smsStorage || {
+        name: status?.modem_sms_storage_name || status?.sms_storage_name,
+        used: status?.modem_sms_storage_used ?? status?.sms_storage_used,
+        total: status?.modem_sms_storage_total ?? status?.sms_storage_total,
+        read: {
+            name: status?.modem_sms_read_storage_name || status?.sms_read_storage_name,
+            used: status?.modem_sms_read_storage_used ?? status?.sms_read_storage_used,
+            total: status?.modem_sms_read_storage_total ?? status?.sms_read_storage_total
+        },
+        write: {
+            name: status?.modem_sms_write_storage_name || status?.sms_write_storage_name,
+            used: status?.modem_sms_write_storage_used ?? status?.sms_write_storage_used,
+            total: status?.modem_sms_write_storage_total ?? status?.sms_write_storage_total
+        },
+        report: {
+            name: status?.modem_sms_report_storage_name || status?.sms_report_storage_name,
+            used: status?.modem_sms_report_storage_used ?? status?.sms_report_storage_used,
+            total: status?.modem_sms_report_storage_total ?? status?.sms_report_storage_total
+        }
+    };
+    if (!storage || typeof storage !== 'object') {
+        return null;
+    }
+
+    const used = Number(storage.used);
+    const total = Number(storage.total);
+    return {
+        name: storage.name || null,
+        used: Number.isFinite(used) ? used : null,
+        total: Number.isFinite(total) ? total : null,
+        free: Number.isFinite(used) && Number.isFinite(total) ? Math.max(0, total - used) : null,
+        read: storage.read || null,
+        write: storage.write || null,
+        report: storage.report || null
+    };
+}
+
+function getSmsSyncPayloadObject(response = {}) {
+    let payload = response?.payload || null;
+    if (typeof payload === 'string' && payload.trim()) {
+        try {
+            payload = JSON.parse(payload);
+        } catch (_) {
+            payload = null;
+        }
+    }
+    return payload && typeof payload === 'object' ? payload : {};
+}
+
+function normalizeSmsSyncTimestamp(entry = {}) {
+    const raw = entry.timestamp ?? entry.timestamp_ms ?? entry.timestampMs;
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+        const millis = raw > 100000000000 ? raw : (raw > 1000000000 ? raw * 1000 : NaN);
+        if (Number.isFinite(millis)) {
+            const parsed = new Date(millis);
+            if (Number.isFinite(parsed.getTime()) && parsed.getFullYear() >= 2020) {
+                return parsed.toISOString();
+            }
+        }
+    }
+
+    const text = String(raw || '').trim();
+    if (text) {
+        const parsed = new Date(text);
+        if (Number.isFinite(parsed.getTime()) && parsed.getFullYear() >= 2020) {
+            return parsed.toISOString();
+        }
+    }
+
+    return new Date().toISOString();
+}
+
+function getSmsSyncPayloadEntries(response = {}) {
+    const payload = getSmsSyncPayloadObject(response);
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.entries)) {
+        return [];
+    }
+    return payload.entries;
+}
+
+const SMS_SYNC_PAGE_SIZE = 8;
+const SMS_SYNC_MAX_PAGES = 8;
+
+function getSmsSyncPageMeta(response = {}) {
+    const payload = getSmsSyncPayloadObject(response);
+    const nextCursor = normalizeFirmwareSmsStorageId(
+        payload.next_cursor ?? payload.nextCursor ?? payload.before_storage_id
+    );
+    return {
+        hasMore: payload.has_more === true || String(payload.has_more || '').toLowerCase() === 'true',
+        nextCursor
+    };
+}
+
+function mergeSmsHistoryAckTotals(target, pageAck) {
+    target.requested += Number(pageAck?.requested || 0);
+    target.queued += Number(pageAck?.queued || 0);
+    target.skipped += Number(pageAck?.skipped || 0);
+    target.results.push(...(Array.isArray(pageAck?.results) ? pageAck.results : []));
+    target.skippedRows.push(...(Array.isArray(pageAck?.skippedRows) ? pageAck.skippedRows : []));
+}
+
+function getSmsSyncPayloadStorage(response = {}) {
+    const payload = getSmsSyncPayloadObject(response);
+    const used = Number(payload.sms_storage_used);
+    const total = Number(payload.sms_storage_total);
+    const free = Number(payload.sms_storage_free);
+    if (!Number.isFinite(used) && !Number.isFinite(total) && !Number.isFinite(free)) {
+        return null;
+    }
+    return {
+        name: payload.sms_storage_name || null,
+        used: Number.isFinite(used) ? used : null,
+        total: Number.isFinite(total) ? total : null,
+        free: Number.isFinite(free)
+            ? free
+            : (Number.isFinite(used) && Number.isFinite(total) ? Math.max(0, total - used) : null)
+    };
+}
+
+function isFailedSmsSyncResponse(response = {}) {
+    if (!response || typeof response !== 'object') return false;
+    if (response.success === false) return true;
+    const result = String(response.result || response.status || '').trim().toLowerCase();
+    if (['failed', 'rejected', 'timeout', 'error'].includes(result)) return true;
+    const payload = getSmsSyncPayloadObject(response);
+    const pullCode = Number(payload.pull_result_code);
+    const pullDetail = String(payload.pull_detail || '').trim().toLowerCase();
+    return (Number.isFinite(pullCode) && pullCode !== 0)
+        || ['modem_not_ready', 'telephony_unavailable', 'sms_pull_failed', 'sms_pull_timeout'].includes(pullDetail);
+}
+
+function smsSyncFailureMessage(response = {}) {
+    const payload = getSmsSyncPayloadObject(response);
+    return String(
+        response?.error
+        || payload.pull_detail
+        || response?.message
+        || response?.detail
+        || 'SMS pull failed on device'
+    ).trim();
+}
+
+function buildSmsSyncReport(response = {}, importResult = {}, syncEntries = [], deviceSmsStorage = null) {
+    const payload = getSmsSyncPayloadObject(response);
+    const storage = deviceSmsStorage || getSmsSyncPayloadStorage(response);
+    const payloadSynced = Number(payload.synced ?? response?.synced ?? response?.payload?.synced ?? 0);
+    const payloadCount = Number(payload.count ?? response?.count ?? response?.payload?.count ?? 0);
+    const imported = Number(importResult.imported || 0);
+    const skipped = Number(importResult.skipped || 0);
+    const synced = Number.isFinite(payloadSynced) && payloadSynced > 0 ? payloadSynced : imported;
+    const total = syncEntries.length || (Number.isFinite(payloadCount) ? payloadCount : 0) || synced || 0;
+    const storageUsed = Number(storage?.used);
+    const storageTotal = Number(storage?.total);
+    const noReadableEntries = total === 0 && imported === 0 && synced === 0;
+    const storageHasRecords = Number.isFinite(storageUsed) && storageUsed > 0;
+    const warnings = [];
+    let blocker = null;
+
+    if (storageHasRecords && noReadableEntries) {
+        blocker = 'sms_storage_has_no_readable_pull_entries';
+        warnings.push(
+            `Device SMS storage reports ${storageUsed}${Number.isFinite(storageTotal) && storageTotal > 0 ? `/${storageTotal}` : ''} records, but firmware returned no readable SMS entries. Serial AT validation is required when COM5 is available.`
+        );
+    }
+
+    return {
+        total,
+        synced: Number.isFinite(synced) ? synced : 0,
+        imported,
+        skipped,
+        deviceSmsStorage: storage,
+        diagnostics: {
+            blocker,
+            warnings,
+            requiresSerialValidation: blocker === 'sms_storage_has_no_readable_pull_entries',
+            payloadCount: Number.isFinite(payloadCount) ? payloadCount : null,
+            payloadSynced: Number.isFinite(payloadSynced) ? payloadSynced : null,
+            pullDetail: payload.pull_detail || response?.detail || null,
+            pullResultCode: Number.isFinite(Number(payload.pull_result_code)) ? Number(payload.pull_result_code) : null,
+            payloadEntries: syncEntries.length
+        },
+        message: imported > 0
+            ? `Message pull completed. ${imported} stored.`
+            : (warnings[0] || 'Message pull completed. No new readable messages found.')
+    };
+}
+
+async function importDeviceSmsSyncEntries(db, deviceId, entries = []) {
+    if (!db || !deviceId || !Array.isArray(entries) || entries.length === 0) {
+        return { imported: 0, skipped: 0, reconciled: 0, total: 0, ackRows: [] };
+    }
+
+    let imported = 0;
+    let skipped = 0;
+    let reconciled = 0;
+    const ackRows = [];
+    let transactionOpen = false;
+
+    try {
+        await db.run('BEGIN IMMEDIATE');
+        transactionOpen = true;
+
+        for (const entry of entries) {
+            const message = String(entry?.message ?? entry?.text ?? '');
+            if (!message.trim()) {
+                skipped++;
+                continue;
+            }
+
+            const outgoing = entry?.outgoing === true || String(entry?.direction || '').trim().toLowerCase() === 'outgoing';
+            const peerNumber = String(entry?.from ?? entry?.from_number ?? entry?.number ?? '').trim();
+            const fromNumber = outgoing ? 'self' : (peerNumber || 'unknown');
+            const toNumber = outgoing ? (peerNumber || null) : (String(entry?.to ?? entry?.to_number ?? '').trim() || null);
+            const timestamp = normalizeSmsSyncTimestamp(entry);
+            const firmwareStorageId = normalizeFirmwareSmsStorageId(entry?.storage_id ?? entry?.sms_storage_id ?? entry?.firmware_storage_id);
+            const modemStorageIndex = normalizeSmsStorageIndex(entry?.storage_index ?? entry?.sms_storage_index ?? entry?.modem_storage_index ?? entry?.index);
+            const externalId = firmwareStorageId !== null
+                ? `esp32-sms:${firmwareStorageId}`
+                : (String(entry?.external_id ?? entry?.externalId ?? entry?.message_id ?? entry?.messageId ?? '').trim() || null);
+
+            if (firmwareStorageId !== null) {
+                const existing = await db.get(
+                    `SELECT id FROM sms WHERE device_id = ? AND firmware_storage_id = ? LIMIT 1`,
+                    [deviceId, firmwareStorageId]
+                );
+                if (existing?.id) {
+                    skipped++;
+                    ackRows.push({ id: existing.id, firmware_storage_id: firmwareStorageId });
+                    continue;
+                }
+            }
+
+            if (firmwareStorageId !== null && entry?.identity_migrated === true) {
+                const legacy = await db.get(
+                    `SELECT id FROM sms
+                     WHERE device_id = ? AND message = ? AND type = ?
+                       AND COALESCE(from_number, '') = ? AND COALESCE(to_number, '') = ?
+                       AND ABS(strftime('%s', timestamp) - strftime('%s', ?)) <= 2
+                     ORDER BY id ASC LIMIT 1`,
+                    [deviceId, message, outgoing ? 'outgoing' : 'incoming', fromNumber, toNumber || '', timestamp]
+                );
+                if (legacy?.id) {
+                    await db.run(
+                        `UPDATE sms
+                         SET firmware_storage_id = ?, external_id = COALESCE(NULLIF(external_id, ''), ?)
+                         WHERE id = ?`,
+                        [firmwareStorageId, externalId, legacy.id]
+                    );
+                    reconciled++;
+                    skipped++;
+                    ackRows.push({ id: legacy.id, firmware_storage_id: firmwareStorageId });
+                    continue;
+                }
+            }
+
+            const result = await db.run(
+                `INSERT OR IGNORE INTO sms
+                    (device_id, from_number, to_number, message, timestamp, read, type, status, source, external_id,
+                     modem_storage_index, firmware_storage_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    deviceId,
+                    fromNumber,
+                    toNumber,
+                    message,
+                    timestamp,
+                    1,
+                    outgoing ? 'outgoing' : 'incoming',
+                    outgoing ? 'sent' : 'received',
+                    'esp32-flash-sync',
+                    externalId,
+                    modemStorageIndex,
+                    firmwareStorageId
+                ]
+            );
+
+            if (Number(result?.changes || 0) > 0) {
+                imported++;
+                await attachSmsToConversation(db, {
+                    id: result.lastID,
+                    device_id: deviceId,
+                    from_number: fromNumber,
+                    to_number: toNumber,
+                    type: outgoing ? 'outgoing' : 'incoming'
+                });
+                if (firmwareStorageId !== null) {
+                    ackRows.push({ id: result.lastID, firmware_storage_id: firmwareStorageId });
+                }
+            } else {
+                skipped++;
+                if (firmwareStorageId !== null) {
+                    const persisted = await db.get(
+                        `SELECT id FROM sms WHERE device_id = ? AND firmware_storage_id = ? LIMIT 1`,
+                        [deviceId, firmwareStorageId]
+                    );
+                    if (persisted?.id) ackRows.push({ id: persisted.id, firmware_storage_id: firmwareStorageId });
+                }
+            }
+        }
+        await db.run('COMMIT');
+        transactionOpen = false;
+    } catch (error) {
+        if (transactionOpen) {
+            try { await db.run('ROLLBACK'); } catch (_) {}
+        }
+        throw error;
+    }
+
+    if (imported > 0) {
+        smsCache.set(null, deviceId);
+        await refreshSmsConversationsForDevice(db, deviceId);
+    }
+
+    return { imported, skipped, reconciled, total: entries.length, ackRows };
+}
+
+function toTimestampMs(value) {
+    const parsed = value ? new Date(value).getTime() : 0;
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isGenericServiceDisplay(value) {
+    return ['service sender', 'service messages', 'system sender']
+        .includes(String(value || '').trim().toLowerCase());
+}
+
+function buildSmsConversationSummaries(rows) {
+    const threads = new Map();
+
+    conversationDisplayMessages(rows).forEach((row) => {
+        const threadNumber = getSmsThreadNumber(row);
+        const threadKey = getSmsThreadKey(threadNumber);
+        if (!threadNumber || !threadKey) return;
+
+        const isOutgoing = String(row?.type || '').toLowerCase() === 'outgoing';
+        const existing = threads.get(threadKey) || {
+            latest: null,
+            total_count: 0,
+            unread_count: 0
+        };
+        const latest = existing.latest;
+        const isNewer = !latest
+            || toTimestampMs(row.timestamp) > toTimestampMs(latest.timestamp)
+            || (toTimestampMs(row.timestamp) === toTimestampMs(latest.timestamp) && Number(row.id || 0) > Number(latest.id || 0));
+
+        existing.total_count += 1;
+        if (!isOutgoing && !row.read) existing.unread_count += 1;
+        if (isNewer) {
+            existing.latest = {
+                ...row,
+                thread_number: threadNumber,
+                last_direction: isOutgoing ? 'outgoing' : 'incoming'
+            };
+        }
+        threads.set(threadKey, existing);
+    });
+
+    return Array.from(threads.values())
+        .filter((thread) => thread.latest)
+        .sort((a, b) => {
+            const delta = toTimestampMs(b.latest.timestamp) - toTimestampMs(a.latest.timestamp);
+            if (delta !== 0) return delta;
+            return Number(b.latest.id || 0) - Number(a.latest.id || 0);
+        })
+        .map((thread) => ({
+            ...thread.latest,
+            thread_number: thread.latest.thread_number,
+            total_count: thread.total_count,
+            unread_count: thread.unread_count,
+            last_direction: thread.latest.last_direction
+        }));
+}
+
+/**
+ * @swagger
+ * tags:
+ *   name: SMS
+ *   description: SMS message management
+ */
+
+/**
+ * @swagger
+ * /sms:
+ *   get:
+ *     summary: List SMS messages with pagination
+ *     tags: [SMS]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20, maximum: 500 }
+ *       - in: query
+ *         name: type
+ *         schema: { type: string, enum: [incoming, outgoing] }
+ *         description: Filter by message direction
+ *       - in: query
+ *         name: since
+ *         schema: { type: string, format: date-time }
+ *         description: Return only messages after this timestamp
+ *     responses:
+ *       200:
+ *         description: Paginated SMS list
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: array
+ *                   items: { $ref: '#/components/schemas/SMS' }
+ *                 pagination: { $ref: '#/components/schemas/Pagination' }
+ */
+router.get('/', requireDeviceAccess(), async (req, res) => {
+    try {
+        setNoStoreHeaders(res);
+        const db = req.app.locals.db;
+        if (!db) {
+            throw new Error('Database not available');
+        }
+
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 20), 500);
+        const offset = (page - 1) * limit;
+        const since = req.query.since || null;
+        const type = req.query.type || null; // 'incoming' | 'outgoing' | null (all)
+        const simScope = resolveRequestSimScope(req);
+
+        const conditions = [];
+        const baseParams = [];
+        conditions.push('device_id = ?');
+        baseParams.push(deviceId);
+        if (since) { conditions.push('timestamp > ?'); baseParams.push(since); }
+        if (type === 'incoming') { conditions.push("type != 'outgoing'"); }
+        else if (type === 'outgoing') { conditions.push("type = 'outgoing'"); }
+        appendSimScopeCondition(conditions, baseParams, simScope);
+        const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+
+        const messages = await db.all(
+            `SELECT s.id, s.device_id, s.from_number, s.to_number, s.message, s.timestamp, s.read, s.type, s.status, s.sim_slot, s.source, u.username as sent_by FROM sms s LEFT JOIN users u ON s.user_id = u.id ${where} ORDER BY s.timestamp DESC LIMIT ? OFFSET ?`,
+            [...baseParams, limit, offset]
+        );
+
+        const total = await db.get(
+            `SELECT COUNT(*) as count FROM sms ${where}`,
+            baseParams
+        );
+
+        res.json({
+            success: true,
+            data: messages.map(decodeSmsRecord),
+            pagination: {
+                page,
+                limit,
+                total: total.count,
+                pages: Math.ceil(total.count / limit)
+            }
+        });
+    } catch (error) {
+        logger.error('API SMS list error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch SMS messages'
+        });
+    }
+});
+
+router.get('/thread', requireDeviceAccess(), async (req, res) => {
+    try {
+        setNoStoreHeaders(res);
+        const db = req.app.locals.db;
+        if (!db) throw new Error('Database not available');
+
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const number = String(req.query.number || '').trim();
+        const conversationId = Math.max(0, parseInt(req.query.conversationId, 10) || 0);
+        const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 100), 500);
+        const simScope = resolveRequestSimScope(req);
+        const simFilter = [];
+        const simParams = [];
+        appendSimScopeCondition(simFilter, simParams, simScope, { alias: 's' });
+
+        if (!number && !conversationId) {
+            return res.status(400).json({
+                success: false,
+                message: 'number or conversationId is required'
+            });
+        }
+
+        const loadRowsByNumber = async (targetNumber) => {
+            const lookup = getPhoneLookupKeys(targetNumber);
+            let phoneWhere = `${COUNTERPART_EXPR} = ?`;
+            const params = [deviceId, targetNumber];
+
+            if (lookup.digits) {
+                phoneWhere = `(${COUNTERPART_NORM_SQL} = ? OR ${COUNTERPART_LAST10_SQL} = ? OR ${COUNTERPART_EXPR} = ?)`;
+                params.length = 0;
+                params.push(deviceId, lookup.digits, lookup.last10 || lookup.digits, targetNumber);
+            }
+
+            return db.all(`
+                SELECT s.id,
+                       s.device_id,
+                       s.from_number,
+                       s.to_number,
+                       s.message,
+                       s.timestamp,
+                       s.read,
+                       s.type,
+                       s.status,
+                       s.user_id,
+                       s.conversation_id,
+                       s.source,
+                       s.error,
+                       s.external_id,
+                       s.sim_slot,
+                       s.multipart_ref,
+                       s.multipart_part_index,
+                       s.multipart_part_count,
+                       s.multipart_group_key,
+                       u.username AS sent_by
+                FROM sms s
+                LEFT JOIN users u ON s.user_id = u.id
+                WHERE s.device_id = ?
+                  AND ${phoneWhere}
+                  ${simFilter.length ? `AND ${simFilter.join(' AND ')}` : ''}
+                ORDER BY s.timestamp DESC
+                LIMIT ?
+            `, [...params, ...simParams, limit]);
+        };
+
+        let rows;
+        let conversation = null;
+        let usedNumberFallback = false;
+        if (conversationId) {
+            conversation = await db.get(
+                `SELECT primary_number, title
+                 FROM sms_conversations
+                 WHERE device_id = ?
+                   AND id = ?`,
+                [deviceId, conversationId]
+            );
+            rows = await db.all(`
+                SELECT s.id,
+                       s.device_id,
+                       s.from_number,
+                       s.to_number,
+                       s.message,
+                       s.timestamp,
+                       s.read,
+                       s.type,
+                       s.status,
+                       s.user_id,
+                       s.conversation_id,
+                       s.source,
+                       s.error,
+                       s.external_id,
+                       s.sim_slot,
+                       s.multipart_ref,
+                       s.multipart_part_index,
+                       s.multipart_part_count,
+                       s.multipart_group_key,
+                       u.username AS sent_by
+                FROM sms s
+                LEFT JOIN users u ON s.user_id = u.id
+                WHERE s.device_id = ?
+                  AND s.conversation_id = ?
+                  ${simFilter.length ? `AND ${simFilter.join(' AND ')}` : ''}
+                ORDER BY s.timestamp DESC
+                LIMIT ?
+            `, [deviceId, conversationId, ...simParams, limit]);
+            if (!rows.length && number) {
+                rows = await loadRowsByNumber(number);
+                usedNumberFallback = true;
+            }
+        } else {
+            rows = await loadRowsByNumber(number);
+        }
+
+        const messages = mergeMultipartThreadMessages(rows.map(decodeSmsRecord).reverse());
+        const resolvedNumber = number
+            || String(conversation?.primary_number || messages[messages.length - 1]?.to_number || messages[messages.length - 1]?.from_number || '').trim();
+        const resolvedTitle = String(conversation?.title || messages[messages.length - 1]?.display_from || resolvedNumber || '').trim();
+        const displayMessages = messages.map((message) => {
+            if (
+                resolvedTitle
+                && !isGenericServiceDisplay(resolvedTitle)
+                && message?.sender_is_phone === false
+                && isGenericServiceDisplay(message.display_from)
+            ) {
+                return { ...message, display_from: resolvedTitle };
+            }
+            return message;
+        });
+
+        res.json({
+            success: true,
+            data: displayMessages,
+            meta: {
+                deviceId,
+                simSlot: simScope.simSlot,
+                number: resolvedNumber,
+                title: resolvedTitle,
+                conversationId: usedNumberFallback
+                    ? (Number(displayMessages[0]?.conversation_id || 0) || null)
+                    : (conversationId || Number(displayMessages[0]?.conversation_id || 0) || null),
+                count: displayMessages.length
+            }
+        });
+    } catch (error) {
+        logger.error('API SMS thread error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch SMS thread'
+        });
+    }
+});
+
+router.get('/conversations', requireDeviceAccess(), async (req, res) => {
+    try {
+        setNoStoreHeaders(res);
+        const db = req.app.locals.db;
+        if (!db) throw new Error('Database not available');
+
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 100), 500);
+        const simScope = resolveRequestSimScope(req);
+        let conversations = [];
+        let total = { count: 0 };
+        if (!hasSimScope(simScope)) {
+            try {
+                conversations = await db.all(`
+                    SELECT id AS conversation_id,
+                           device_id,
+                           primary_number AS thread_number,
+                           COALESCE(title, primary_number) AS display_from,
+                           last_message_preview AS message,
+                           last_message_at AS timestamp,
+                           unread_count,
+                           message_count AS total_count,
+                           last_message_direction AS last_direction,
+                           last_message_status AS status
+                    FROM sms_conversations
+                    WHERE device_id = ?
+                    ORDER BY datetime(last_message_at) DESC, id DESC
+                    LIMIT ?
+                `, [deviceId, limit]);
+
+                total = await db.get(
+                    'SELECT COUNT(*) AS count FROM sms_conversations WHERE device_id = ?',
+                    [deviceId]
+                );
+            } catch (error) {
+                const message = String(error?.message || '');
+                if (!/no such table:\s*sms_conversations/i.test(message)) {
+                    throw error;
+                }
+            }
+        }
+
+        if (!conversations.length) {
+            const scanLimit = Math.min(Math.max(limit * 10, 250), 2000);
+            const conditions = [
+                'device_id = ?',
+                "(COALESCE(NULLIF(TRIM(from_number), ''), NULLIF(TRIM(to_number), '')) IS NOT NULL)"
+            ];
+            const params = [deviceId];
+            appendSimScopeCondition(conditions, params, simScope);
+            const rows = await db.all(`
+                SELECT id, device_id, from_number, to_number, message, timestamp, read, type, status, user_id, conversation_id, source,
+                       sim_slot, multipart_ref, multipart_part_index, multipart_part_count, multipart_group_key
+                FROM sms
+                WHERE ${conditions.join(' AND ')}
+                ORDER BY datetime(timestamp) DESC, id DESC
+                LIMIT ?
+            `, [...params, scanLimit]);
+            const allConversations = buildSmsConversationSummaries(rows);
+            conversations = allConversations.slice(0, limit).map((row) => ({
+                ...row,
+                conversation_id: hasSimScope(simScope) ? null : (row.conversation_id || null)
+            }));
+            total = { count: allConversations.length };
+        }
+
+        res.json({
+            success: true,
+            data: conversations,
+            meta: {
+                deviceId,
+                simSlot: simScope.simSlot,
+                total: Number(total?.count || 0),
+                limit
+            }
+        });
+    } catch (error) {
+        logger.error('API SMS conversations error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch SMS conversations'
+        });
+    }
+});
+
+/**
+ * @swagger
+ * /sms/unread:
+ *   get:
+ *     summary: Get unread SMS count
+ *     tags: [SMS]
+ *     responses:
+ *       200:
+ *         description: Unread count
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 count: { type: integer }
+ */
+router.get('/unread', requireDeviceAccess(), async (req, res) => {
+    try {
+        setNoStoreHeaders(res);
+        const db = req.app.locals.db;
+        if (!db) throw new Error('Database not available');
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const simScope = resolveRequestSimScope(req);
+        const unreadCount = await getUnreadCountForDevice(db, deviceId, simScope);
+
+        res.json({
+            success: true,
+            deviceId,
+            simSlot: simScope.simSlot,
+            count: unreadCount
+        });
+    } catch (error) {
+        logger.error('API unread count error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch unread count'
+        });
+    }
+});
+
+router.post('/bulk-import', requireDeviceAccess(undefined, true), [
+    body('deviceId').optional().trim().isLength({ max: 64 }),
+    body('messages').isArray({ min: 1, max: 500 }).withMessage('messages must be an array with 1-500 entries')
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ success: false, message: errors.array()[0]?.msg || 'Validation failed' });
+        }
+
+        const db = req.app.locals.db;
+        if (!db) throw new Error('Database not available');
+
+        const deviceId = String(req.body.deviceId || resolveDeviceId(req, DEFAULT_DEVICE_ID) || '').trim();
+        const actorId = req.user?.id || req.session?.user?.id || null;
+        const messages = Array.isArray(req.body.messages) ? req.body.messages : [];
+
+        await db.run('BEGIN');
+
+        let imported = 0;
+        let skipped = 0;
+
+        for (const entry of messages) {
+            const message = String(entry?.message || '').trim();
+            if (!message) {
+                skipped++;
+                continue;
+            }
+
+            const from = String(entry?.from || entry?.from_number || '').trim();
+            const to = String(entry?.to || entry?.to_number || '').trim();
+            const direction = String(entry?.type || entry?.direction || '').trim().toLowerCase();
+            const type = direction === 'outgoing' ? 'outgoing' : 'incoming';
+            const status = String(entry?.status || (type === 'outgoing' ? 'sent' : 'received')).trim() || (type === 'outgoing' ? 'sent' : 'received');
+            const rawTimestamp = entry?.timestamp;
+            const parsedTimestamp = rawTimestamp ? new Date(rawTimestamp) : new Date();
+            if (Number.isNaN(parsedTimestamp.getTime())) {
+                skipped++;
+                continue;
+            }
+            const timestamp = parsedTimestamp.toISOString();
+            const externalId = entry?.externalId != null ? String(entry.externalId).trim() : (entry?.id != null ? String(entry.id).trim() : null);
+
+            const result = await db.run(
+                `INSERT OR IGNORE INTO sms
+                    (device_id, from_number, to_number, message, timestamp, read, type, status, user_id, source, external_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    deviceId || null,
+                    from || (type === 'outgoing' ? 'self' : 'unknown'),
+                    to || null,
+                    message,
+                    timestamp,
+                    entry?.read ? 1 : 0,
+                    type,
+                    status,
+                    actorId,
+                    'bulk-import',
+                    externalId || null
+                ]
+            );
+
+            if (result.changes > 0) {
+                imported++;
+                await attachSmsToConversation(db, {
+                    id: result.lastID,
+                    device_id: deviceId || null,
+                    from_number: from || (type === 'outgoing' ? 'self' : 'unknown'),
+                    to_number: to || null,
+                    type
+                });
+            } else skipped++;
+        }
+
+        await db.run('COMMIT');
+        smsCache.set(null, deviceId || null);
+        if (deviceId) {
+            await refreshSmsConversationsForDevice(db, deviceId);
+        }
+
+        emitDeviceEvent(deviceId, 'sms:bulk-imported', {
+            deviceId: deviceId || null,
+            imported,
+            skipped
+        });
+
+        res.status(201).json({
+            success: true,
+            imported,
+            skipped
+        });
+    } catch (error) {
+        try { await req.app.locals.db?.run('ROLLBACK'); } catch (_) {}
+        logger.error('POST /api/sms/bulk-import error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to import SMS messages'
+        });
+    }
+});
+
+router.post('/sync', requireDeviceAccess(undefined, true), async (req, res) => {
+    let deviceId = '';
+    try {
+        deviceId = String(req.body?.deviceId || req.query?.deviceId || resolveDeviceId(req, DEFAULT_DEVICE_ID)).trim();
+        if (!deviceId) {
+            return res.status(400).json({ success: false, message: 'No active device selected' });
+        }
+        if (!global.mqttService?.publishCommand) {
+            return res.status(503).json({ success: false, message: 'Device command service unavailable' });
+        }
+
+        emitDeviceEvent(deviceId, 'sms:sync-started', {
+            deviceId,
+            total: 0,
+            requested: true
+        });
+
+        const db = req.app.locals.db;
+        const requestedAt = new Date().toISOString();
+        const seenCursors = new Set();
+        const syncEntries = [];
+        const importResult = { imported: 0, skipped: 0, reconciled: 0, total: 0, ackRows: [] };
+        const deviceHistoryAck = { requested: 0, queued: 0, skipped: 0, results: [], skippedRows: [] };
+        let response = null;
+        let reportResponse = null;
+        let cursor = null;
+        let pageCount = 0;
+
+        while (pageCount < SMS_SYNC_MAX_PAGES) {
+            response = await global.mqttService.publishCommand(
+                deviceId,
+                'sync-sms',
+                {
+                    reason: 'dashboard_pull',
+                    requestedAt,
+                    max_entries: SMS_SYNC_PAGE_SIZE,
+                    ...(cursor !== null ? { before_storage_id: cursor } : {})
+                },
+                true,
+                90000,
+                { source: 'dashboard' }
+            );
+            if (!reportResponse) reportResponse = response;
+            if (isFailedSmsSyncResponse(response)) {
+                const error = new Error(smsSyncFailureMessage(response));
+                error.response = response;
+                throw error;
+            }
+
+            const pageEntries = getSmsSyncPayloadEntries(response);
+            const pageImport = await importDeviceSmsSyncEntries(db, deviceId, pageEntries);
+            const pageAck = await queueDeviceSmsDeletesForRows(
+                deviceId,
+                pageImport.ackRows,
+                'dashboard-sms-history-ack'
+            );
+            syncEntries.push(...pageEntries);
+            importResult.imported += pageImport.imported;
+            importResult.skipped += pageImport.skipped;
+            importResult.reconciled += pageImport.reconciled;
+            importResult.total += pageImport.total;
+            importResult.ackRows.push(...pageImport.ackRows);
+            mergeSmsHistoryAckTotals(deviceHistoryAck, pageAck);
+            pageCount++;
+
+            const page = getSmsSyncPageMeta(response);
+            if (!page.hasMore) break;
+            if (page.nextCursor === null || seenCursors.has(page.nextCursor) ||
+                (cursor !== null && page.nextCursor >= cursor)) {
+                const error = new Error('Device SMS history returned an invalid or repeated page cursor');
+                error.response = response;
+                throw error;
+            }
+            seenCursors.add(page.nextCursor);
+            cursor = page.nextCursor;
+        }
+
+        if (getSmsSyncPageMeta(response).hasMore) {
+            const error = new Error(`Device SMS history exceeded the ${SMS_SYNC_MAX_PAGES}-page safety limit`);
+            error.response = response;
+            throw error;
+        }
+        const deviceSmsStorage = getLiveDeviceSmsStorage(deviceId);
+        const syncReport = buildSmsSyncReport(reportResponse || response, importResult, syncEntries, deviceSmsStorage);
+        syncReport.diagnostics.pages = pageCount;
+        syncReport.diagnostics.reconciled = importResult.reconciled;
+        if (deviceHistoryAck.requested > deviceHistoryAck.queued) {
+            syncReport.diagnostics.warnings.push(
+                `${deviceHistoryAck.requested - deviceHistoryAck.queued} device history acknowledgement(s) could not be queued and will be retried on the next sync.`
+            );
+        }
+        emitDeviceEvent(deviceId, 'sms:sync-completed', {
+            deviceId,
+            device_id: deviceId,
+            total: syncReport.total,
+            synced: syncReport.synced,
+            imported: syncReport.imported,
+            skipped: syncReport.skipped,
+            deviceSmsStorage: syncReport.deviceSmsStorage,
+            deviceHistoryAck,
+            diagnostics: syncReport.diagnostics,
+            warning: syncReport.diagnostics.warnings[0] || null,
+            requested: true,
+            timestamp: new Date().toISOString()
+        });
+        res.json({
+            success: true,
+            message: syncReport.message,
+            warning: syncReport.diagnostics.warnings[0] || null,
+            imported: syncReport.imported,
+            skipped: syncReport.skipped,
+            total: syncReport.total,
+            synced: syncReport.synced,
+            deviceSmsStorage: syncReport.deviceSmsStorage,
+            deviceHistoryAck,
+            diagnostics: syncReport.diagnostics
+        });
+    } catch (error) {
+        logger.error('POST /api/sms/sync error:', error);
+        if (deviceId) {
+            const response = error?.response && typeof error.response === 'object' ? error.response : {};
+            const syncEntries = getSmsSyncPayloadEntries(response);
+            const deviceSmsStorage = getLiveDeviceSmsStorage(deviceId) || getSmsSyncPayloadStorage(response);
+            const syncReport = buildSmsSyncReport(response, { imported: 0, skipped: 0 }, syncEntries, deviceSmsStorage);
+            const payload = {
+                deviceId,
+                device_id: deviceId,
+                total: syncReport.total,
+                synced: syncReport.synced,
+                imported: 0,
+                skipped: 0,
+                deviceSmsStorage: syncReport.deviceSmsStorage,
+                diagnostics: {
+                    ...syncReport.diagnostics,
+                    failure: true
+                },
+                warning: syncReport.diagnostics.warnings[0] || null,
+                requested: true,
+                error: error.message || 'Failed to request message pull',
+                timestamp: new Date().toISOString()
+            };
+            emitDeviceEvent(deviceId, 'sms:sync-failed', payload);
+            emitDeviceEvent(deviceId, 'sms:sync-completed', payload);
+        }
+        const response = error?.response && typeof error.response === 'object' ? error.response : {};
+        const syncEntries = getSmsSyncPayloadEntries(response);
+        const deviceSmsStorage = deviceId ? (getLiveDeviceSmsStorage(deviceId) || getSmsSyncPayloadStorage(response)) : getSmsSyncPayloadStorage(response);
+        const syncReport = buildSmsSyncReport(response, { imported: 0, skipped: 0 }, syncEntries, deviceSmsStorage);
+        res.status(error?.response ? 502 : 500).json({
+            success: false,
+            message: error.message || 'Failed to request message pull',
+            warning: syncReport.diagnostics.warnings[0] || null,
+            imported: 0,
+            skipped: 0,
+            total: syncReport.total,
+            synced: syncReport.synced,
+            deviceSmsStorage: syncReport.deviceSmsStorage,
+            diagnostics: {
+                ...syncReport.diagnostics,
+                failure: Boolean(error?.response)
+            }
+        });
+    }
+});
+
+/**
+ * @swagger
+ * /sms/send:
+ *   post:
+ *     summary: Send an SMS via the device
+ *     tags: [SMS]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [to, message]
+ *             properties:
+ *               to:      { type: string, example: '+15551234567' }
+ *               message: { type: string, maxLength: 160 }
+ *     responses:
+ *       200:
+ *         description: SMS queued for delivery
+ *       400:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/Error' }
+ */
+router.post('/send', smsRateLimit, requireDeviceAccess(undefined, true), [
+    body('message').custom((value, { req }) => {
+        if (Array.isArray(req.body?.bulkRows) && req.body.bulkRows.length) return true;
+        return validateSmsMessageSize(value);
+    }),
+    body('simSlot').optional({ values: 'falsy' }).isInt({ min: 0, max: 7 }).withMessage('simSlot must be a valid SIM slot')
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                message: errors.array()[0]?.msg || "Validation failed", errors: errors.array()
+            });
+        }
+
+        const { message } = req.body;
+        const simScope = resolveRequestSimScope(req);
+        const requestedDeviceId = String(req.body.deviceId || '').trim();
+        const deviceId = requestedDeviceId || resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const db = req.app.locals.db;
+        const actorId = req.user?.id || req.session?.user?.id || null;
+        const bulkQueue = normalizeBulkSmsQueueRows(req.body.bulkRows);
+        const isBulkQueue = bulkQueue.queueRows.length > 0 || (Array.isArray(req.body.bulkRows) && req.body.bulkRows.length > 0);
+        const normalizedSingle = isBulkQueue
+            ? { recipients: [], invalid: [] }
+            : normalizeSmsRecipients(req.body.recipients ?? req.body.to);
+        const queueRows = isBulkQueue
+            ? bulkQueue.queueRows
+            : normalizedSingle.recipients.map((recipient) => ({ recipient, message, rowNumber: null }));
+        const invalid = isBulkQueue ? bulkQueue.invalid : normalizedSingle.invalid;
+
+        if (!db) {
+            throw new Error('Database not available');
+        }
+        if (!queueRows.length) {
+            return res.status(400).json({
+                success: false,
+                message: invalid.length
+                    ? (isBulkQueue ? invalid[0] : `Invalid phone number format: ${invalid[0]}`)
+                    : 'Phone number is required'
+            });
+        }
+        if (invalid.length) {
+            return res.status(400).json({ success: false, message: isBulkQueue ? invalid[0] : `Invalid phone number format: ${invalid[0]}` });
+        }
+        if (!deviceId) {
+            return res.status(400).json({ success: false, message: 'No active device selected' });
+        }
+        const deviceRow = await db.get('SELECT id FROM devices WHERE id = ?', [deviceId]);
+        if (!deviceRow) {
+            return res.status(400).json({ success: false, message: 'Device not registered' });
+        }
+
+        const batchId = queueRows.length > 1 ? `sms_batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : null;
+        const results = [];
+        for (const row of queueRows) {
+            logger.info(`Queueing SMS to ${row.recipient}`);
+            const queued = await queueSmsForDelivery({
+                db,
+                mqttService: global.mqttService,
+                deviceId,
+                to: row.recipient,
+                message: row.message,
+                simSlot: simScope.simSlot,
+                userId: actorId,
+                source: 'dashboard',
+                batchId
+            });
+            results.push(queued);
+        }
+
+        if (results.length === 1) {
+            const queued = results[0];
+            return res.json({
+                success: true,
+                queued: queued.status !== 'sent',
+                message: 'SMS queued for delivery',
+                id: queued.id,
+                to: queued.to,
+                conversationId: queued.conversationId || null,
+                simSlot: queued.simSlot,
+                queueId: queued.queueId,
+                messageId: queued.messageId,
+                status: queued.status
+            });
+        }
+
+        res.json({
+            success: true,
+            queued: true,
+            multiRecipient: true,
+            bulkQueue: isBulkQueue,
+            batchId,
+            count: results.length,
+            recipients: queueRows.map((row) => row.recipient),
+            results,
+            message: `${results.length} SMS queued for delivery`
+        });
+    } catch (error) {
+        logger.error('API send SMS error:', error);
+        const statusCode = /invalid phone/i.test(error.message) ? 400
+            : (/unavailable|required|not connected/i.test(error.message) ? 503 : 500);
+        res.status(statusCode).json({
+            success: false,
+            message: error.message || 'Failed to send SMS'
+        });
+    }
+});
+
+// ── Clear all messages of a given type ─────────────────────────────────────
+// NOTE: must be defined BEFORE DELETE /:id to avoid the wildcard swallowing it.
+
+/**
+ * @swagger
+ * /sms/clear:
+ *   delete:
+ *     summary: Delete all messages of a given type (inbox or sent)
+ *     tags: [SMS]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [type]
+ *             properties:
+ *               type:
+ *                 type: string
+ *                 enum: [incoming, outgoing]
+ *     responses:
+ *       200:
+ *         description: Messages deleted
+ *       400:
+ *         description: Invalid type
+ */
+router.delete('/clear', requireDeviceAccess(undefined, true), async (req, res) => {
+    try {
+        const type = req.body.type;
+        if (type !== 'incoming' && type !== 'outgoing') {
+            return res.status(400).json({ success: false, message: 'type must be "incoming" or "outgoing"' });
+        }
+        const db = req.app.locals.db;
+        if (!db) throw new Error('Database not available');
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const simScope = resolveRequestSimScope(req);
+
+        const condition = type === 'incoming' ? "type != 'outgoing'" : "type = 'outgoing'";
+        const conditions = ['device_id = ?', condition];
+        const params = [deviceId];
+        appendSimScopeCondition(conditions, params, simScope);
+        let deviceDelete = { queued: false, reason: 'dashboard_only' };
+        if (type === 'incoming') {
+            deviceDelete = await queueDeviceSmsDelete(
+                deviceId,
+                { mode: 'incoming', delete_read: true },
+                'dashboard-sms-clear-incoming'
+            );
+        }
+        const result = await db.run(
+            `DELETE FROM sms WHERE ${conditions.join(' AND ')}`,
+            params
+        );
+
+        smsCache.set(null, deviceId);
+        await refreshSmsConversationsForDevice(db, deviceId);
+        const unreadCount = await getUnreadCountForDevice(db, deviceId, simScope);
+        logger.info(`Cleared ${result.changes} ${type} SMS messages for ${deviceId}`);
+        emitDeviceEvent(deviceId, 'sms:bulk-deleted', {
+            deviceId,
+            count: result.changes,
+            unreadCount,
+            deviceDelete
+        });
+        res.json({
+            success: true,
+            deviceId,
+            message: `Cleared ${result.changes} messages`,
+            deleted: result.changes,
+            deviceDeleteQueued: deviceDelete.queued,
+            deviceDelete
+        });
+    } catch (error) {
+        logger.error('API SMS clear error:', error);
+        res.status(500).json({ success: false, message: 'Failed to clear messages' });
+    }
+});
+
+// Delete SMS
+router.delete('/:id(\\d+)', requireDeviceAccess(undefined, true), async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidNumericId(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid SMS id' });
+        }
+        const db = req.app.locals.db;
+        
+        if (!db) {
+            throw new Error('Database not available');
+        }
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const simScope = resolveRequestSimScope(req);
+
+        const conditions = ['id = ?', 'device_id = ?'];
+        const params = [id, deviceId];
+        appendSimScopeCondition(conditions, params, simScope);
+        const whereSql = conditions.join(' AND ');
+
+        const existing = await db.get(`SELECT id, conversation_id, type, modem_storage_index, firmware_storage_id FROM sms WHERE ${whereSql}`, params);
+        let deviceDelete = { queued: false, reason: 'missing_device_storage_target' };
+        if (existing) {
+            const storageIndex = normalizeSmsStorageIndex(existing.modem_storage_index);
+            const storageId = normalizeFirmwareSmsStorageId(existing.firmware_storage_id);
+            if (storageIndex !== null || storageId !== null) {
+                deviceDelete = await queueDeviceSmsDelete(
+                    deviceId,
+                    {
+                        ...(storageIndex !== null ? { storage_index: storageIndex } : {}),
+                        ...(storageId !== null ? { storage_id: storageId } : {})
+                    },
+                    'dashboard-sms-delete'
+                );
+            }
+        }
+        const result = await db.run(`DELETE FROM sms WHERE ${whereSql}`, params);
+
+        if (result.changes === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'SMS not found'
+            });
+        }
+
+        logger.info(`SMS deleted: ${id}`);
+        if (existing?.conversation_id) {
+            await refreshSmsConversation(db, existing.conversation_id);
+        }
+
+        // Emit socket event
+        try {
+            if (global.io) {
+                smsCache.set(null, deviceId);
+                const unreadCount = await getUnreadCountForDevice(db, deviceId, simScope);
+                emitDeviceEvent(deviceId, 'sms:deleted', { id, deviceId, unreadCount, deviceDelete });
+            }
+        } catch (socketError) {
+            logger.error('Error emitting socket event:', socketError);
+        }
+
+        res.json({
+            success: true,
+            message: 'SMS deleted successfully',
+            deviceDeleteQueued: deviceDelete.queued,
+            deviceDelete
+        });
+    } catch (error) {
+        logger.error('API delete SMS error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete SMS'
+        });
+    }
+});
+
+// Mark SMS as read
+router.put('/:id(\\d+)/read', requireDeviceAccess(undefined, true), async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidNumericId(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid SMS id' });
+        }
+        const db = req.app.locals.db;
+        
+        if (!db) {
+            throw new Error('Database not available');
+        }
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const simScope = resolveRequestSimScope(req);
+
+        const conditions = ['id = ?', 'device_id = ?', 'read = 0'];
+        const params = [id, deviceId];
+        appendSimScopeCondition(conditions, params, simScope);
+        const result = await db.run(
+            `UPDATE sms SET read = 1 WHERE ${conditions.join(' AND ')}`,
+            params
+        );
+
+        if (result.changes > 0) {
+            logger.info(`SMS marked as read: ${id}`);
+            smsCache.set(null, deviceId);
+            await refreshSmsConversationBySmsId(db, id);
+            const unreadCount = await getUnreadCountForDevice(db, deviceId, simScope);
+
+            // Emit socket event
+            emitDeviceEvent(deviceId, 'sms:read', { id, deviceId, unreadCount });
+        }
+
+        res.json({
+            success: true,
+            message: 'SMS marked as read'
+        });
+    } catch (error) {
+        logger.error('API mark read error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to mark SMS as read'
+        });
+    }
+});
+
+// ── SMS Templates ──────────────────────────────────────────────────────────
+// NOTE: must be before GET /:id to avoid the wildcard swallowing /templates.
+
+router.get('/templates', async (req, res) => {
+    try {
+        setNoStoreHeaders(res);
+        const db = req.app.locals.db;
+        if (!db) throw new Error('Database not available');
+        const user = withEffectiveRole(req.user || req.session?.user);
+        const isTemplateAdmin = user?.role === 'admin' || user?.role === 'superadmin';
+        // Templates are creator-scoped for non-admins (SEC-01 tenant isolation).
+        const templates = await db.all(`
+            SELECT t.id, t.title, t.message, t.created_at, u.username as created_by
+            FROM sms_templates t LEFT JOIN users u ON t.created_by = u.id
+            ${isTemplateAdmin ? '' : 'WHERE t.created_by = ?'}
+            ORDER BY t.created_at DESC
+        `, isTemplateAdmin ? [] : [user?.id ?? -1]);
+        res.json({ success: true, data: templates });
+    } catch (error) {
+        logger.error('API SMS templates error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch templates' });
+    }
+});
+
+// ==================== SCHEDULED SMS ====================
+// NOTE: must be before GET /:id to avoid the wildcard swallowing /scheduled.
+
+// GET /api/sms/scheduled — list scheduled messages for a device
+router.get('/scheduled', requireDeviceAccess(), async (req, res) => {
+    try {
+        setNoStoreHeaders(res);
+        const db = req.app.locals.db;
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const simScope = resolveRequestSimScope(req);
+        const conditions = ['s.device_id = ?'];
+        const params = [deviceId];
+        appendSimScopeCondition(conditions, params, simScope, { alias: 's' });
+        const rows = await db.all(
+            `SELECT s.*, u.username AS created_by FROM scheduled_sms s
+             LEFT JOIN users u ON s.user_id = u.id
+             WHERE ${conditions.join(' AND ')}
+             ORDER BY s.send_at ASC`,
+            params
+        );
+        res.json({ success: true, data: rows });
+    } catch (error) {
+        logger.error('API SMS scheduled list error:', error);
+        res.status(500).json({ success: false, message: 'Failed to list scheduled SMS' });
+    }
+});
+
+// ── CSV Export ─────────────────────────────────────────────────────────────
+// NOTE: must be before GET /:id to avoid the wildcard swallowing /export.
+
+router.get('/export/csv', requireDeviceAccess(), async (req, res) => {
+    try {
+        const db = req.app.locals.db;
+        if (!db) throw new Error('Database not available');
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const simScope = resolveRequestSimScope(req);
+        const conditions = ['s.device_id = ?'];
+        const params = [deviceId];
+        appendSimScopeCondition(conditions, params, simScope, { alias: 's' });
+        const rows = await db.all(`
+            SELECT s.id, s.device_id, s.from_number, s.to_number, s.message,
+                   s.type, s.status, s.timestamp, s.sim_slot, u.username as sent_by
+            FROM sms s LEFT JOIN users u ON s.user_id = u.id
+            WHERE ${conditions.join(' AND ')}
+            ORDER BY s.timestamp DESC LIMIT 10000
+        `, params);
+        const header = 'id,device_id,from_number,to_number,message,type,status,timestamp,sim_slot,sent_by';
+        const csvRows = rows.map(r =>
+            [r.id, r.device_id || '', r.from_number, r.to_number || '', `"${(r.message || '').replace(/"/g,'""')}"`,
+             r.type, r.status, r.timestamp, r.sim_slot ?? '', r.sent_by || ''].join(',')
+        );
+        const safeDeviceId = String(deviceId || 'device').replace(/[^a-zA-Z0-9_-]/g, '_');
+        setNoStoreHeaders(res);
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="sms-export-${safeDeviceId}-${Date.now()}.csv"`);
+        res.send([header, ...csvRows].join('\r\n'));
+    } catch (error) {
+        logger.error('SMS CSV export error:', error);
+        res.status(500).json({ success: false, message: 'Export failed' });
+    }
+});
+
+// Get single SMS
+router.get('/:id(\\d+)', requireDeviceAccess(), async (req, res) => {
+    try {
+        setNoStoreHeaders(res);
+        const { id } = req.params;
+        if (!isValidNumericId(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid SMS id' });
+        }
+        const db = req.app.locals.db;
+        
+        if (!db) {
+            throw new Error('Database not available');
+        }
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const simScope = resolveRequestSimScope(req);
+
+        const conditions = ['id = ?', 'device_id = ?'];
+        const params = [id, deviceId];
+        appendSimScopeCondition(conditions, params, simScope);
+        const sms = await db.get(`SELECT * FROM sms WHERE ${conditions.join(' AND ')}`, params);
+
+        if (!sms) {
+            return res.status(404).json({
+                success: false,
+                message: 'SMS not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: decodeSmsRecord(sms)
+        });
+    } catch (error) {
+        logger.error('API get SMS error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch SMS'
+        });
+    }
+});
+
+// Bulk delete SMS
+router.post('/bulk-delete', requireDeviceAccess(undefined, true), async (req, res) => {
+    try {
+        const { ids } = req.body;
+        
+        if (!ids || !Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No SMS IDs provided'
+            });
+        }
+
+        if (!ids.every(id => Number.isInteger(Number(id)) && Number(id) > 0)) {
+            return res.status(400).json({
+                success: false,
+                message: 'All IDs must be positive integers'
+            });
+        }
+
+        if (ids.length > 500) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot delete more than 500 messages at once'
+            });
+        }
+
+        const db = req.app.locals.db;
+        if (!db) {
+            throw new Error('Database not available');
+        }
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const simScope = resolveRequestSimScope(req);
+
+        const placeholders = ids.map(() => '?').join(',');
+        const conditions = [`device_id = ?`, `id IN (${placeholders})`];
+        const params = [deviceId, ...ids];
+        appendSimScopeCondition(conditions, params, simScope);
+        const rowsForDeviceDelete = await db.all(
+            `SELECT id, modem_storage_index, firmware_storage_id FROM sms WHERE ${conditions.join(' AND ')}`,
+            params
+        );
+        const deviceDelete = await queueDeviceSmsDeletesForRows(
+            deviceId,
+            rowsForDeviceDelete,
+            'dashboard-sms-bulk-delete'
+        );
+
+        const result = await db.run(
+            `DELETE FROM sms WHERE ${conditions.join(' AND ')}`,
+            params
+        );
+
+        logger.info(`Bulk deleted ${result.changes} SMS messages`);
+        await refreshSmsConversationsForDevice(db, deviceId);
+
+        // Emit socket event
+        try {
+            if (global.io) {
+                smsCache.set(null, deviceId);
+                const unreadCount = await getUnreadCountForDevice(db, deviceId, simScope);
+                emitDeviceEvent(deviceId, 'sms:bulk-deleted', { deviceId, count: result.changes, unreadCount, deviceDelete });
+            }
+        } catch (socketError) {
+            logger.error('Error emitting socket event:', socketError);
+        }
+
+        res.json({
+            success: true,
+            message: `Successfully deleted ${result.changes} messages`,
+            deleted: result.changes,
+            deviceDeleteQueued: deviceDelete.queued > 0,
+            deviceDelete
+        });
+    } catch (error) {
+        logger.error('API bulk delete error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete messages'
+        });
+    }
+});
+
+// Mark multiple SMS as read
+router.post('/bulk-read', requireDeviceAccess(undefined, true), async (req, res) => {
+    try {
+        const { ids } = req.body;
+        
+        if (!ids || !Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No SMS IDs provided'
+            });
+        }
+
+        if (!ids.every(id => Number.isInteger(Number(id)) && Number(id) > 0)) {
+            return res.status(400).json({
+                success: false,
+                message: 'All IDs must be positive integers'
+            });
+        }
+
+        if (ids.length > 500) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot mark more than 500 messages at once'
+            });
+        }
+
+        const db = req.app.locals.db;
+        if (!db) {
+            throw new Error('Database not available');
+        }
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const simScope = resolveRequestSimScope(req);
+
+        const placeholders = ids.map(() => '?').join(',');
+        const conditions = ['device_id = ?', `id IN (${placeholders})`, 'read = 0'];
+        const params = [deviceId, ...ids];
+        appendSimScopeCondition(conditions, params, simScope);
+
+        const result = await db.run(
+            `UPDATE sms SET read = 1 WHERE ${conditions.join(' AND ')}`,
+            params
+        );
+
+        smsCache.set(null, deviceId);
+        await refreshSmsConversationsForDevice(db, deviceId);
+        const unreadCount = await getUnreadCountForDevice(db, deviceId, simScope);
+        logger.info(`Marked ${result.changes} SMS as read`);
+
+        // Emit socket event
+        try {
+            emitDeviceEvent(deviceId, 'sms:bulk-read', {
+                deviceId,
+                count: result.changes,
+                unreadCount
+            });
+        } catch (socketError) {
+            logger.error('Error emitting socket event:', socketError);
+        }
+
+        res.json({
+            success: true,
+            message: `Marked ${result.changes} messages as read`,
+            marked: result.changes,
+            unreadCount
+        });
+    } catch (error) {
+        logger.error('API bulk read error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to mark messages as read'
+        });
+    }
+});
+
+router.post('/mark-all-read', requireDeviceAccess(undefined, true), async (req, res) => {
+    try {
+        const db = req.app.locals.db;
+        if (!db) {
+            throw new Error('Database not available');
+        }
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const simScope = resolveRequestSimScope(req);
+        const conditions = ['device_id = ?', 'read = 0', "type != 'outgoing'"];
+        const params = [deviceId];
+        appendSimScopeCondition(conditions, params, simScope);
+
+        const result = await db.run(
+            `UPDATE sms
+             SET read = 1
+             WHERE ${conditions.join(' AND ')}`,
+            params
+        );
+
+        smsCache.set(null, deviceId);
+        await refreshSmsConversationsForDevice(db, deviceId);
+        const unreadCount = await getUnreadCountForDevice(db, deviceId, simScope);
+        logger.info(`Marked all unread SMS as read for ${deviceId}: ${result.changes}`);
+
+        try {
+            emitDeviceEvent(deviceId, 'sms:bulk-read', {
+                deviceId,
+                count: result.changes,
+                unreadCount
+            });
+        } catch (socketError) {
+            logger.error('Error emitting socket event:', socketError);
+        }
+
+        res.json({
+            success: true,
+            message: `Marked ${result.changes} messages as read`,
+            marked: result.changes,
+            unreadCount
+        });
+    } catch (error) {
+        logger.error('API mark all read error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to mark all messages as read'
+        });
+    }
+});
+
+router.post('/templates', requireRole('operator', 'admin', 'superadmin'), [
+    body('title').trim().notEmpty().isLength({ max: 80 }).withMessage('Title required (max 80 chars)'),
+    body('message').custom(validateSmsMessageSize)
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array()[0]?.msg || 'Validation failed', errors: errors.array() });
+        const { title, message } = req.body;
+        const db = req.app.locals.db;
+        if (!db) throw new Error('Database not available');
+        const result = await db.run(
+            `INSERT INTO sms_templates (title, message, created_by) VALUES (?, ?, ?)`,
+            [title, message, req.session?.user?.id || null]
+        );
+        const tpl = await getSmsTemplateById(db, result.lastID);
+        if (global.io) global.io.emit('sms:template-added', tpl);
+        res.json({ success: true, data: tpl });
+    } catch (error) {
+        logger.error('API SMS template create error:', error);
+        res.status(500).json({ success: false, message: 'Failed to create template' });
+    }
+});
+
+router.put('/templates/:id', requireRole('operator', 'admin', 'superadmin'), [
+    body('title').trim().notEmpty().isLength({ max: 80 }).withMessage('Title required (max 80 chars)'),
+    body('message').custom(validateSmsMessageSize)
+], async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidNumericId(id)) return res.status(400).json({ success: false, message: 'Invalid ID' });
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array()[0]?.msg || 'Validation failed', errors: errors.array() });
+        const { title, message } = req.body;
+        const db = req.app.locals.db;
+        if (!db) throw new Error('Database not available');
+        await assertTemplateOwnership(req, db, id);
+        const result = await db.run(
+            'UPDATE sms_templates SET title = ?, message = ? WHERE id = ?',
+            [title, message, id]
+        );
+        if (result.changes === 0) return res.status(404).json({ success: false, message: 'Template not found' });
+        const tpl = await getSmsTemplateById(db, id);
+        if (global.io) global.io.emit('sms:template-updated', tpl);
+        res.json({ success: true, data: tpl });
+    } catch (error) {
+        logger.error('API SMS template update error:', error);
+        res.status(500).json({ success: false, message: 'Failed to update template' });
+    }
+});
+
+router.delete('/templates/:id', requireRole('operator', 'admin', 'superadmin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidNumericId(id)) return res.status(400).json({ success: false, message: 'Invalid ID' });
+        const db = req.app.locals.db;
+        if (!db) throw new Error('Database not available');
+        await assertTemplateOwnership(req, db, id);
+        const result = await db.run('DELETE FROM sms_templates WHERE id = ?', [id]);
+        if (result.changes === 0) return res.status(404).json({ success: false, message: 'Template not found' });
+        if (global.io) global.io.emit('sms:template-deleted', { id: parseInt(id) });
+        res.json({ success: true, message: 'Template deleted' });
+    } catch (error) {
+        logger.error('API SMS template delete error:', error);
+        res.status(500).json({ success: false, message: 'Failed to delete template' });
+    }
+});
+
+// POST /api/sms/scheduled — create a scheduled SMS
+router.post('/scheduled', requireDeviceAccess(undefined, true), [
+    body('message').custom(validateSmsMessageSize),
+    body('send_at').isISO8601().withMessage('send_at must be a valid ISO date-time'),
+    body('deviceId').optional().trim(),
+    body('simSlot').optional({ values: 'falsy' }).isInt({ min: 0, max: 7 }).withMessage('simSlot must be a valid SIM slot')
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array()[0]?.msg || 'Validation failed', errors: errors.array() });
+
+        const { message, send_at } = req.body;
+        const simScope = resolveRequestSimScope(req);
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const { recipients, invalid } = normalizeSmsRecipients(req.body.recipients ?? req.body.to);
+        if (!recipients.length) {
+            return res.status(400).json({ success: false, message: invalid.length ? `Invalid phone number format: ${invalid[0]}` : 'Recipient required' });
+        }
+        if (invalid.length) {
+            return res.status(400).json({ success: false, message: `Invalid phone number format: ${invalid[0]}` });
+        }
+        const sendAt = new Date(send_at);
+        if (sendAt <= new Date()) {
+            return res.status(400).json({ success: false, message: 'send_at must be in the future' });
+        }
+
+        const db = req.app.locals.db;
+        const created = [];
+        for (const recipient of recipients) {
+            const result = await db.run(
+                `INSERT INTO scheduled_sms (device_id, to_number, message, send_at, sim_slot, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+                [deviceId, recipient, message, sendAt.toISOString(), simScope.simSlot, req.session?.user?.id || null]
+            );
+            logger.info(`Scheduled SMS created id=${result.lastID} to ${recipient} at ${sendAt.toISOString()}`);
+            const item = {
+                id: result.lastID,
+                deviceId,
+                to_number: recipient,
+                message,
+                send_at: sendAt.toISOString(),
+                sim_slot: simScope.simSlot,
+                status: 'pending',
+                created_by: req.session?.user?.username || null
+            };
+            created.push(item);
+            emitDeviceEvent(deviceId, 'sms:scheduled-created', item);
+        }
+
+        if (created.length === 1) {
+            return res.json({ success: true, message: 'SMS scheduled', id: created[0].id });
+        }
+        res.json({
+            success: true,
+            multiRecipient: true,
+            count: created.length,
+            ids: created.map((item) => item.id),
+            recipients,
+            message: `${created.length} SMS scheduled`
+        });
+    } catch (error) {
+        logger.error('API SMS scheduled create error:', error);
+        res.status(500).json({ success: false, message: 'Failed to schedule SMS' });
+    }
+});
+
+// POST /api/sms/scheduled/import - upload an Excel-compatible CSV/TSV schedule template
+router.post('/scheduled/import', requireDeviceAccess(undefined, true), scheduleImportUpload.single('file'), async (req, res) => {
+    try {
+        if (!req.file?.buffer) {
+            return res.status(400).json({ success: false, message: 'Upload a CSV template first' });
+        }
+        const originalName = String(req.file.originalname || '').toLowerCase();
+        if (originalName.endsWith('.xlsx') || originalName.endsWith('.xls')) {
+            return res.status(400).json({ success: false, message: 'Export the Excel template as CSV, then upload it here.' });
+        }
+        const parsed = parseScheduleImport(req.file.buffer);
+        if (parsed.errors.length && !parsed.rows.length) {
+            return res.status(400).json({ success: false, message: parsed.errors[0], errors: parsed.errors.slice(0, 20) });
+        }
+
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const db = req.app.locals.db;
+        const created = [];
+        const rowErrors = [...parsed.errors];
+        for (const row of parsed.rows) {
+            const { recipients, invalid } = normalizeSmsRecipients(row.phone);
+            if (!recipients.length || invalid.length) {
+                rowErrors.push(`Invalid phone number: ${row.phone}`);
+                continue;
+            }
+            if (row.sendAt <= new Date()) {
+                rowErrors.push(`Past send_at skipped for ${row.phone}`);
+                continue;
+            }
+            try {
+                validateSmsMessageSize(row.message);
+            } catch (error) {
+                rowErrors.push(`Message too large for ${row.phone}`);
+                continue;
+            }
+            for (const recipient of recipients) {
+                const result = await db.run(
+                    `INSERT INTO scheduled_sms (device_id, to_number, message, send_at, sim_slot, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+                    [deviceId, recipient, row.message, row.sendAt.toISOString(), row.simSlot, req.session?.user?.id || null]
+                );
+                const item = {
+                    id: result.lastID,
+                    deviceId,
+                    to_number: recipient,
+                    message: row.message,
+                    send_at: row.sendAt.toISOString(),
+                    sim_slot: row.simSlot,
+                    status: 'pending',
+                    created_by: req.session?.user?.username || null
+                };
+                created.push(item);
+                emitDeviceEvent(deviceId, 'sms:scheduled-created', item);
+            }
+        }
+
+        if (!created.length) {
+            return res.status(400).json({ success: false, message: rowErrors[0] || 'No valid schedule rows found', errors: rowErrors.slice(0, 20) });
+        }
+        res.json({
+            success: true,
+            count: created.length,
+            ids: created.map((item) => item.id),
+            errors: rowErrors.slice(0, 20),
+            message: `${created.length} SMS scheduled from template`
+        });
+    } catch (error) {
+        logger.error('API SMS scheduled import error:', error);
+        res.status(500).json({ success: false, message: 'Failed to import schedule template' });
+    }
+});
+
+// DELETE /api/sms/scheduled/:id - cancel a pending scheduled SMS
+router.delete('/scheduled/:id', requireDeviceAccess(undefined, true), async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidNumericId(id)) return res.status(400).json({ success: false, message: 'Invalid ID' });
+        const db = req.app.locals.db;
+        const deviceId = resolveDeviceId(req, DEFAULT_DEVICE_ID);
+        const simScope = resolveRequestSimScope(req);
+        const conditions = ['id = ?', 'device_id = ?', "status = 'pending'"];
+        const params = [id, deviceId];
+        appendSimScopeCondition(conditions, params, simScope);
+        const result = await db.run(
+            `DELETE FROM scheduled_sms WHERE ${conditions.join(' AND ')}`,
+            params
+        );
+        if (result.changes === 0) return res.status(404).json({ success: false, message: 'Scheduled SMS not found or already sent' });
+        emitDeviceEvent(deviceId, 'sms:scheduled-cancelled', {
+            id: Number(id),
+            deviceId
+        });
+        res.json({ success: true, message: 'Scheduled SMS cancelled' });
+    } catch (error) {
+        logger.error('API SMS scheduled delete error:', error);
+        res.status(500).json({ success: false, message: 'Failed to cancel scheduled SMS' });
+    }
+});
+
+// ==================== SCHEDULED SMS PROCESSOR ====================
+// Runs every 30 seconds. Sends any pending SMS whose send_at has passed.
+
+function startScheduledSmsProcessor(app) {
+    const interval = setInterval(async () => {
+        try {
+            const db = app.locals.db;
+            if (!db) return;
+
+            // QUEUE-02: conditional claim. Each row is atomically flipped
+            // pending -> queued BEFORE dispatch; if this tick or another worker
+            // already claimed it, changes === 0 and the row is skipped. This
+            // removes the duplicate-send window of overlapping 30s ticks.
+            const nowIso = new Date().toISOString();
+            const due = await db.all(
+                `SELECT * FROM scheduled_sms WHERE status = 'pending' AND datetime(send_at) <= datetime('now') LIMIT 20`
+            );
+
+            for (const sms of due) {
+                const claim = await db.run(
+                    `UPDATE scheduled_sms SET status = 'claiming', claimed_at = ? WHERE id = ? AND status = 'pending'`,
+                    [nowIso, sms.id]
+                );
+                if (!claim.changes) { continue; }
+                try {
+                    const queued = await queueSmsForDelivery({
+                        db,
+                        mqttService: global.mqttService,
+                        deviceId: sms.device_id,
+                        to: sms.to_number,
+                        message: sms.message,
+                        simSlot: sms.sim_slot,
+                        userId: sms.user_id,
+                        source: 'scheduled'
+                    });
+                    await db.run(
+                        `UPDATE scheduled_sms SET status = 'queued', sent_at = CURRENT_TIMESTAMP, error = NULL WHERE id = ?`,
+                        [sms.id]
+                    );
+                    emitDeviceEvent(sms.device_id, 'sms:scheduled-queued', {
+                        id: sms.id,
+                        deviceId: sms.device_id,
+                        smsId: queued.id,
+                        to: queued.to,
+                        queueId: queued.queueId,
+                        messageId: queued.messageId
+                    });
+                    logger.info(`Scheduled SMS id=${sms.id} queued to ${sms.to_number}`);
+                } catch (err) {
+                    // Transient queue failures release the claim back to
+                    // 'pending' (retried on a later tick after the lease);
+                    // validation-style failures (invalid recipient etc.) go
+                    // terminal 'failed'.
+                    const terminal = /^(?:Invalid|Phone number|Device not registered|No active device)/.test(String(err.message || ''));
+                    await db.run(
+                        `UPDATE scheduled_sms SET status = ?, error = ?, attempt_count = COALESCE(attempt_count, 0) + 1 WHERE id = ?`,
+                        [terminal || (Number(sms.attempt_count || 0) + 1) >= 5 ? 'failed' : 'pending', err.message, sms.id]
+                    );
+                    emitDeviceEvent(sms.device_id, 'sms:scheduled-failed', {
+                        id: sms.id,
+                        deviceId: sms.device_id,
+                        to: sms.to_number,
+                        error: err.message || 'Failed to queue scheduled SMS'
+                    });
+                    logger.error(`Scheduled SMS id=${sms.id} failed:`, err.message);
+                }
+            }
+        } catch (err) {
+            logger.error('Scheduled SMS processor error:', err);
+        }
+    }, 30000);
+    interval.unref();
+    return interval;
+}
+
+module.exports = router;
+module.exports.startScheduledSmsProcessor = startScheduledSmsProcessor;

@@ -1,0 +1,104 @@
+/* Shared account screens for the Device Bridge operations UI. */
+:root {
+    --auth-ink: #17283f;
+    --auth-muted: #52647d;
+    --auth-accent: #0d6efd;
+    --auth-accent-hover: #0a58ca;
+    --auth-surface: #ffffff;
+    --auth-border: #d6dfeb;
+    --auth-page: #edf2f8;
+}
+
+body {
+    min-height: 100dvh;
+    background-color: var(--auth-page) !important;
+    background-image: linear-gradient(135deg, rgba(13, 110, 253, 0.05) 0 1px, transparent 1px 24px) !important;
+    color: var(--auth-ink);
+}
+
+:is(.login-card, .signup-card, .reg-card, .setup-card, body > .card) {
+    width: min(100%, 460px);
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+    border: 1px solid var(--auth-border) !important;
+    border-radius: 12px !important;
+    background: var(--auth-surface);
+    box-shadow: 0 16px 48px rgba(23, 40, 63, 0.12) !important;
+}
+
+:is(.login-header, .signup-header, .reg-header, .setup-header, .card-header) {
+    padding: 16px 20px !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: var(--auth-ink) !important;
+    color: #fff !important;
+}
+
+:is(.login-body, .signup-body, .reg-body, body > .card > .card-body, .setup-body) {
+    padding: 20px !important;
+    border-radius: 0 !important;
+    background: var(--auth-surface) !important;
+}
+
+:is(.login-header, .signup-header, .reg-header, .setup-header) :is(h1, h2, h3, h4),
+body > .card :is(h1, h2, h3, h4) {
+    letter-spacing: -0.025em;
+    line-height: 1.2;
+}
+
+:is(.login-card, .signup-card, .reg-card, .setup-card, body > .card) :is(.form-control, .form-select) {
+    min-height: 44px;
+    border-color: var(--auth-border);
+}
+
+:is(.login-card, .signup-card, .reg-card, .setup-card, body > .card) :is(.btn, button[type="submit"]) {
+    min-height: 44px;
+}
+
+:is(.btn-login, .btn-submit, .signup-card .btn-success) {
+    background: var(--auth-accent) !important;
+    border-color: var(--auth-accent) !important;
+    color: #fff !important;
+}
+
+:is(.btn-login, .btn-submit, .signup-card .btn-success):hover {
+    background: var(--auth-accent-hover) !important;
+    border-color: var(--auth-accent-hover) !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+:is(a, button, input, select, textarea):focus-visible {
+    outline: 3px solid var(--auth-accent) !important;
+    outline-offset: 2px;
+}
+
+.text-muted {
+    color: var(--auth-muted) !important;
+}
+
+.login-links a,
+.signup-card a {
+    color: var(--auth-accent);
+}
+
+@media (max-width: 480px) {
+    body {
+        padding: 8px !important;
+    }
+
+    :is(.login-card, .signup-card, .reg-card, .setup-card, body > .card) {
+        max-height: calc(100dvh - 16px);
+    }
+
+    :is(.login-body, .signup-body, .reg-body, body > .card > .card-body, .setup-body) {
+        padding: 16px !important;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
+}

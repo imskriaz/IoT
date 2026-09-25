@@ -1,0 +1,16 @@
+{
+  "name": "iot-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Root launcher for the IoT dashboard and public tunnel",
+  "scripts": {
+    "start": "node server/start-all.js",
+    "dashboard": "npm --prefix dashboard start",
+    "cloudflare": "npm --prefix server run cloudflare",
+    "server:check": "npm --prefix server run check --",
+    "server:diagnose": "npm --prefix server run diagnose --"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

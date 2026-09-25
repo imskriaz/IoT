@@ -1,0 +1,27 @@
+<div id="capBanner" data-cap="<%= cap %>" class="app-hidden alert alert-warning alert-dismissible d-flex align-items-start mb-4" role="alert">
+    <i class="bi bi-exclamation-triangle-fill fs-5 me-3 mt-1 flex-shrink-0"></i>
+    <div>
+        <strong>Module unavailable on this device right now.</strong>
+        This page works when <strong><%= label %></strong> is present and firmware support is enabled on the ESP32.
+        <br>
+        <small class="text-muted">
+            The device must publish <code>device/{id}/capabilities</code> with
+            <code>"<%= cap %>": true</code> on MQTT connect.
+            If the hardware exists but the banner remains visible, the dashboard is waiting for firmware telemetry for that module.
+        </small>
+    </div>
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+<script>
+(function() {
+    const cap = '<%= cap %>';
+    const deviceId = window.DEVICE_ID || localStorage.getItem('activeDeviceId') || '';
+    try {
+        const cached = JSON.parse(localStorage.getItem('deviceCaps_' + deviceId) || '{}');
+        if (cap in cached && !cached[cap]) {
+            const el = document.getElementById('capBanner');
+            if (el) el.classList.remove('app-hidden');
+        }
+    } catch (_) {}
+})();
+</script>

@@ -1,0 +1,1842 @@
+<div class="onboarding-shell">
+<!-- Page header -->
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <h2 class="mb-0"><i class="bi bi-plus-circle me-2 text-primary"></i>Add Device</h2>
+    <% if (user) { %>
+        <a href="/devices" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-arrow-left me-1"></i>Back to Devices
+        </a>
+    <% } else { %>
+        <a href="/" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-arrow-left me-1"></i>Back
+        </a>
+    <% } %>
+</div>
+
+<!-- Progress bar -->
+<div class="card mb-3">
+    <div class="card-body py-2 px-3">
+        <div class="d-flex align-items-center justify-content-between mb-1">
+            <small class="text-muted fw-semibold" id="stepLabel">Step 1 of 5 — Select Device Type</small>
+            <small class="text-muted" id="stepPercent">20%</small>
+        </div>
+        <div class="progress" style="height:6px;">
+            <div class="progress-bar bg-primary transition-width" id="wizardProgress" role="progressbar"
+                 style="width:20%;transition:width 0.35s ease;"></div>
+        </div>
+        <div class="d-flex justify-content-between mt-2">
+            <span class="step-dot active" data-step="1" title="Connect">1</span>
+            <span class="step-dot" data-step="2" title="Check Device">2</span>
+            <span class="step-dot" data-step="3" title="Device Details">3</span>
+            <span class="step-dot" data-step="4" title="Save Device">4</span>
+            <span class="step-dot" data-step="5" title="Done">5</span>
+        </div>
+    </div>
+</div>
+
+<!-- ===== STEP 1: Connect Device ===== -->
+<div class="wizard-step" id="step1">
+    <div class="card">
+        <div class="card-header">
+            <i class="bi bi-plugin me-1"></i>Step 1 — Select Device Type
+        </div>
+        <div class="card-body">
+            <p class="text-muted mb-3">Choose the device type to add to this dashboard.</p>
+
+            <div id="deviceTypeChoice" class="onboard-device-types mb-4">
+                <button type="button" class="onboard-device-type" id="typeEsp32" onclick="chooseDeviceType('esp32-s3')">
+                    <span class="onboard-device-icon"><i class="bi bi-cpu"></i></span>
+                    <span class="onboard-device-copy">
+                        <span class="onboard-device-title">ESP32 S3</span>
+                        <span class="onboard-device-label">Set up this ESP32 device</span>
+                    </span>
+                </button>
+                <button type="button" class="onboard-device-type" id="typeAndroid" onclick="chooseDeviceType('android')">
+                    <span class="onboard-device-icon"><i class="bi bi-phone"></i></span>
+                    <span class="onboard-device-copy">
+                        <span class="onboard-device-title">Android</span>
+                        <span class="onboard-device-label">Use our Android phone app</span>
+                    </span>
+                </button>
+                <button type="button" class="onboard-device-type" id="typeHttpSms" onclick="chooseDeviceType('httpsms')">
+                    <span class="onboard-device-icon"><i class="bi bi-chat-dots"></i></span>
+                    <span class="onboard-device-copy">
+                        <span class="onboard-device-title">httpSMS</span>
+                        <span class="onboard-device-label">Use the public httpSMS phone app</span>
+                    </span>
+                </button>
+            </div>
+
+            <div id="esp32ConnectionFlow" style="display:none;">
+                <p class="text-muted mb-3">Choose how to connect to your ESP32 device for first setup.</p>
+
+            <div class="row g-2 mb-3">
+                <!-- USB / Serial card -->
+                <div class="col-md-4">
+                    <div class="card h-100 border-2 connect-option" id="cardSerial">
+                        <div class="card-body text-center py-3">
+                            <div class="mb-3">
+                                <i class="bi bi-usb-drive-fill text-primary" style="font-size:2rem;"></i>
+                            </div>
+                            <h5 class="card-title">USB Cable</h5>
+                            <p class="card-text text-muted small">Plug the device into this computer with a USB cable.</p>
+                            <button class="btn btn-primary" id="btnSerial" onclick="connectSerial()">
+                                <i class="bi bi-usb-symbol me-1"></i>Connect via USB
+                            </button>
+                            <div id="serialUnsupported" class="alert alert-warning mt-2 mb-0 py-2 small" style="display:none;">
+                                <i class="bi bi-exclamation-triangle me-1"></i>USB setup is not supported in this browser.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Bluetooth card -->
+                <div class="col-md-4">
+                    <div class="card h-100 border-2 connect-option" id="cardBluetooth">
+                        <div class="card-body text-center py-3">
+                            <div class="mb-3">
+                                <i class="bi bi-bluetooth text-primary" style="font-size:2rem;"></i>
+                            </div>
+                            <h5 class="card-title">Bluetooth</h5>
+                            <p class="card-text text-muted small">Connect wirelessly. If asked, enter the 6-digit code shown by the device.</p>
+                            <button class="btn btn-outline-primary" id="btnBluetooth" onclick="connectBluetooth()">
+                                <i class="bi bi-bluetooth me-1"></i>Scan for Devices
+                            </button>
+                            <div id="bleUnsupported" class="alert alert-warning mt-2 mb-0 py-2 small" style="display:none;">
+                                <i class="bi bi-exclamation-triangle me-1"></i>Bluetooth setup is not supported in this browser.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- WiFi AP card -->
+                <div class="col-md-4">
+                    <div class="card h-100 border-2 connect-option" id="cardWifi">
+                        <div class="card-body text-center py-3">
+                            <div class="mb-3">
+                                <i class="bi bi-wifi text-primary" style="font-size:2rem;"></i>
+                            </div>
+                            <h5 class="card-title">WiFi Setup</h5>
+                            <p class="card-text text-muted small">
+                                Device shows <strong><%= setupApLabel %></strong> in your WiFi list.
+                                Connect your computer to that network, then click below.
+                            </p>
+                            <button class="btn btn-outline-primary" id="btnWifi" onclick="connectWifi()">
+                                <i class="bi bi-wifi me-1"></i>Connect via WiFi
+                            </button>
+                            <div class="mt-2">
+                                <small class="text-muted">
+                                    <i class="bi bi-info-circle me-1"></i>Works in all browsers
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- WiFi instructions (shown when WiFi selected) -->
+            <div id="wifiInstructions" class="alert alert-info py-2 small mb-3" style="display:none;">
+                <strong><i class="bi bi-list-ol me-1"></i>WiFi steps:</strong>
+                <ol class="mb-0 mt-1 ps-3">
+                    <li>Power on your ESP32 (first boot / factory reset).</li>
+                    <li>On your computer, open WiFi settings and connect to <strong><%= setupApLabel %></strong>.</li>
+                    <li>Come back here and click <strong>Connect via WiFi</strong>.</li>
+                </ol>
+            </div>
+
+            <div class="alert alert-info py-2 small mb-3" id="browserReqNote">
+                <i class="bi bi-info-circle me-1"></i>
+                <strong>USB / Bluetooth</strong> work best in <strong>Chrome</strong> or <strong>Edge</strong>.
+                <strong>WiFi setup</strong> works in any browser — no cable needed.
+            </div>
+
+            <div id="step1Status" class="alert py-2 small" style="display:none;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== STEP 2: Reading Device ===== -->
+<div class="wizard-step" id="step2" style="display:none;">
+    <div class="card">
+        <div class="card-header">
+            <i class="bi bi-cpu me-1"></i>Step 2 — Checking Device
+        </div>
+        <div class="card-body text-center py-5">
+            <div id="step2Spinner">
+                <div class="spinner-border text-primary mb-3" role="status">
+                    <span class="visually-hidden">Reading...</span>
+                </div>
+                <h5 id="step2Message">Checking device...</h5>
+                <p class="text-muted small" id="step2Sub">Waiting for the device to answer.</p>
+                <p class="text-muted small mt-2"><i class="bi bi-info-circle me-1"></i>New device? It may not answer yet — use <strong>Skip</strong> below.</p>
+            </div>
+
+            <div id="step2Result" style="display:none;">
+                <i class="bi bi-check-circle-fill text-success mb-3" style="font-size:3rem;display:block;"></i>
+                <h5>Device Found</h5>
+                <div class="card text-start mx-auto mt-3" style="max-width:420px;">
+                    <div class="card-body py-2 px-3">
+                        <table class="table table-sm mb-0">
+                            <tbody id="deviceInfoTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <button class="btn btn-primary mt-4" onclick="goToStep(3)">
+                    Continue <i class="bi bi-arrow-right ms-1"></i>
+                </button>
+            </div>
+
+            <div id="step2Error" style="display:none;">
+                <i class="bi bi-exclamation-circle-fill text-warning mb-3" style="font-size:3rem;display:block;"></i>
+                <h5>Could Not Check Device</h5>
+                <p class="text-muted small" id="step2ErrorMsg"></p>
+                <div class="d-flex gap-2 justify-content-center mt-3">
+                    <button class="btn btn-outline-secondary" onclick="goToStep(1)">
+                        <i class="bi bi-arrow-left me-1"></i>Back
+                    </button>
+                    <button class="btn btn-primary" onclick="goToStep(3)">
+                        Skip &amp; Enter Manually <i class="bi bi-arrow-right ms-1"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== STEP 3: Device Details ===== -->
+<div class="wizard-step" id="step3" style="display:none;">
+    <div class="card">
+        <div class="card-header">
+            <i class="bi bi-pencil-square me-1"></i>Step 3 — Device Details
+        </div>
+        <div class="card-body">
+            <form id="deviceDetailsForm" novalidate>
+                <div class="row g-3">
+                    <!-- Device ID -->
+                    <div class="col-md-6" data-onboard-scope="device-id">
+                        <label class="form-label">Device code <span class="text-danger">*</span></label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="fDeviceId" required
+                                   placeholder="esp-32dg3-dgds32-fg2335"
+                                   pattern="[a-zA-Z0-9_\-]+"
+                                   maxlength="64">
+                            <button class="btn btn-outline-secondary" type="button" id="btnGenerateId" onclick="generateDeviceId()">
+                                <i class="bi bi-shuffle"></i>
+                                    <span class="visually-hidden">Generate device code</span>
+                            </button>
+                            <button class="btn btn-outline-secondary" type="button" id="btnCheckId" onclick="checkDeviceId()">
+                                <span id="checkIdIcon"><i class="bi bi-search"></i></span>
+                                <span class="visually-hidden">Check availability</span>
+                            </button>
+                        </div>
+                        <div class="form-text" id="deviceIdFeedback">Use a unique lowercase code. ESP codes start with esp-, Android codes start with android-, httpSMS codes start with httpsms-.</div>
+                        <div class="invalid-feedback">Only letters, numbers, hyphens and underscores allowed.</div>
+                    </div>
+
+                    <!-- Device Name -->
+                    <div class="col-md-6">
+                        <label class="form-label">Device Name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="fName" required maxlength="100" placeholder="e.g. Garage Controller">
+                        <div class="invalid-feedback">Name is required.</div>
+                    </div>
+
+                    <!-- Location -->
+                    <div class="col-md-6">
+                        <label class="form-label">Location <small class="text-muted">(optional)</small></label>
+                        <input type="text" class="form-control" id="fLocation" maxlength="200" placeholder="e.g. Building A, Floor 2">
+                    </div>
+
+                    <input type="hidden" id="fModel" value="esp32-s3-a7670e">
+
+                    <div class="col-12">
+                        <div id="bridgeSetupNote" class="alert alert-info py-2 small mb-0" style="display:none;"></div>
+                    </div>
+
+                    <div class="col-12" data-onboard-scope="android-transport">
+                        <input type="hidden" id="fAndroidTransport" value="auto">
+                        <div class="alert alert-info d-flex align-items-start gap-2 mb-0">
+                            <i class="bi bi-shuffle mt-1"></i>
+                            <div>
+                                <div class="fw-semibold">App connection is automatic</div>
+                                <div class="small">The setup code carries dashboard connection details. The app selects the best live path and switches paths when needed.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- APN -->
+                    <div class="col-md-6" data-onboard-scope="esp32">
+                        <label class="form-label">SIM internet name</label>
+                        <input type="text" class="form-control" id="fApn" maxlength="100" placeholder="internet" value="internet">
+                            <div class="form-text">Use the internet name from your SIM provider.</div>
+                    </div>
+
+                    <div class="col-md-6" data-onboard-scope="esp32">
+                            <label class="form-label">WiFi name <small class="text-muted">(optional)</small></label>
+                            <input type="text" class="form-control" id="fWifiSsid" maxlength="64" placeholder="Local WiFi name">
+                    </div>
+
+                    <div class="col-md-6" data-onboard-scope="esp32">
+                        <label class="form-label">WiFi Password <small class="text-muted">(optional)</small></label>
+                        <input type="password" class="form-control" id="fWifiPass" maxlength="64" autocomplete="new-password" placeholder="Local WiFi password">
+                    </div>
+
+                    <!-- Device software -->
+                    <div class="col-12" data-onboard-scope="esp32">
+                        <label class="form-label">Device software <small class="text-muted">(optional)</small></label>
+                        <div class="row g-2 align-items-start">
+                            <div class="col-lg-6">
+                                <select class="form-select" id="fFirmwareFile">
+                                    <option value="">No device software selected</option>
+                                </select>
+                            </div>
+                            <div class="col-lg-2 d-grid">
+                                <button type="button" class="btn btn-outline-secondary" onclick="loadFirmwareOptions()">
+                                    <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                </button>
+                            </div>
+                            <div class="col-lg-4">
+                                <div class="input-group">
+                                    <input type="file" class="form-control" id="fFirmwareUpload" accept=".bin">
+                                    <button type="button" class="btn btn-outline-primary" onclick="uploadFirmwareFromWizard()">Upload</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-text" id="firmwareHelp">Upload or select a .bin file so it is ready after the device comes online.</div>
+                    </div>
+                </div>
+
+                <div class="d-flex gap-2 mt-4">
+                    <button type="button" class="btn btn-outline-secondary" onclick="goToStep((!wizardState.connectionType || wizardState.connectionType === 'wifi') ? 1 : 2)">
+                        <i class="bi bi-arrow-left me-1"></i>Back
+                    </button>
+                    <button type="button" class="btn btn-primary ms-auto" id="btnStep3Continue" onclick="validateAndContinue()">
+                        Continue <i class="bi bi-arrow-right ms-1"></i>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ===== STEP 4: Send Config to Device ===== -->
+<div class="wizard-step" id="step4" style="display:none;">
+    <div class="card">
+        <div class="card-header">
+            <i class="bi bi-send me-1"></i>Step 4 — Save Device
+        </div>
+        <div class="card-body">
+            <p class="text-muted mb-3">Review the details before saving this device.</p>
+
+            <!-- Summary table -->
+            <div class="card bg-light border-0 mb-4">
+                <div class="card-body py-2 px-3">
+                    <table class="table table-sm mb-0">
+                        <tbody id="configSummaryTable"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="step4SendArea">
+                <div class="alert alert-info py-2 small mb-3" id="step4ConnInfo" style="display:none;">
+                    <i class="bi bi-info-circle me-1"></i>
+                    <span id="step4ConnInfoText"></span>
+                </div>
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-outline-secondary" onclick="goToStep(3)">
+                        <i class="bi bi-arrow-left me-1"></i>Back
+                    </button>
+                    <button type="button" class="btn btn-primary ms-auto" id="btnSendConfig" onclick="sendConfig()">
+                        <i class="bi bi-send me-1"></i>Save Device
+                    </button>
+                </div>
+            </div>
+
+            <div id="step4Progress" style="display:none;">
+                <div class="d-flex align-items-center gap-3 mb-3">
+                    <div class="spinner-border spinner-border-sm text-primary flex-shrink-0" role="status"></div>
+                    <span id="step4ProgressMsg" class="fw-semibold">Saving device...</span>
+                </div>
+                <div class="progress" style="height:6px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" id="step4Bar"
+                         role="progressbar" style="width:0%;transition:width 0.4s ease;"></div>
+                </div>
+            </div>
+
+            <div id="step4Error" class="alert alert-danger py-2 small mt-3" style="display:none;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== STEP 5: Done ===== -->
+<div class="wizard-step" id="step5" style="display:none;">
+    <div class="card">
+        <div class="card-header">
+            <i class="bi bi-check-circle me-1"></i>Step 5 — Done!
+        </div>
+        <div class="card-body text-center py-5">
+            <i class="bi bi-check-circle-fill text-success mb-3" style="font-size:4rem;display:block;"></i>
+            <h4>Device Registered!</h4>
+            <p class="text-muted">Your device will appear in the dashboard once the app connection comes online.</p>
+
+            <div id="doneProvisioningPanel" class="card text-start mx-auto mb-4" style="max-width:760px;display:none;">
+                <div class="card-body">
+                    <div id="doneProvisioningContent"></div>
+                </div>
+            </div>
+
+            <div id="capabilitiesBadges" class="mb-4"></div>
+
+            <div class="card text-start mx-auto mb-4" style="max-width:380px;">
+                <div class="card-body py-2 px-3">
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <i class="bi bi-cpu text-primary"></i>
+                        <span class="fw-semibold" id="doneDeviceId"></span>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <i class="bi bi-tag text-muted"></i>
+                        <span class="text-muted" id="doneDeviceName"></span>
+                    </div>
+                </div>
+            </div>
+
+
+            <div class="d-flex gap-2 justify-content-center">
+                <a href="/devices" class="btn btn-primary" onclick="activateDoneDevice(event)">
+                    <i class="bi bi-cpu me-1"></i>Go to Devices
+                </a>
+                <button class="btn btn-outline-secondary" onclick="resetWizard()">
+                    <i class="bi bi-plus-circle me-1"></i>Add Another Device
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.onboarding-shell {
+    --onboard-surface: var(--bs-card-bg, #fff);
+    --onboard-surface-soft: #f8fafc;
+    --onboard-border: var(--bs-border-color, #dee2e6);
+    --onboard-text: var(--bs-body-color, #17202a);
+    --onboard-muted: var(--bs-secondary-color, #6c757d);
+    --onboard-primary-soft: rgba(13, 110, 253, 0.1);
+    width: min(1220px, 100%);
+    margin: 0 auto;
+}
+
+.onboarding-shell > .d-flex:first-child {
+    gap: 0.5rem;
+}
+
+.step-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 50%;
+    background: var(--onboard-surface-soft);
+    color: var(--onboard-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: default;
+    transition: background 0.25s, color 0.25s;
+    border: 1px solid var(--onboard-border);
+}
+.step-dot.active {
+    background: #0d6efd;
+    color: #fff;
+    border-color: #0d6efd;
+}
+.step-dot.done {
+    background: #198754;
+    color: #fff;
+    border-color: #198754;
+}
+.connect-option {
+    cursor: pointer;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    border-color: var(--onboard-border) !important;
+}
+.connect-option:hover {
+    border-color: #0d6efd !important;
+    box-shadow: 0 0 0 0.15rem rgba(13,110,253,0.12);
+}
+.connect-option.selected {
+    border-color: #0d6efd !important;
+    box-shadow: 0 0 0 0.2rem rgba(13,110,253,0.18);
+}
+.btn-xs { padding: 0.15rem 0.35rem; font-size: 0.75rem; }
+#deviceIdFeedback.text-success { font-weight: 600; }
+.onboard-device-types {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(220px, 1fr));
+    gap: 0.5rem;
+    max-width: 820px;
+}
+.onboard-device-type {
+    appearance: none;
+    border: 1px solid var(--onboard-border);
+    background: var(--onboard-surface);
+    color: var(--onboard-text);
+    border-radius: 8px;
+    min-height: 76px;
+    padding: 0.65rem 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    text-align: left;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+.onboard-device-type:hover,
+.onboard-device-type.selected {
+    border-color: #0d6efd;
+    box-shadow: 0 0.5rem 1.25rem rgba(13, 110, 253, 0.14);
+    transform: translateY(-1px);
+}
+.onboard-device-type:focus-visible {
+    outline: 3px solid rgba(13, 110, 253, 0.28);
+    outline-offset: 2px;
+}
+.onboard-device-icon {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 8px;
+    background: #eef4ff;
+    color: #0d6efd;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    flex: 0 0 auto;
+}
+.onboard-device-copy {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.onboard-device-title {
+    font-weight: 700;
+    line-height: 1.2;
+    color: var(--onboard-text);
+}
+.onboard-device-label {
+    color: var(--onboard-muted);
+    font-size: 0.85rem;
+    margin-top: 0.2rem;
+    line-height: 1.3;
+}
+
+[data-bs-theme="dark"] .onboarding-shell {
+    --onboard-surface: #20242a;
+    --onboard-surface-soft: #2c3036;
+    --onboard-border: #3a3f45;
+    --onboard-text: #f1f5f9;
+    --onboard-muted: #b7c0ca;
+    --onboard-primary-soft: rgba(96, 165, 250, 0.14);
+}
+
+[data-bs-theme="dark"] .onboard-device-type {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+[data-bs-theme="dark"] .onboard-device-type:hover,
+[data-bs-theme="dark"] .onboard-device-type.selected {
+    background: #242a32;
+    box-shadow: 0 0.5rem 1.35rem rgba(0, 0, 0, 0.24);
+}
+
+[data-bs-theme="dark"] .onboard-device-icon {
+    background: var(--onboard-primary-soft);
+    color: #6ea8fe;
+}
+
+[data-bs-theme="dark"] .step-dot {
+    background: #eef2f7;
+    color: #27313d;
+}
+
+[data-bs-theme="dark"] .step-dot.active,
+[data-bs-theme="dark"] .step-dot.done {
+    color: #fff;
+}
+@media (max-width: 767.98px) {
+    .onboarding-shell {
+        width: 100%;
+    }
+
+    .onboard-device-types {
+        grid-template-columns: 1fr;
+        max-width: none;
+    }
+
+    .onboarding-shell > .d-flex:first-child {
+        align-items: flex-start !important;
+        flex-direction: column;
+    }
+
+    .onboarding-shell > .d-flex:first-child .btn {
+        align-self: stretch;
+    }
+}
+</style>
+
+<script>
+// ==================== Wizard state ====================
+const wizardState = {
+    deviceType: null,       // 'esp32-s3' | 'android' | 'httpsms'
+    connectionType: null,   // 'serial' | 'ble' | 'wifi' | null
+    port: null,             // Web Serial port
+    reader: null,
+    writer: null,
+    bleDevice: null,
+    txChar: null,           // BLE UART TX characteristic (write)
+    rxChar: null,           // BLE UART RX characteristic (notify)
+    deviceInfo: {},         // parsed device info from step 2
+    formData: {},           // collected in step 3
+    provisioning: null
+};
+
+const MQTT_HOST = '<%= mqttHost %>';
+const MQTT_PORT = <%= mqttPort %>;
+const MQTT_USER = '<%= mqttUser %>';
+const MQTT_PASSWORD = '<%= mqttPassword %>';
+const MQTT_TOPIC_PREFIX = '<%= mqttTopicPrefix %>';
+const ANDROID_APP_DOWNLOADS = Object.freeze(<%- JSON.stringify(androidAppDownloads || []).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026') %>);
+const SETUP_AP_IP = '<%= setupApIp %>';
+const SETUP_AP_LABEL = '<%= setupApLabel %>';
+const SETUP_AP_HTML = `<strong>${escHtml(SETUP_AP_LABEL)}</strong>`;
+const BLE_DEVICE_FILTERS = Object.freeze([
+<% for (let i = 0; i < bleNamePrefixes.length; i++) { %>
+    { namePrefix: '<%= bleNamePrefixes[i] %>' }<%= i < bleNamePrefixes.length - 1 ? ',' : '' %>
+<% } %>
+]);
+const BLE_SERVICE_UUID = '6e400001-b5b4-f393-e0a9-e50e24dcca9e';
+const BLE_TX_UUID      = '6e400002-b5b4-f393-e0a9-e50e24dcca9e'; // write
+const BLE_RX_UUID      = '6e400003-b5b4-f393-e0a9-e50e24dcca9e'; // notify
+const DEVICE_TYPE_MODELS = Object.freeze({
+    'esp32-s3': 'esp32-s3-a7670e',
+    android: 'android-sms-bridge',
+    httpsms: 'httpsms-bridge'
+});
+
+const STEP_LABELS = [
+    '', // 0 unused
+    'Step 1 of 5 — Select Device Type',
+    'Step 2 of 5 — Checking Device',
+    'Step 3 of 5 — Device Details',
+    'Step 4 of 5 — Save Device',
+    'Step 5 of 5 — Done'
+];
+const STEP_PERCENTS = ['', '20', '40', '60', '80', '100'];
+const ANDROID_STEP_META = {
+    1: { label: 'Step 1 of 3 - Select Device Type', percent: '33' },
+    3: { label: 'Step 2 of 3 - App Details', percent: '66' },
+    5: { label: 'Step 3 of 3 - App Setup', percent: '100' }
+};
+const BRIDGE_LABELS = Object.freeze({
+    android: 'Android',
+    httpsms: 'httpSMS'
+});
+
+function chooseDeviceType(type) {
+    wizardState.deviceType = type;
+    document.querySelectorAll('.onboard-device-type').forEach(card => card.classList.remove('selected'));
+    const selectedCard = type === 'android'
+        ? document.getElementById('typeAndroid')
+        : type === 'httpsms'
+            ? document.getElementById('typeHttpSms')
+            : document.getElementById('typeEsp32');
+    selectedCard?.classList.add('selected');
+
+    if (type === 'esp32-s3') {
+        document.getElementById('esp32ConnectionFlow').style.display = '';
+        wizardState.deviceInfo = { chip: 'ESP32-S3', bridge: 'firmware', sms: true, mqtt: true };
+        updateStepChrome(1);
+        return;
+    }
+
+    document.getElementById('esp32ConnectionFlow').style.display = 'none';
+    wizardState.connectionType = null;
+    wizardState.deviceInfo = type === 'httpsms'
+        ? { bridge: 'httpsms', sms: true, http: true, app: 'httpSMS' }
+        : { bridge: 'android', sms: true, mqtt: true, http: true, app: 'Android Bridge' };
+    goToStep(3);
+}
+
+// ==================== Step navigation ====================
+function updateStepChrome(n) {
+    const androidFlow = isBridgeDeviceType();
+    const meta = androidFlow ? ANDROID_STEP_META[n] : null;
+    const label = meta?.label || STEP_LABELS[n];
+    const percent = meta?.percent || STEP_PERCENTS[n];
+
+    document.getElementById('wizardProgress').style.width = percent + '%';
+    document.getElementById('stepLabel').textContent = label;
+    document.getElementById('stepPercent').textContent = percent + '%';
+
+    const androidOrder = [1, 3, 5];
+    const currentAndroidIndex = androidOrder.indexOf(n);
+    document.querySelectorAll('.step-dot').forEach(dot => {
+        const s = parseInt(dot.dataset.step);
+        if (androidFlow && (s === 2 || s === 4)) {
+            dot.style.display = 'none';
+            return;
+        }
+
+        dot.style.display = '';
+        if (androidFlow) {
+            const androidIndex = androidOrder.indexOf(s);
+            dot.textContent = String(androidIndex + 1);
+            dot.title = s === 1 ? 'Select Device' : s === 3 ? 'App Details' : 'App Setup';
+            dot.classList.toggle('active', s === n);
+            dot.classList.toggle('done', androidIndex >= 0 && androidIndex < currentAndroidIndex);
+            return;
+        }
+
+        dot.textContent = String(s);
+        dot.title = s === 1 ? 'Connect' : s === 2 ? 'Read Device' : s === 3 ? 'Device Details' : s === 4 ? 'Send Config' : 'Done';
+        dot.classList.toggle('active', s === n);
+        dot.classList.toggle('done', s < n);
+    });
+}
+
+function goToStep(n) {
+    for (let i = 1; i <= 5; i++) {
+        document.getElementById('step' + i).style.display = (i === n) ? '' : 'none';
+    }
+    updateStepChrome(n);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (n === 2) readDeviceInfo();
+    if (n === 3) prefillStep3();
+    if (n === 4) populateConfigSummary();
+    if (n === 5) showDone();
+}
+
+// ==================== Step 1: Connection ====================
+(function checkApiSupport() {
+    if (!navigator.serial) {
+        document.getElementById('btnSerial').disabled = true;
+        document.getElementById('serialUnsupported').style.display = '';
+    }
+    if (!navigator.bluetooth) {
+        document.getElementById('btnBluetooth').disabled = true;
+        document.getElementById('bleUnsupported').style.display = '';
+    }
+})();
+
+function setStep1Status(msg, type) {
+    const el = document.getElementById('step1Status');
+    el.style.display = msg ? '' : 'none';
+    el.className = 'alert py-2 small alert-' + (type || 'info');
+    el.innerHTML = msg || '';
+}
+
+async function connectSerial() {
+    const btn = document.getElementById('btnSerial');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Connecting...';
+    setStep1Status('Requesting serial port access...', 'info');
+    try {
+        const port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        wizardState.port = port;
+        wizardState.connectionType = 'serial';
+        wizardState.reader = port.readable.getReader();
+        wizardState.writer = port.writable.getWriter();
+        document.getElementById('cardSerial').classList.add('selected');
+        setStep1Status('<i class="bi bi-check-circle me-1"></i>Serial port connected. Proceeding to read device info...', 'success');
+        setTimeout(() => goToStep(2), 800);
+    } catch (err) {
+        if (err.name !== 'NotFoundError') {
+            setStep1Status('<i class="bi bi-x-circle me-1"></i>Failed to connect: ' + escHtml(err.message), 'danger');
+        } else {
+            setStep1Status('', '');
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-usb-symbol me-1"></i>Connect via USB';
+    }
+}
+
+async function connectBluetooth() {
+    const btn = document.getElementById('btnBluetooth');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Scanning...';
+    setStep1Status('Opening Bluetooth device picker. If prompted, enter the device-derived 6-digit passkey shown by the device setup output.', 'info');
+    try {
+        const device = await navigator.bluetooth.requestDevice({
+            filters: BLE_DEVICE_FILTERS,
+            optionalServices: [BLE_SERVICE_UUID]
+        });
+        setStep1Status('Connecting to ' + escHtml(device.name || 'device') + '...', 'info');
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+        wizardState.txChar = await service.getCharacteristic(BLE_TX_UUID);
+        wizardState.rxChar = await service.getCharacteristic(BLE_RX_UUID);
+        wizardState.bleDevice = device;
+        wizardState.connectionType = 'ble';
+        document.getElementById('cardBluetooth').classList.add('selected');
+        setStep1Status('<i class="bi bi-check-circle me-1"></i>Bluetooth connected to <strong>' + escHtml(device.name || 'device') + '</strong>. Proceeding...', 'success');
+        setTimeout(() => goToStep(2), 800);
+    } catch (err) {
+        if (err.name !== 'NotFoundError' && err.name !== 'NotAllowedError') {
+            setStep1Status('<i class="bi bi-x-circle me-1"></i>Bluetooth error: ' + escHtml(err.message), 'danger');
+        } else {
+            setStep1Status('', '');
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-bluetooth me-1"></i>Scan for Devices';
+    }
+}
+
+async function connectWifi() {
+    const btn = document.getElementById('btnWifi');
+    const instructions = document.getElementById('wifiInstructions');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Checking...';
+    setStep1Status('Checking the device WiFi connection...', 'info');
+    try {
+        const res = await fetch('/api/onboard/wifi-probe');
+        const data = await res.json();
+        if (data.reachable) {
+            wizardState.connectionType = 'wifi';
+            document.getElementById('cardWifi').classList.add('selected');
+            instructions.style.display = 'none';
+            setStep1Status('<i class="bi bi-check-circle me-1"></i>Device WiFi is ready. Continuing to device details...', 'success');
+            setTimeout(() => goToStep(3), 800);
+        } else {
+            instructions.style.display = '';
+            const reason = (data.reason === 'timeout')
+                ? 'Connection timed out.'
+                : (data.reason ? escHtml(data.reason) : `Device not found at ${escHtml(SETUP_AP_IP)}.`);
+            setStep1Status(
+                '<i class="bi bi-x-circle me-1"></i>' + reason +
+                ` Make sure your computer is connected to the ${SETUP_AP_HTML} WiFi network, then try again.`,
+                'danger'
+            );
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-wifi me-1"></i>Connect via WiFi';
+        }
+    } catch (err) {
+        instructions.style.display = '';
+        setStep1Status('<i class="bi bi-x-circle me-1"></i>Error: ' + escHtml(err.message), 'danger');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-wifi me-1"></i>Connect via WiFi';
+    }
+}
+
+// ==================== Step 2: Read device info ====================
+async function readDeviceInfo() {
+    document.getElementById('step2Spinner').style.display = '';
+    document.getElementById('step2Result').style.display = 'none';
+    document.getElementById('step2Error').style.display = 'none';
+
+    if (!wizardState.connectionType) {
+        showStep2Error('No connection established. Please go back and connect first.');
+        return;
+    }
+    // WiFi AP devices run their own HTTP server — no identify protocol; skip straight to step 3
+    if (wizardState.connectionType === 'wifi') {
+        goToStep(3);
+        return;
+    }
+
+    try {
+        let rawResponse = null;
+
+        if (wizardState.connectionType === 'serial') {
+            document.getElementById('step2Message').textContent = 'Checking over USB...';
+            document.getElementById('step2Sub').textContent = 'Waiting for the device to answer.';
+
+            const encoder = new TextEncoder();
+            await wizardState.writer.write(encoder.encode('{"cmd":"identify"}\n'));
+
+            rawResponse = await readSerialLineWithTimeout(5000);
+
+            // If no JSON, try AT probe
+            if (!rawResponse || !rawResponse.trim().startsWith('{')) {
+                document.getElementById('step2Sub').textContent = 'No answer yet. Trying one more check...';
+                await wizardState.writer.write(encoder.encode('AT\r\n'));
+                const atResp = await readSerialLineWithTimeout(3000);
+                if (atResp && atResp.includes('OK')) {
+                    rawResponse = JSON.stringify({ chip: 'ESP32', fw_version: 'unknown', imei: 'N/A' });
+                }
+            }
+        } else if (wizardState.connectionType === 'ble') {
+            document.getElementById('step2Message').textContent = 'Checking over Bluetooth...';
+            document.getElementById('step2Sub').textContent = 'Waiting for the device to answer.';
+
+            // Set up notifications
+            await wizardState.rxChar.startNotifications();
+            rawResponse = await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error('Bluetooth check timed out.')), 5000);
+                let buffer = '';
+                wizardState.rxChar.addEventListener('characteristicvaluechanged', function handler(event) {
+                    const chunk = new TextDecoder().decode(event.target.value);
+                    buffer += chunk;
+                    const nl = buffer.indexOf('\n');
+                    if (nl !== -1) {
+                        clearTimeout(timeout);
+                        wizardState.rxChar.removeEventListener('characteristicvaluechanged', handler);
+                        resolve(buffer.substring(0, nl).trim());
+                    }
+                });
+                const enc = new TextEncoder();
+                wizardState.txChar.writeValue(enc.encode('{"cmd":"identify"}\n'));
+            });
+        }
+
+        if (!rawResponse) {
+            throw new Error('No response from device. Check the connection and try again.');
+        }
+
+        // Try to parse JSON
+        let info = {};
+        try {
+            const trimmed = rawResponse.trim();
+            const jsonStart = trimmed.indexOf('{');
+            const jsonEnd = trimmed.lastIndexOf('}');
+            if (jsonStart !== -1 && jsonEnd !== -1) {
+                info = JSON.parse(trimmed.substring(jsonStart, jsonEnd + 1));
+            } else {
+                // Non-JSON text — still note it
+                info = { raw_response: trimmed };
+            }
+        } catch (_) {
+            info = { raw_response: rawResponse.trim().substring(0, 120) };
+        }
+
+        wizardState.deviceInfo = info;
+        showStep2Success(info);
+
+    } catch (err) {
+        showStep2Error(err.message);
+    }
+}
+
+function showStep2Success(info) {
+    document.getElementById('step2Spinner').style.display = 'none';
+    document.getElementById('step2Result').style.display = '';
+
+    const rows = Object.entries(info)
+        .filter(([k]) => !['cmd', 'status'].includes(k))
+        .map(([k, v]) => `<tr>
+            <td class="text-muted small text-capitalize pe-3">${escHtml(k.replace(/_/g, ' '))}</td>
+            <td class="small fw-semibold">${escHtml(String(v))}</td>
+        </tr>`).join('');
+    document.getElementById('deviceInfoTable').innerHTML = rows ||
+        '<tr><td colspan="2" class="text-muted small">Device answered.</td></tr>';
+}
+
+function showStep2Error(msg) {
+    document.getElementById('step2Spinner').style.display = 'none';
+    document.getElementById('step2Error').style.display = '';
+    document.getElementById('step2ErrorMsg').textContent = msg;
+}
+
+// Read one newline-terminated line from serial with timeout
+async function readSerialLineWithTimeout(timeoutMs) {
+    return new Promise(async (resolve) => {
+        let buffer = '';
+        const deadline = Date.now() + timeoutMs;
+
+        while (Date.now() < deadline) {
+            try {
+                const { value, done } = await Promise.race([
+                    wizardState.reader.read(),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('chunk timeout')), 1500))
+                ]);
+                if (done) break;
+                buffer += new TextDecoder().decode(value);
+                const nl = buffer.indexOf('\n');
+                if (nl !== -1) {
+                    resolve(buffer.substring(0, nl).trim());
+                    return;
+                }
+            } catch (_) {
+                break;
+            }
+        }
+        resolve(buffer.trim() || null);
+    });
+}
+
+// ==================== Step 3: Prefill form ====================
+function randomToken(length) {
+    const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+    let out = '';
+    for (let i = 0; i < length; i++) {
+        out += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return out;
+}
+
+function generateDeviceIdValue() {
+    if (wizardState.deviceType === 'android') {
+        return `android-${randomToken(8)}`;
+    }
+    if (wizardState.deviceType === 'httpsms') {
+        return `httpsms-${randomToken(8)}`;
+    }
+    return `esp-${randomToken(5)}-${randomToken(6)}-${randomToken(6)}`;
+}
+
+function selectedDeviceModel() {
+    return DEVICE_TYPE_MODELS[wizardState.deviceType || 'esp32-s3'] || DEVICE_TYPE_MODELS['esp32-s3'];
+}
+
+function selectedDeviceTypeLabel() {
+    if (wizardState.deviceType === 'android') return 'Android';
+    if (wizardState.deviceType === 'httpsms') return 'httpSMS';
+    return 'ESP32 S3';
+}
+
+function selectedAndroidTransportMode() {
+    return 'auto';
+}
+
+function renderAndroidTransportChoice() {
+    const select = document.getElementById('fAndroidTransport');
+    if (select) select.value = 'auto';
+}
+
+function chooseAndroidTransport(mode) {
+    const select = document.getElementById('fAndroidTransport');
+    if (select) select.value = 'auto';
+    renderAndroidTransportChoice();
+    applyStep3FieldVisibility();
+    if (isBridgeDeviceType()) {
+        prefillStep3();
+    }
+}
+
+function isBridgeDeviceType() {
+    return wizardState.deviceType === 'android' || wizardState.deviceType === 'httpsms';
+}
+
+function applyStep3FieldVisibility() {
+    const bridgeDevice = isBridgeDeviceType();
+    const modelInput = document.getElementById('fModel');
+    if (bridgeDevice || !modelInput.value || modelInput.value === DEVICE_TYPE_MODELS.android || modelInput.value === DEVICE_TYPE_MODELS.httpsms) {
+        modelInput.value = selectedDeviceModel();
+    }
+    document.querySelectorAll('[data-onboard-scope]').forEach(el => {
+        const scope = el.dataset.onboardScope;
+        let show = true;
+        if (scope === 'esp32') show = !bridgeDevice;
+        if (scope === 'android-transport') show = wizardState.deviceType === 'android';
+        if (scope === 'device-id') show = !bridgeDevice;
+        el.style.display = show ? '' : 'none';
+    });
+
+    if (bridgeDevice) {
+        document.getElementById('fApn').value = '';
+        document.getElementById('fWifiSsid').value = '';
+        document.getElementById('fWifiPass').value = '';
+        document.getElementById('fFirmwareFile').value = '';
+        document.getElementById('fFirmwareUpload').value = '';
+    }
+}
+
+function generateDeviceId() {
+    const input = document.getElementById('fDeviceId');
+    input.value = generateDeviceIdValue();
+    input.classList.remove('is-invalid');
+    checkDeviceId();
+}
+
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let value = bytes;
+    let idx = 0;
+    while (value >= 1024 && idx < units.length - 1) {
+        value /= 1024;
+        idx += 1;
+    }
+    return `${value.toFixed(value >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
+async function loadFirmwareOptions() {
+    const select = document.getElementById('fFirmwareFile');
+    const help = document.getElementById('firmwareHelp');
+    const currentValue = select.value;
+
+    select.innerHTML = '<option value="">Loading device software list...</option>';
+    try {
+        const res = await fetch('/api/ota/list');
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+            throw new Error(data.message || 'Failed to load device software files');
+        }
+
+        const options = ['<option value="">No device software selected</option>'];
+        for (const file of data.data || []) {
+            const size = file.size ? ` (${formatBytes(file.size)})` : '';
+            options.push(`<option value="${escHtml(file.filename)}">${escHtml(file.filename)}${size}</option>`);
+        }
+        select.innerHTML = options.join('');
+        if (currentValue && Array.from(select.options).some(opt => opt.value === currentValue)) {
+            select.value = currentValue;
+        }
+        help.textContent = (data.data || []).length
+            ? 'Select device software now so it is ready once the device connects.'
+            : 'No device software uploaded yet. Upload a .bin file to make it available here.';
+    } catch (error) {
+        select.innerHTML = '<option value="">No device software selected</option>';
+        help.textContent = error.message || 'Device software list is unavailable right now.';
+    }
+}
+
+async function uploadFirmwareFromWizard() {
+    const input = document.getElementById('fFirmwareUpload');
+    const help = document.getElementById('firmwareHelp');
+    const file = input.files[0];
+
+    if (!file) {
+        help.textContent = 'Choose a .bin file first.';
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('firmware', file);
+    help.textContent = `Uploading ${file.name}...`;
+
+    try {
+        const res = await fetch('/api/ota/upload', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+            throw new Error(data.message || 'Device software upload failed');
+        }
+        input.value = '';
+        await loadFirmwareOptions();
+        if (data.data?.filename) {
+            document.getElementById('fFirmwareFile').value = data.data.filename;
+            help.textContent = `Device software uploaded: ${data.data.filename}`;
+        }
+    } catch (error) {
+        help.textContent = error.message || 'Device software upload failed';
+    }
+}
+
+function prefillStep3() {
+    const info = wizardState.deviceInfo;
+    const fId = document.getElementById('fDeviceId');
+    const modelSel = document.getElementById('fModel');
+    const nameInput = document.getElementById('fName');
+    const note = document.getElementById('bridgeSetupNote');
+
+    applyStep3FieldVisibility();
+    note.style.display = 'none';
+    note.innerHTML = '';
+
+    if (isBridgeDeviceType()) {
+        const expectedPrefix = wizardState.deviceType === 'httpsms' ? 'httpsms-' : 'android-';
+        if (!fId.value || !fId.value.startsWith(expectedPrefix)) fId.value = generateDeviceIdValue();
+        if (!nameInput.value) nameInput.value = wizardState.deviceType === 'httpsms' ? 'httpSMS' : 'Android Bridge';
+        modelSel.value = selectedDeviceModel();
+        document.getElementById('fAndroidTransport').value = 'auto';
+        note.style.display = '';
+        note.innerHTML = wizardState.deviceType === 'httpsms' ? `
+            <div class="d-flex align-items-start gap-2">
+                <i class="bi bi-chat-dots mt-1"></i>
+                <span>Save this phone lane, then copy the details into the httpSMS app.</span>
+            </div>
+        ` : `
+            <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2">
+                <span><i class="bi bi-phone me-1"></i>Install the phone app, save this device, then scan the code in the app.</span>
+                ${androidAppDownloadMenu('btn-sm flex-shrink-0')}
+            </div>
+        `;
+    }
+
+    // Only pre-fill if not already set
+    if (!fId.value) {
+        fId.value = info.device_id || info.id || generateDeviceIdValue();
+    }
+    if (info.chip) {
+        // Select matching model if possible
+        const modelVal = info.chip.toLowerCase().includes('s3') ? 'esp32-s3-a7670e'
+                       : info.chip.toLowerCase().includes('c3') ? 'esp32-c3-a7670e'
+                       : info.chip.toLowerCase().includes('c6') ? 'esp32-c6-a7670e'
+                       : 'esp32-s3-a7670e';
+        modelSel.value = modelVal;
+    }
+    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase code. ESP codes start with esp-, Android codes start with android-, httpSMS codes start with httpsms-.';
+    document.getElementById('deviceIdFeedback').className = 'form-text';
+}
+
+let idCheckTimeout = null;
+document.addEventListener('DOMContentLoaded', () => {
+    const idInput = document.getElementById('fDeviceId');
+    if (idInput) {
+        if (!idInput.value) {
+            idInput.value = generateDeviceIdValue();
+        }
+        idInput.addEventListener('input', () => {
+            clearTimeout(idCheckTimeout);
+            const fb = document.getElementById('deviceIdFeedback');
+            fb.textContent = '';
+            fb.className = 'form-text';
+            idCheckTimeout = setTimeout(() => {
+                if (idInput.value.trim()) checkDeviceId();
+            }, 600);
+        });
+    }
+    renderAndroidTransportChoice();
+    loadFirmwareOptions();
+});
+
+async function checkDeviceId() {
+    const id = document.getElementById('fDeviceId').value.trim();
+    const fb = document.getElementById('deviceIdFeedback');
+    const icon = document.getElementById('checkIdIcon');
+    if (!id) return;
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+        fb.textContent = 'Only letters, numbers, hyphens and underscores allowed.';
+        fb.className = 'form-text text-danger';
+        return;
+    }
+    icon.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+    try {
+        const res = await fetch('/api/onboard/check-id/' + encodeURIComponent(id));
+        const data = await res.json();
+        if (data.exists) {
+            fb.textContent = 'This code is already registered. Saving will update the existing device record.';
+            fb.className = 'form-text text-warning';
+        } else {
+            fb.textContent = 'Code is available.';
+            fb.className = 'form-text text-success';
+        }
+    } catch (_) {
+        fb.textContent = 'Could not check availability.';
+        fb.className = 'form-text text-muted';
+    } finally {
+        icon.innerHTML = '<i class="bi bi-search"></i>';
+    }
+}
+
+function validateAndContinue() {
+    applyStep3FieldVisibility();
+    const idInput = document.getElementById('fDeviceId');
+    if (isBridgeDeviceType() && !idInput.value.trim()) {
+        idInput.value = generateDeviceIdValue();
+    }
+    const id = idInput.value.trim();
+    const name = document.getElementById('fName').value.trim();
+    const form = document.getElementById('deviceDetailsForm');
+
+    let valid = true;
+    if (!id || !/^[a-zA-Z0-9_-]+$/.test(id)) {
+        document.getElementById('fDeviceId').classList.add('is-invalid');
+        valid = false;
+    } else {
+        document.getElementById('fDeviceId').classList.remove('is-invalid');
+    }
+    if (!name) {
+        document.getElementById('fName').classList.add('is-invalid');
+        valid = false;
+    } else {
+        document.getElementById('fName').classList.remove('is-invalid');
+    }
+    if (!valid) return;
+
+    wizardState.formData = {
+        device_id: id,
+        name,
+        location: document.getElementById('fLocation').value.trim(),
+        model: document.getElementById('fModel').value,
+        apn: document.getElementById('fApn').value.trim(),
+        mqtt_host: MQTT_HOST,
+        mqtt_port: MQTT_PORT,
+        mqtt_user: MQTT_USER,
+        mqtt_pass: MQTT_PASSWORD,
+        transport_mode: selectedAndroidTransportMode(),
+        wifi_ssid: document.getElementById('fWifiSsid').value.trim(),
+        wifi_pass: document.getElementById('fWifiPass').value,
+        firmware_file: document.getElementById('fFirmwareFile').value,
+        bridge_type: wizardState.deviceType || 'esp32-s3'
+    };
+
+    if (isBridgeDeviceType()) {
+        registerAndroidBridge();
+        return;
+    }
+
+    goToStep(4);
+}
+
+function buildRegistrationPayload(fd) {
+    return {
+        device_id: fd.device_id,
+        name: fd.name,
+        location: fd.location,
+        model: fd.model,
+        apn: fd.apn,
+        mqtt_host: fd.mqtt_host,
+        mqtt_user: fd.mqtt_user,
+        mqtt_pass: fd.mqtt_pass,
+        transport_mode: fd.transport_mode,
+        wifi_ssid: fd.wifi_ssid,
+        wifi_pass: fd.wifi_pass,
+        capabilities: {
+            ...wizardState.deviceInfo,
+            bridge_type: fd.bridge_type || wizardState.deviceType || 'esp32-s3',
+            transport_mode: isBridgeDeviceType() ? 'http' : (fd.transport_mode || 'auto'),
+            mqtt: wizardState.deviceType === 'httpsms' ? false : true,
+            http: isBridgeDeviceType() ? true : Boolean(wizardState.deviceInfo.http)
+        }
+    };
+}
+
+async function registerDashboardDevice() {
+    const fd = wizardState.formData;
+    const regRes = await fetch('/api/onboard/register', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+        },
+        body: JSON.stringify(buildRegistrationPayload(fd))
+    });
+    const regData = await regRes.json();
+    if (!regData.success) throw new Error(regData.message || 'Registration failed');
+    wizardState.provisioning = regData.provisioning || null;
+    if (window.setActiveDeviceContext) {
+        window.setActiveDeviceContext(fd.device_id);
+    }
+    if (window.persistActiveDeviceSelection) {
+        try { await window.persistActiveDeviceSelection(fd.device_id); } catch (_) {}
+    }
+    return regData;
+}
+
+async function registerAndroidBridge() {
+    const button = document.getElementById('btnStep3Continue');
+    const note = document.getElementById('bridgeSetupNote');
+    const label = BRIDGE_LABELS[wizardState.deviceType] || 'app';
+    const previousHtml = button?.innerHTML || '';
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Registering...';
+    }
+    if (note) {
+        note.className = 'alert alert-info py-2 small mb-0';
+        note.style.display = '';
+        note.innerHTML = '<i class="bi bi-phone me-1"></i>Registering the ' + escHtml(label) + ' lane and generating setup details...';
+    }
+
+    try {
+        await registerDashboardDevice();
+        goToStep(5);
+    } catch (error) {
+        if (note) {
+            note.className = 'alert alert-danger py-2 small mb-0';
+            note.style.display = '';
+            note.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>' + escHtml(error.message || 'Registration failed');
+        }
+        showToast(error.message || 'Registration failed', 'danger');
+    } finally {
+        if (button && document.getElementById('step3')?.style.display !== 'none') {
+            button.disabled = false;
+            button.innerHTML = previousHtml;
+        }
+    }
+}
+
+// ==================== Step 4: Config summary & send ====================
+function populateConfigSummary() {
+    const fd = wizardState.formData;
+    const connType = wizardState.connectionType === 'serial' ? 'USB cable'
+        : wizardState.connectionType === 'ble' ? 'Bluetooth'
+        : wizardState.connectionType === 'wifi' ? 'WiFi setup'
+        : 'Save only';
+
+    let rows = [
+        ['Device code', `<code>${escHtml(fd.device_id)}</code>`],
+        ['Name', escHtml(fd.name)],
+        ['Location', escHtml(fd.location || '—')],
+        ['Device model', escHtml(fd.model)],
+        ['SIM internet name', fd.apn ? escHtml(fd.apn) : '<span class="text-muted">-</span>'],
+        ['Dashboard link', '<span class="text-muted">Managed by dashboard settings</span>'],
+        ['WiFi name', fd.wifi_ssid ? escHtml(fd.wifi_ssid) : '<span class="text-muted">-</span>'],
+        ['Device software', fd.firmware_file ? escHtml(fd.firmware_file) : '<span class="text-muted">Not selected</span>'],
+        ['Device type', escHtml(fd.bridge_type || wizardState.deviceType || 'esp32-s3')],
+        ['Connection', escHtml(connType)]
+    ];
+
+    const bridgeDevice = isBridgeDeviceType();
+    rows = rows.filter(([key]) => {
+        if (key === 'Device model') return false;
+        if (bridgeDevice && ['SIM internet name', 'WiFi name', 'Device software'].includes(key)) return false;
+        return true;
+    });
+    rows = rows.map(([key, value]) =>
+        key === 'Device type' ? [key, escHtml(selectedDeviceTypeLabel())] : [key, value]
+    );
+    document.getElementById('configSummaryTable').innerHTML = rows.map(([k, v]) =>
+        `<tr><td class="text-muted small pe-3" style="white-space:nowrap;">${k}</td><td class="small fw-semibold">${v}</td></tr>`
+    ).join('');
+
+    const connInfo = document.getElementById('step4ConnInfo');
+    const connInfoText = document.getElementById('step4ConnInfoText');
+    if (wizardState.connectionType) {
+        connInfo.style.display = '';
+        if (wizardState.connectionType === 'wifi') {
+            connInfoText.textContent = `Details will be saved over WiFi. Keep your computer connected to the ${SETUP_AP_LABEL} network until this step completes.`;
+        } else {
+            connInfoText.textContent = `Details will be saved over ${connType} and the device will restart.`;
+        }
+    } else {
+        connInfo.style.display = 'none';
+    }
+
+    document.getElementById('btnSendConfig').innerHTML = '<i class="bi bi-send me-1"></i>Save Device';
+}
+
+async function sendConfig() {
+    const btn = document.getElementById('btnSendConfig');
+    const progressArea = document.getElementById('step4Progress');
+    const sendArea = document.getElementById('step4SendArea');
+    const errorEl = document.getElementById('step4Error');
+    const progressMsg = document.getElementById('step4ProgressMsg');
+    const progressBar = document.getElementById('step4Bar');
+
+    btn.disabled = true;
+    errorEl.style.display = 'none';
+    sendArea.querySelector('.btn-primary').style.display = 'none';
+    progressArea.style.display = '';
+
+    function setProgress(pct, msg) {
+        progressBar.style.width = pct + '%';
+        progressMsg.textContent = msg;
+    }
+
+    try {
+        // Step 1: register in dashboard DB
+        setProgress(20, 'Saving device in dashboard...');
+        const fd = wizardState.formData;
+        await registerDashboardDevice();
+
+        setProgress(50, 'Device saved. Sending details to the device...');
+
+        // Step 2: send config to device if connected
+        if (wizardState.connectionType) {
+            setProgress(65, 'Saving details to device...');
+
+            if (wizardState.connectionType === 'serial') {
+                const enc = new TextEncoder();
+                const configPayload = buildSerialConfigCommand(fd);
+                await wizardState.writer.write(enc.encode(configPayload + '\n'));
+            } else if (wizardState.connectionType === 'ble') {
+                const enc = new TextEncoder();
+                const configPayload = buildSerialConfigCommand(fd);
+                await wizardState.txChar.writeValue(enc.encode(configPayload + '\n'));
+            } else if (wizardState.connectionType === 'wifi') {
+                setProgress(65, 'Saving details over WiFi...');
+                const wifiRes = await fetch('/api/onboard/wifi-send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        device_id: fd.device_id,
+                        apn: fd.apn,
+                        mqtt_host: fd.mqtt_host || MQTT_HOST,
+                        mqtt_port: MQTT_PORT,
+                        mqtt_user: fd.mqtt_user || '',
+                        mqtt_pass: fd.mqtt_pass || '',
+                        wifi_ssid: fd.wifi_ssid || '',
+                        wifi_pass: fd.wifi_pass || ''
+                    })
+                });
+                const wifiData = await wifiRes.json();
+                if (!wifiData.success) throw new Error(wifiData.message || 'Failed to save details to device');
+            }
+
+            setProgress(85, 'Details saved. Device is restarting...');
+            await delay(1200);
+        } else {
+            setProgress(85, 'Saving without a live device connection.');
+            await delay(400);
+        }
+
+        setProgress(100, 'All done!');
+        await delay(600);
+        goToStep(5);
+
+    } catch (err) {
+        progressArea.style.display = 'none';
+        sendArea.querySelector('.btn-primary').style.display = '';
+        btn.disabled = false;
+        errorEl.style.display = '';
+        errorEl.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>' + escHtml(err.message);
+    }
+}
+
+// ==================== Step 5: Done ====================
+function showDone() {
+    const fd = wizardState.formData;
+    document.getElementById('doneDeviceId').textContent = fd.device_id || '';
+    document.getElementById('doneDeviceName').textContent = fd.name || '';
+    renderProvisioningPanel();
+
+    const info = wizardState.deviceInfo;
+    const capabilities = [];
+    if (wizardState.deviceType === 'android') capabilities.push({ label: 'Android', cls: 'bg-success' });
+    if (wizardState.deviceType === 'android') capabilities.push({ label: 'Smart Link', cls: 'bg-info text-dark' });
+    if (wizardState.deviceType === 'httpsms') capabilities.push({ label: 'httpSMS', cls: 'bg-success' });
+    if (wizardState.deviceType === 'httpsms') capabilities.push({ label: 'Phone app', cls: 'bg-info text-dark' });
+    if (info.modem || info.a7670e || fd.model?.includes('a7670')) capabilities.push({ label: 'Modem / 4G', cls: 'bg-primary' });
+    if (info.sms || fd.model?.includes('sms')) capabilities.push({ label: 'SMS', cls: 'bg-primary' });
+    if (info.gps) capabilities.push({ label: 'GPS', cls: 'bg-success' });
+    if (info.battery) capabilities.push({ label: 'Battery Monitor', cls: 'bg-warning text-dark' });
+    if (info.wifi) capabilities.push({ label: 'Wi-Fi', cls: 'bg-info text-dark' });
+    if (info.ble || wizardState.connectionType === 'ble') capabilities.push({ label: 'Bluetooth', cls: 'bg-secondary' });
+    if (info.chip) capabilities.push({ label: info.chip, cls: 'bg-light text-dark border' });
+
+    const badgesEl = document.getElementById('capabilitiesBadges');
+    if (capabilities.length) {
+        badgesEl.innerHTML = capabilities.map(c =>
+            `<span class="badge ${c.cls} me-1 mb-1">${escHtml(c.label)}</span>`
+        ).join('');
+    } else {
+        badgesEl.innerHTML = `<span class="badge bg-secondary me-1">ESP32</span><span class="badge bg-primary me-1">Smart Link</span>`;
+    }
+
+    if (fd.firmware_file) {
+        document.getElementById('firmwareHelp').textContent = `Device software selected: ${fd.firmware_file}. You can update the device after it comes online.`;
+    }
+}
+
+function renderProvisioningPanel() {
+    const panel = document.getElementById('doneProvisioningPanel');
+    const content = document.getElementById('doneProvisioningContent');
+    const provisioning = wizardState.provisioning;
+
+    if (!provisioning) {
+        panel.style.display = 'none';
+        content.innerHTML = '';
+        return;
+    }
+
+    if (provisioning.type === 'android') {
+        const summary = provisioning.summary || {};
+        content.innerHTML = `
+            <div class="row g-4 align-items-start">
+                <div class="col-lg-5 text-center">
+                    <h5 class="mb-2">Phone App Setup</h5>
+                    <p class="text-muted small mb-3">Open the Device Bridge app on the phone and scan this code. You can also copy the setup code shown on the right.</p>
+                    <img src="${provisioning.qr_data_url}" alt="Device Bridge setup QR" class="img-fluid border rounded p-2 bg-white" style="max-width:280px;">
+                    <div class="alert alert-primary small text-start mt-3 mb-0">
+                        <div class="fw-semibold mb-1"><i class="bi bi-phone me-1"></i>Phone-side order</div>
+                        <ol class="mb-0 ps-3">
+                            <li>Open Device Bridge on the phone.</li>
+                            <li>Tap scan or paste the setup code.</li>
+                            <li>Grant the missing SMS, Wi-Fi, and notification permissions.</li>
+                            <li>Start the phone link and allow it to run in the background.</li>
+                        </ol>
+                    </div>
+                </div>
+                <div class="col-lg-7">
+                    <h6 class="mb-2">Setup summary</h6>
+                    <table class="table table-sm align-middle mb-3">
+                        <tbody>
+                            <tr><td class="text-muted">Device code</td><td><code>${escHtml(summary.device_id || '')}</code></td></tr>
+                        </tbody>
+                    </table>
+                    <div class="alert alert-light border small mb-3">
+                        Private connection details are not shown here. Use the setup code below or scan the code in the Device Bridge app.
+                    </div>
+                    <label class="form-label small text-muted">Secure setup code</label>
+                    <textarea class="form-control font-monospace" id="androidSetupToken" rows="8" readonly>${escHtml(provisioning.setup_token || '')}</textarea>
+                    <div class="d-flex flex-wrap gap-2 mt-2">
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyAndroidSetupCode()">
+                            <i class="bi bi-clipboard me-1"></i>Copy setup code
+                        </button>
+                        ${androidAppDownloadMenu('btn-sm')}
+                        <a class="btn btn-sm btn-outline-secondary" href="/devices/settings?device=${encodeURIComponent(summary.device_id || '')}">
+                            <i class="bi bi-gear me-1"></i>Open device settings
+                        </a>
+                    </div>
+                </div>
+            </div>
+        `;
+        panel.style.display = '';
+        return;
+    }
+
+    if (provisioning.type === 'httpsms') {
+        const summary = provisioning.summary || {};
+        const setup = provisioning.setup || {};
+        const baseUrl = summary.server_url || setup.base_url || '';
+        const apiBaseUrl = summary.api_base_url || setup.api_base_url || (baseUrl ? `${baseUrl}/v1` : '');
+        const apiKey = setup.api_key || '';
+        const encryptionKey = setup.encryption_key || summary.encryption_key || '';
+        const isHttpsBaseUrl = /^https:\/\//i.test(baseUrl);
+        const routableWarning = isHttpsBaseUrl ? '' : `
+            <div class="alert alert-warning small mb-3">
+                <div class="fw-semibold mb-1"><i class="bi bi-exclamation-triangle me-1"></i>Use a secure public link</div>
+                <div>The httpSMS app needs the public dashboard link. Use that link, then save this device again.</div>
+            </div>
+        `;
+        content.innerHTML = `
+            <div class="row g-4 align-items-start">
+                <div class="col-lg-5 text-center">
+                    <h5 class="mb-2">httpSMS App Setup</h5>
+                    ${provisioning.qr_data_url ? `
+                        <p class="text-muted small mb-3">In the httpSMS app, tap the key field or QR icon, then scan this code.</p>
+                        <img src="${provisioning.qr_data_url}" alt="httpSMS app key QR" class="img-fluid border rounded p-2 bg-white" style="max-width:280px;">
+                    ` : `
+                        <div class="alert alert-warning small mb-3">No app key is available yet.</div>
+                    `}
+                    <div class="alert alert-primary small text-start mt-3 mb-0">
+                        <div class="fw-semibold mb-1"><i class="bi bi-chat-dots me-1"></i>Phone-side order</div>
+                        <ol class="mb-0 ps-3">
+                            <li>Open the installed httpSMS app.</li>
+                            <li>Copy the dashboard link shown on the right into the app.</li>
+                            <li>Tap the key field or QR icon and scan this code.</li>
+                            <li>Copy the message lock key into the app if you want private message content.</li>
+                            <li>Confirm your SIM phone number, grant SMS and notification permissions, then log in.</li>
+                            <li>Allow the app to run in the background so queued SMS can send on time.</li>
+                        </ol>
+                    </div>
+                </div>
+                <div class="col-lg-7">
+                    ${routableWarning}
+                    <h6 class="mb-2">App setup details</h6>
+                    <table class="table table-sm align-middle mb-3">
+                        <tbody>
+                            <tr><td class="text-muted">Device code</td><td><code>${escHtml(summary.device_id || setup.device_id || '')}</code></td></tr>
+                            <tr>
+                                <td class="text-muted">Dashboard link</td>
+                                <td>
+                                    <div class="input-group input-group-sm">
+                                        <input class="form-control font-monospace" id="httpSmsBaseUrl" value="${escHtml(baseUrl)}" readonly>
+                                        <button type="button" class="btn btn-outline-secondary" onclick="copyHttpSmsBaseUrl()">
+                                            <i class="bi bi-clipboard"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">API base URL</td>
+                                <td><code>${escHtml(apiBaseUrl || 'Not configured')}</code></td>
+                            </tr>
+                            <tr><td class="text-muted">App key</td><td><textarea class="form-control font-monospace" id="httpSmsApiKey" rows="3" readonly>${escHtml(apiKey)}</textarea></td></tr>
+                            <tr><td class="text-muted">Message lock key</td><td><textarea class="form-control font-monospace" id="httpSmsEncryptionKey" rows="2" readonly>${escHtml(encryptionKey)}</textarea></td></tr>
+                        </tbody>
+                    </table>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyHttpSmsApiKey()">
+                            <i class="bi bi-clipboard me-1"></i>Copy app key
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyHttpSmsBaseUrl()">
+                            <i class="bi bi-link-45deg me-1"></i>Copy dashboard link
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="copyHttpSmsEncryptionKey()">
+                            <i class="bi bi-key me-1"></i>Copy message lock key
+                        </button>
+                        <a class="btn btn-sm btn-outline-secondary" href="/devices/settings?device=${encodeURIComponent(summary.device_id || setup.device_id || '')}">
+                            <i class="bi bi-gear me-1"></i>Open device settings
+                        </a>
+                    </div>
+                </div>
+            </div>
+        `;
+        panel.style.display = '';
+        return;
+    }
+
+    panel.style.display = 'none';
+    content.innerHTML = '';
+}
+
+function androidAppDownloadMenu(sizeClass = '') {
+    const primary = ANDROID_APP_DOWNLOADS.find(item => item.available) || ANDROID_APP_DOWNLOADS[0];
+    if (!primary) {
+        return `
+            <button type="button" class="btn btn-secondary ${sizeClass}" disabled title="Build the Android APK first">
+                <i class="bi bi-download me-1"></i>App not built
+            </button>
+        `;
+    }
+    const itemHtml = ANDROID_APP_DOWNLOADS.filter(item => item.abi !== primary.abi).map(item => item.available ? `
+        <li>
+            <a class="dropdown-item" href="${escHtml(item.url)}" download>
+                ${escHtml(item.label)} <span class="text-muted small">${escHtml(item.hint)}${item.buildType ? ` - ${escHtml(item.buildType)}` : ''}</span>
+            </a>
+        </li>
+    ` : `
+        <li><span class="dropdown-item disabled">${escHtml(item.label)} <span class="text-muted small">not built</span></span></li>
+    `).join('');
+    if (!primary?.available) {
+        return `
+            <button type="button" class="btn btn-secondary ${sizeClass}" disabled title="Build the Android APK first">
+                <i class="bi bi-download me-1"></i>App not built
+            </button>
+        `;
+    }
+    return `
+        <div class="btn-group ${sizeClass}">
+            <a class="btn btn-primary" href="${escHtml(primary.url)}" download>
+                <i class="bi bi-download me-1"></i>Download app
+            </a>
+            <button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+                <span class="visually-hidden">Choose APK variant</span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li><h6 class="dropdown-header">Other APK variants</h6></li>
+                ${itemHtml}
+            </ul>
+        </div>
+    `;
+}
+
+function copyAndroidSetupCode() {
+    const token = document.getElementById('androidSetupToken')?.value || '';
+    if (!token) {
+        showToast('No setup code is available yet.', 'warning');
+        return;
+    }
+    navigator.clipboard.writeText(token)
+        .then(() => showToast('Setup code copied.', 'success'))
+        .catch(() => {
+            const field = document.getElementById('androidSetupToken');
+            field?.focus();
+            field?.select();
+            showToast('Select and copy the setup code manually.', 'warning');
+        });
+}
+
+function copyHttpSmsApiKey() {
+    const token = document.getElementById('httpSmsApiKey')?.value || '';
+    if (!token) {
+        showToast('No app key is available yet.', 'warning');
+        return;
+    }
+    navigator.clipboard.writeText(token)
+        .then(() => showToast('App key copied.', 'success'))
+        .catch(() => {
+            const field = document.getElementById('httpSmsApiKey');
+            field?.focus();
+            field?.select();
+            showToast('Select and copy the app key manually.', 'warning');
+        });
+}
+
+function copyHttpSmsBaseUrl() {
+    const url = document.getElementById('httpSmsBaseUrl')?.value || '';
+    if (!url) {
+        showToast('No dashboard link is available yet.', 'warning');
+        return;
+    }
+    navigator.clipboard.writeText(url)
+        .then(() => showToast('Dashboard link copied.', 'success'))
+        .catch(() => {
+            const field = document.getElementById('httpSmsBaseUrl');
+            field?.focus();
+            field?.select();
+            showToast('Select and copy the dashboard link manually.', 'warning');
+        });
+}
+
+function copyHttpSmsEncryptionKey() {
+    const key = document.getElementById('httpSmsEncryptionKey')?.value || '';
+    if (!key) {
+        showToast('No message lock key is available yet.', 'warning');
+        return;
+    }
+    navigator.clipboard.writeText(key)
+        .then(() => showToast('Message lock key copied.', 'success'))
+        .catch(() => {
+            const field = document.getElementById('httpSmsEncryptionKey');
+            field?.focus();
+            field?.select();
+            showToast('Select and copy the message lock key manually.', 'warning');
+        });
+}
+
+function activateDoneDevice(event) {
+    const deviceId = wizardState.formData?.device_id || '';
+    if (!deviceId) return;
+    try {
+        if (window.setActiveDeviceContext) {
+            window.setActiveDeviceContext(deviceId);
+        }
+    } catch (_) {}
+}
+
+// ==================== Reset wizard ====================
+function resetWizard() {
+    // Release serial port
+    if (wizardState.reader) { try { wizardState.reader.releaseLock(); } catch (_) {} }
+    if (wizardState.writer) { try { wizardState.writer.releaseLock(); } catch (_) {} }
+    if (wizardState.port) { try { wizardState.port.close(); } catch (_) {} }
+    // Disconnect BLE
+    if (wizardState.bleDevice && wizardState.bleDevice.gatt.connected) {
+        try { wizardState.bleDevice.gatt.disconnect(); } catch (_) {}
+    }
+
+    Object.assign(wizardState, {
+        deviceType: null, connectionType: null, port: null, reader: null, writer: null,
+        bleDevice: null, txChar: null, rxChar: null, deviceInfo: {}, formData: {}, provisioning: null
+    });
+
+    // Reset UI
+    document.querySelectorAll('.onboard-device-type').forEach(card => card.classList.remove('selected'));
+    document.getElementById('esp32ConnectionFlow').style.display = 'none';
+    document.getElementById('bridgeSetupNote').style.display = 'none';
+    document.getElementById('doneProvisioningPanel').style.display = 'none';
+    document.getElementById('doneProvisioningContent').innerHTML = '';
+    document.getElementById('step1Status').style.display = 'none';
+    document.getElementById('cardSerial').classList.remove('selected');
+    document.getElementById('cardBluetooth').classList.remove('selected');
+    document.getElementById('cardWifi').classList.remove('selected');
+    document.getElementById('wifiInstructions').style.display = 'none';
+    const btnS = document.getElementById('btnSerial');
+    const btnB = document.getElementById('btnBluetooth');
+    const btnW = document.getElementById('btnWifi');
+    if (navigator.serial) { btnS.disabled = false; btnS.innerHTML = '<i class="bi bi-usb-symbol me-1"></i>Connect via USB'; }
+    if (navigator.bluetooth) { btnB.disabled = false; btnB.innerHTML = '<i class="bi bi-bluetooth me-1"></i>Scan for Devices'; }
+    btnW.disabled = false; btnW.innerHTML = '<i class="bi bi-wifi me-1"></i>Connect via WiFi';
+    document.getElementById('fDeviceId').value = '';
+    document.getElementById('fName').value = '';
+    document.getElementById('fLocation').value = '';
+    document.getElementById('fModel').value = DEVICE_TYPE_MODELS['esp32-s3'];
+    document.getElementById('fApn').value = 'internet';
+    document.getElementById('fAndroidTransport').value = 'auto';
+    renderAndroidTransportChoice();
+    document.getElementById('fWifiSsid').value = '';
+    document.getElementById('fWifiPass').value = '';
+    document.getElementById('fFirmwareFile').value = '';
+    document.getElementById('fFirmwareUpload').value = '';
+    document.getElementById('fDeviceId').value = generateDeviceIdValue();
+    document.getElementById('deviceIdFeedback').textContent = 'Use a unique lowercase code. ESP codes start with esp-, Android codes start with android-, httpSMS codes start with httpsms-.';
+    document.getElementById('firmwareHelp').textContent = 'Upload or select a .bin file so it is ready after the device comes online.';
+    applyStep3FieldVisibility();
+    loadFirmwareOptions();
+
+    goToStep(1);
+}
+
+document.getElementById('fAndroidTransport')?.addEventListener('change', () => chooseAndroidTransport(selectedAndroidTransportMode()));
+
+// ==================== Utilities ====================
+function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function encodeConfigValueForTransport(value) {
+    return btoa(unescape(encodeURIComponent(String(value || ''))));
+}
+function buildSerialConfigCommand(fd) {
+    const parts = ['cfg_set'];
+    parts.push(`device_id_override_b64=${encodeConfigValueForTransport(fd.device_id || '')}`);
+    parts.push(`modem_apn_b64=${encodeConfigValueForTransport(fd.apn || '')}`);
+    parts.push(`wifi_ssid_b64=${encodeConfigValueForTransport(fd.wifi_ssid || '')}`);
+    parts.push(`wifi_password_b64=${encodeConfigValueForTransport(fd.wifi_pass || '')}`);
+    return parts.join(' ');
+}
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+</div>

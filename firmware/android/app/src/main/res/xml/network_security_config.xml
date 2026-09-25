@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SEC-08: cleartext (HTTP / plaintext MQTT) is blocked in release builds.
+     Debug builds opt in via the src/debug manifest overlay for local LAN
+     dashboards and brokers. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

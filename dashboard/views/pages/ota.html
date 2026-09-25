@@ -1,0 +1,533 @@
+<!-- Page header -->
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <h2 class="mb-0"><i class="bi bi-cloud-upload me-2 text-primary"></i>OTA Firmware Manager</h2>
+</div>
+
+<div class="alert alert-info py-2 small">
+    <i class="bi bi-info-circle me-1"></i>
+    <% if (otaBaseUrl) { %>
+        OTA downloads will be served to the device from <code><%= otaBaseUrl %></code>.
+    <% } else { %>
+        OTA flash requires the device to reach this dashboard over HTTP. If you are using <code>localhost</code>, open the dashboard via a reachable IP/domain or set <code>OTA_BASE_URL</code>.
+    <% } %>
+</div>
+
+<div class="row g-3">
+    <!-- Upload panel -->
+    <div class="col-md-5">
+        <div class="card h-100">
+            <div class="card-header">
+                <i class="bi bi-upload me-1"></i>Upload Firmware
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-3">Upload a compiled <code>.bin</code> firmware file. Max 4 MB.</p>
+                <div id="dropZone" class="border-2 border-dashed rounded p-4 text-center text-muted mb-3"
+                     style="border-style:dashed;cursor:pointer;"
+                     onclick="document.getElementById('fwFile').click()"
+                     ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+                    <i class="bi bi-file-earmark-binary" style="font-size:2.5rem;"></i>
+                    <p class="mb-0 mt-2 small">Drag &amp; drop a <strong>.bin</strong> file here, or click to browse</p>
+                    <p class="mb-0 small text-muted" id="dropFileName"></p>
+                </div>
+                <input type="file" id="fwFile" accept=".bin" class="d-none" onchange="onFileSelect(event)">
+
+                <div id="uploadProgress" style="display:none;" class="mb-3">
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <div class="spinner-border spinner-border-sm text-primary flex-shrink-0"></div>
+                        <span class="small" id="uploadProgressMsg">Uploading...</span>
+                    </div>
+                    <div class="progress" style="height:5px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" id="uploadBar" style="width:0%"></div>
+                    </div>
+                </div>
+
+                <div id="uploadResult" class="alert py-2 small" style="display:none;"></div>
+
+                <button class="btn btn-primary w-100" id="btnUpload" onclick="uploadFirmware()" disabled>
+                    <i class="bi bi-upload me-1"></i>Upload Firmware
+                </button>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-folder2-open me-1"></i>Import From <code>ota/</code></span>
+                <button class="btn btn-sm btn-outline-secondary" onclick="loadLocalFirmwareList()">
+                    <i class="bi bi-arrow-repeat"></i>
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <div id="localFirmwareList" class="small">
+                    <div class="text-center text-muted py-4">
+                        <div class="spinner-border spinner-border-sm me-2"></div>Loading...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firmware library + flash panel -->
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-archive me-1"></i>Firmware Library</span>
+                <button class="btn btn-sm btn-outline-secondary" onclick="loadFirmwareList()">
+                    <i class="bi bi-arrow-repeat"></i>
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <div id="firmwareList">
+                    <div class="text-center text-muted py-4">
+                        <div class="spinner-border spinner-border-sm me-2"></div>Loading...
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Rollback panel -->
+        <div class="card mt-3" id="rollbackPanel" style="display:none;">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-arrow-counterclockwise me-1 text-warning"></i>Rollback</span>
+                <span class="badge bg-warning text-dark small" id="rollbackDeviceLabel"></span>
+            </div>
+            <div class="card-body py-2">
+                <div class="d-flex align-items-center justify-content-between gap-2">
+                    <div class="small">
+                        <div class="text-muted mb-1">Current: <code id="rollbackCurrent">—</code></div>
+                        <div class="text-muted">Previous: <code id="rollbackPrevious">—</code></div>
+                    </div>
+                    <button class="btn btn-warning btn-sm flex-shrink-0" id="btnRollback" onclick="doRollback()">
+                        <i class="bi bi-arrow-counterclockwise me-1"></i>Rollback
+                    </button>
+                </div>
+                <div id="rollbackResult" class="alert py-2 small mt-2" style="display:none;"></div>
+            </div>
+        </div>
+
+        <!-- Flash panel (shown when a firmware is selected) -->
+        <div class="card mt-3" id="flashPanel" style="display:none;">
+            <div class="card-header">
+                <i class="bi bi-lightning-charge me-1"></i>Push to Device
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-2">Selected: <strong id="flashFilename"></strong></p>
+
+                <div class="row g-2 align-items-end">
+                    <div class="col">
+                        <label class="form-label small mb-1">Target Device</label>
+                        <select class="form-select form-select-sm" id="flashDevice">
+                            <% devices.forEach(function(d) { %>
+                            <option value="<%= d.id %>"><%= d.name || d.id %> (<%= d.id %>)</option>
+                            <% }) %>
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-warning btn-sm" id="btnFlash" onclick="flashDevice()">
+                            <i class="bi bi-lightning-charge me-1"></i>Flash Now
+                        </button>
+                    </div>
+                </div>
+
+                <div id="flashProgress" class="mt-3" style="display:none;">
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <div class="spinner-border spinner-border-sm text-warning flex-shrink-0"></div>
+                        <span class="small fw-semibold" id="flashProgressMsg">Sending OTA command...</span>
+                    </div>
+                    <div class="progress" style="height:5px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" id="flashBar" style="width:0%"></div>
+                    </div>
+                    <div class="mt-2 small text-muted">
+                        <i class="bi bi-info-circle me-1"></i>Device will download and flash the firmware, then reboot.
+                        Progress is reported via MQTT — check device status after ~30 seconds.
+                    </div>
+                </div>
+
+                <div id="flashResult" class="alert py-2 small mt-2" style="display:none;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.border-dashed { border: 2px dashed #dee2e6 !important; transition: border-color 0.2s, background 0.2s; }
+.border-dashed.drag-over { border-color: #0d6efd !important; background: rgba(13,110,253,0.05); }
+.fw-item { cursor: pointer; transition: background 0.15s; }
+.fw-item:hover { background: #f8f9fa; }
+.fw-item.selected { background: #e8f0fe; }
+</style>
+
+<script>
+let selectedFile = null;
+let selectedFirmware = null;
+
+function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Drag & drop ───────────────────────────────────────────────────────────────
+
+function onDragOver(e) {
+    e.preventDefault();
+    document.getElementById('dropZone').classList.add('drag-over');
+}
+function onDragLeave(e) {
+    document.getElementById('dropZone').classList.remove('drag-over');
+}
+function onDrop(e) {
+    e.preventDefault();
+    document.getElementById('dropZone').classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) setFile(file);
+}
+function onFileSelect(e) {
+    if (e.target.files[0]) setFile(e.target.files[0]);
+}
+function setFile(file) {
+    if (!file.name.endsWith('.bin')) {
+        showUploadResult('Only .bin files are accepted.', 'danger');
+        return;
+    }
+    selectedFile = file;
+    document.getElementById('dropFileName').textContent = file.name + ' (' + formatSize(file.size) + ')';
+    document.getElementById('btnUpload').disabled = false;
+    document.getElementById('uploadResult').style.display = 'none';
+}
+
+// ── Upload ────────────────────────────────────────────────────────────────────
+
+async function uploadFirmware() {
+    if (!selectedFile) return;
+    const btn = document.getElementById('btnUpload');
+    btn.disabled = true;
+    document.getElementById('uploadResult').style.display = 'none';
+    document.getElementById('uploadProgress').style.display = '';
+    document.getElementById('uploadProgressMsg').textContent = 'Uploading ' + selectedFile.name + '...';
+    document.getElementById('uploadBar').style.width = '30%';
+
+    const fd = new FormData();
+    fd.append('firmware', selectedFile);
+
+    try {
+        document.getElementById('uploadBar').style.width = '60%';
+        const res = await fetch('/api/ota/upload', {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+            body: fd
+        });
+        const data = await res.json();
+        document.getElementById('uploadBar').style.width = '100%';
+        document.getElementById('uploadProgress').style.display = 'none';
+
+        if (!data.success) throw new Error(data.message);
+
+        showUploadResult('<i class="bi bi-check-circle me-1"></i>Uploaded: ' + escHtml(data.data.filename) + ' (' + formatSize(data.data.size) + ')', 'success');
+        selectedFile = null;
+        document.getElementById('dropFileName').textContent = '';
+        document.getElementById('fwFile').value = '';
+        loadFirmwareList();
+    } catch (e) {
+        document.getElementById('uploadProgress').style.display = 'none';
+        showUploadResult('<i class="bi bi-x-circle me-1"></i>' + escHtml(e.message), 'danger');
+        btn.disabled = false;
+    }
+}
+
+function showUploadResult(msg, type) {
+    const el = document.getElementById('uploadResult');
+    el.className = 'alert alert-' + type + ' py-2 small';
+    el.innerHTML = msg;
+    el.style.display = '';
+}
+
+async function loadLocalFirmwareList() {
+    const el = document.getElementById('localFirmwareList');
+    el.innerHTML = '<div class="text-center text-muted py-4"><div class="spinner-border spinner-border-sm me-2"></div>Loading...</div>';
+    try {
+        const res = await fetch('/api/ota/local-list');
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+
+        if (!data.data.length) {
+            el.innerHTML = '<div class="text-center text-muted py-4">No firmware .bin files found in <code>ota/</code>.</div>';
+            return;
+        }
+
+        el.innerHTML = `<div class="list-group list-group-flush">${data.data.map(f => `
+            <div class="list-group-item d-flex justify-content-between align-items-center gap-2">
+                <div class="min-w-0">
+                    <div><code class="small">${escHtml(f.filename)}</code></div>
+                    <div class="text-muted small">${formatSize(f.size)} • ${new Date(f.uploadedAt).toLocaleString()}</div>
+                </div>
+                <button class="btn btn-sm btn-outline-primary flex-shrink-0" onclick="importLocalFirmware('${escHtml(f.filename)}')">
+                    <i class="bi bi-box-arrow-in-down me-1"></i>Import
+                </button>
+            </div>
+        `).join('')}</div>`;
+    } catch (e) {
+        el.innerHTML = `<div class="text-center text-danger py-3 px-3">${escHtml(e.message)}</div>`;
+    }
+}
+
+async function importLocalFirmware(filename) {
+    try {
+        const res = await fetch('/api/ota/import-local', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+            },
+            body: JSON.stringify({ filename })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+
+        showUploadResult('<i class="bi bi-check-circle me-1"></i>Imported from ota/: ' + escHtml(data.data.filename), 'success');
+        selectedFirmware = data.data.filename;
+        document.getElementById('flashFilename').textContent = data.data.filename;
+        document.getElementById('flashPanel').style.display = '';
+        document.getElementById('flashResult').style.display = 'none';
+        document.getElementById('flashProgress').style.display = 'none';
+        document.getElementById('btnFlash').disabled = false;
+        await loadFirmwareList();
+    } catch (e) {
+        showUploadResult('<i class="bi bi-x-circle me-1"></i>' + escHtml(e.message), 'danger');
+    }
+}
+
+// ── Firmware list ─────────────────────────────────────────────────────────────
+
+async function loadFirmwareList() {
+    const el = document.getElementById('firmwareList');
+    el.innerHTML = '<div class="text-center text-muted py-4"><div class="spinner-border spinner-border-sm me-2"></div>Loading...</div>';
+    try {
+        const res = await fetch('/api/ota/list');
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+
+        if (!data.data.length) {
+            el.innerHTML = '<p class="text-center text-muted py-4 mb-0">No firmware files uploaded yet.</p>';
+            return;
+        }
+
+        el.innerHTML = `<table class="table table-sm mb-0">
+            <thead class="table-light"><tr>
+                <th>Filename</th><th>Size</th><th>Uploaded</th><th></th>
+            </tr></thead>
+            <tbody>${data.data.map(f => `
+                <tr class="fw-item ${selectedFirmware === f.filename ? 'selected' : ''}" onclick="selectFirmware('${escHtml(f.filename)}')">
+                    <td><i class="bi bi-file-earmark-binary me-1 text-muted"></i><code class="small">${escHtml(f.filename)}</code></td>
+                    <td class="small text-muted">${formatSize(f.size)}</td>
+                    <td class="small text-muted">${new Date(f.uploadedAt).toLocaleString()}</td>
+                    <td class="text-end">
+                        <button class="btn btn-xs btn-outline-primary me-1" onclick="selectFirmware('${escHtml(f.filename)}');event.stopPropagation();" title="Select to flash">
+                            <i class="bi bi-lightning-charge"></i>
+                        </button>
+                        <button class="btn btn-xs btn-outline-danger" onclick="deleteFirmware('${escHtml(f.filename)}');event.stopPropagation();" title="Delete">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+            `).join('')}</tbody>
+        </table>`;
+    } catch (e) {
+        el.innerHTML = `<p class="text-center text-danger py-3 small">${escHtml(e.message)}</p>`;
+    }
+}
+
+function selectFirmware(filename) {
+    selectedFirmware = filename;
+    document.getElementById('flashFilename').textContent = filename;
+    document.getElementById('flashPanel').style.display = '';
+    document.getElementById('flashResult').style.display = 'none';
+    document.getElementById('flashProgress').style.display = 'none';
+    document.getElementById('btnFlash').disabled = false;
+    // Re-render list to highlight selected row
+    loadFirmwareList();
+}
+
+async function deleteFirmware(filename) {
+    const confirmed = await window.appConfirm?.({
+        title: 'Delete Firmware',
+        message: `Delete <strong>${escHtml(filename)}</strong>? This cannot be undone.`,
+        confirmText: 'Delete',
+        confirmClass: 'btn btn-danger'
+    }) ?? confirm('Delete ' + filename + '?');
+    if (!confirmed) return;
+    try {
+        const res = await fetch('/api/ota/' + encodeURIComponent(filename), {
+            method: 'DELETE',
+            headers: { 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' }
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        if (selectedFirmware === filename) {
+            selectedFirmware = null;
+            document.getElementById('flashPanel').style.display = 'none';
+        }
+        loadFirmwareList();
+    } catch (e) {
+        alert('Delete failed: ' + e.message);
+    }
+}
+
+// ── Flash ─────────────────────────────────────────────────────────────────────
+
+async function flashDevice(skipPreflight = false) {
+    const deviceId = document.getElementById('flashDevice').value;
+    if (!deviceId || !selectedFirmware) return;
+
+    const btn = document.getElementById('btnFlash');
+    btn.disabled = true;
+    document.getElementById('flashResult').style.display = 'none';
+    document.getElementById('flashProgress').style.display = '';
+    document.getElementById('flashProgressMsg').textContent = 'Sending OTA command to ' + deviceId + '...';
+    document.getElementById('flashBar').style.width = '40%';
+
+    try {
+        const res = await fetch('/api/ota/flash', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+            body: JSON.stringify({ deviceId, filename: selectedFirmware, skipPreflight })
+        });
+        const data = await res.json();
+
+        // Pre-flight blocked (412)
+        if (res.status === 412) {
+            document.getElementById('flashProgress').style.display = 'none';
+            const el = document.getElementById('flashResult');
+            const failList = (data.failedTests || []).map(t => `<li>${escHtml(t.name || t.id)}</li>`).join('');
+            el.className = 'alert alert-warning py-2 small mt-2';
+            el.innerHTML = `<i class="bi bi-shield-exclamation me-1"></i><strong>Pre-flight check failed:</strong> ${escHtml(data.message)}` +
+                (failList ? `<ul class="mb-1 mt-1">${failList}</ul>` : '') +
+                `<div class="mt-2"><button class="btn btn-sm btn-danger" onclick="flashDevice(true)">` +
+                `<i class="bi bi-lightning-charge me-1"></i>Force Flash Anyway</button></div>`;
+            el.style.display = '';
+            btn.disabled = false;
+            return;
+        }
+
+        if (!data.success) throw new Error(data.message);
+
+        // Keep progress bar visible — Socket.IO will update it as device reports progress
+        document.getElementById('flashProgressMsg').textContent = 'OTA command sent — waiting for device to start…';
+        document.getElementById('flashBar').style.width = '5%';
+        // btn stays disabled until ota:complete or ota:error arrives
+    } catch (e) {
+        document.getElementById('flashProgress').style.display = 'none';
+        const el = document.getElementById('flashResult');
+        el.className = 'alert alert-danger py-2 small mt-2';
+        el.innerHTML = '<i class="bi bi-x-circle me-1"></i>' + escHtml(e.message);
+        el.style.display = '';
+        btn.disabled = false;
+    }
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+
+function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+// ── Socket.IO live OTA progress ───────────────────────────────────────────────
+
+(function setupOtaSocket() {
+    if (typeof io === 'undefined') return;
+    const socket = io({ transports: ['websocket', 'polling'] });
+    const activeFlashDevice = () => document.getElementById('flashDevice')?.value;
+
+    socket.on('ota:progress', ({ deviceId, percent, progress, stage }) => {
+        if (deviceId !== activeFlashDevice()) return;
+        const pct = Math.max(0, Math.min(100, percent ?? progress ?? 0));
+        const stageLabel = { downloading: 'Downloading…', flashing: 'Flashing…', verifying: 'Verifying…' }[stage] || `${stage || 'In progress'}…`;
+        document.getElementById('flashProgressMsg').textContent = `${stageLabel} ${pct}%`;
+        document.getElementById('flashBar').style.width = pct + '%';
+        document.getElementById('flashProgress').style.display = '';
+    });
+
+    socket.on('ota:complete', ({ deviceId, version }) => {
+        if (deviceId !== activeFlashDevice()) return;
+        document.getElementById('flashProgress').style.display = 'none';
+        const el = document.getElementById('flashResult');
+        el.className = 'alert alert-success py-2 small mt-2';
+        el.innerHTML = `<i class="bi bi-check-circle me-1"></i>OTA complete${version ? ' — firmware <strong>' + escHtml(version) + '</strong>' : ''}. Device is rebooting.`;
+        el.style.display = '';
+        document.getElementById('btnFlash').disabled = false;
+    });
+
+    socket.on('ota:error', ({ deviceId, message }) => {
+        if (deviceId !== activeFlashDevice()) return;
+        document.getElementById('flashProgress').style.display = 'none';
+        const el = document.getElementById('flashResult');
+        el.className = 'alert alert-danger py-2 small mt-2';
+        el.innerHTML = `<i class="bi bi-x-circle me-1"></i>OTA failed: ${escHtml(message)}`;
+        el.style.display = '';
+        document.getElementById('btnFlash').disabled = false;
+    });
+
+    socket.on('ota:started', ({ deviceId }) => {
+        if (deviceId !== activeFlashDevice()) return;
+        document.getElementById('flashProgressMsg').textContent = 'OTA command sent — waiting for device…';
+        document.getElementById('flashBar').style.width = '5%';
+        document.getElementById('flashProgress').style.display = '';
+    });
+})();
+
+// ── Rollback ──────────────────────────────────────────────────────────────────
+
+async function loadRollbackHistory() {
+    const deviceId = document.getElementById('flashDevice')?.value;
+    if (!deviceId) return;
+    try {
+        const res  = await fetch(`/api/ota/history/${encodeURIComponent(deviceId)}`);
+        const data = await res.json();
+        const panel = document.getElementById('rollbackPanel');
+        if (!data.success || data.data.length < 2) { panel.style.display = 'none'; return; }
+
+        document.getElementById('rollbackDeviceLabel').textContent = deviceId;
+        document.getElementById('rollbackCurrent').textContent  = data.data[0].filename;
+        document.getElementById('rollbackPrevious').textContent = data.data[1].filename;
+        document.getElementById('rollbackResult').style.display = 'none';
+        document.getElementById('btnRollback').disabled = false;
+        panel.style.display = '';
+    } catch (e) {
+        document.getElementById('rollbackPanel').style.display = 'none';
+    }
+}
+
+async function doRollback() {
+    const deviceId = document.getElementById('flashDevice')?.value;
+    if (!deviceId) return;
+    const btn = document.getElementById('btnRollback');
+    btn.disabled = true;
+    try {
+        const res  = await fetch('/api/ota/rollback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+            body: JSON.stringify({ deviceId })
+        });
+        const data = await res.json();
+        const el   = document.getElementById('rollbackResult');
+        if (!data.success) throw new Error(data.message);
+        el.className = 'alert alert-success py-2 small mt-2';
+        el.innerHTML = `<i class="bi bi-check-circle me-1"></i>Rollback triggered — device will flash <strong>${escHtml(data.data.filename)}</strong> and reboot.`;
+        el.style.display = '';
+        loadRollbackHistory();
+    } catch (e) {
+        const el = document.getElementById('rollbackResult');
+        el.className = 'alert alert-danger py-2 small mt-2';
+        el.innerHTML = `<i class="bi bi-x-circle me-1"></i>${escHtml(e.message)}`;
+        el.style.display = '';
+        btn.disabled = false;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const sel = document.getElementById('flashDevice');
+    if (sel) { sel.addEventListener('change', loadRollbackHistory); loadRollbackHistory(); }
+    loadLocalFirmwareList();
+});
+
+loadFirmwareList();
+</script>

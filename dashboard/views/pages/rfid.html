@@ -1,0 +1,103 @@
+<div class="container-fluid py-4">
+    <%- include('../partials/cap-banner.html', { cap: 'rfid', label: 'RFID module (RC522 or compatible)' }) %>
+    <div class="row mb-3">
+        <div class="col">
+            <h4 class="mb-0"><i class="bi bi-upc-scan me-2 text-primary"></i>RFID Reader</h4>
+            <small class="text-muted">Read RFID tags and manage access records</small>
+        </div>
+        <div class="col-auto">
+            <span class="badge bg-secondary" id="rfidStatus">Idle</span>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <!-- Scanner -->
+        <div class="col-md-5">
+            <div class="card">
+                <div class="card-header fw-semibold"><i class="bi bi-broadcast me-2"></i>Scanner</div>
+                <div class="card-body text-center">
+                    <div class="my-3">
+                        <i class="bi bi-upc-scan text-primary" style="font-size:4rem;"></i>
+                    </div>
+                    <div id="rfidUid" class="fw-bold font-monospace fs-5 mb-2">—</div>
+                    <div id="rfidType" class="text-muted small mb-3">No tag</div>
+                    <button class="btn btn-primary w-100 mb-2" onclick="rfidScan()">
+                        <i class="bi bi-play-circle me-1"></i>Start Scan
+                    </button>
+                    <button class="btn btn-outline-secondary w-100" onclick="rfidStop()">
+                        <i class="bi bi-stop-circle me-1"></i>Stop
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Log -->
+        <div class="col-md-7">
+            <div class="card h-100">
+                <div class="card-header fw-semibold d-flex justify-content-between">
+                    <span><i class="bi bi-table me-2"></i>Scan History</span>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="clearRfidLog()">Clear</button>
+                </div>
+                <div class="card-body p-0">
+                    <table class="table table-sm mb-0">
+                        <thead><tr><th>Time</th><th>UID</th><th>Type</th><th>Action</th></tr></thead>
+                        <tbody id="rfidLogBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const DEVICE_ID = window.getActiveDeviceId ? window.getActiveDeviceId() : '';
+
+function rfidScan() {
+    document.getElementById('rfidStatus').textContent = 'Scanning…';
+    document.getElementById('rfidStatus').className = 'badge bg-warning text-dark';
+    fetch('/api/gpio/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId: DEVICE_ID, command: 'rfid-scan', params: {} })
+    }).then(r => r.json()).then(d => {
+        if (!d.success) { showToast(d.error || 'Scan failed', 'danger'); rfidStop(); }
+    }).catch(() => { showToast('Request failed', 'danger'); rfidStop(); });
+}
+
+function rfidStop() {
+    document.getElementById('rfidStatus').textContent = 'Idle';
+    document.getElementById('rfidStatus').className = 'badge bg-secondary';
+    fetch('/api/gpio/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId: DEVICE_ID, command: 'rfid-stop', params: {} })
+    }).catch(() => {});
+}
+
+function clearRfidLog() {
+    document.getElementById('rfidLogBody').innerHTML = '';
+}
+
+function addRfidRow(uid, type) {
+    const tbody = document.getElementById('rfidLogBody');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="font-monospace small">${new Date().toLocaleTimeString()}</td>
+                    <td class="font-monospace fw-bold">${uid}</td>
+                    <td>${type || '—'}</td>
+                    <td><button class="btn btn-xs btn-outline-danger" onclick="this.closest('tr').remove()">×</button></td>`;
+    tbody.prepend(tr);
+}
+
+if (window.socket) {
+    socket.on('rfid:scan', data => {
+        if (data.deviceId !== DEVICE_ID) return;
+        const uid = data.uid || data.id || '?';
+        document.getElementById('rfidUid').textContent = uid;
+        document.getElementById('rfidType').textContent = data.type || 'Unknown';
+        document.getElementById('rfidStatus').textContent = 'Tag detected';
+        document.getElementById('rfidStatus').className = 'badge bg-success';
+        addRfidRow(uid, data.type);
+        showToast('RFID tag: ' + uid, 'info');
+    });
+}
+</script>

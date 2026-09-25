@@ -1,0 +1,44 @@
+{
+  "name": "Device Bridge",
+  "short_name": "Device Bridge",
+  "description": "Remote control and monitoring dashboard for IoT devices",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a1d21",
+  "theme_color": "#0d6efd",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "SMS",
+      "short_name": "SMS",
+      "description": "View SMS messages",
+      "url": "/sms",
+      "icons": [{ "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Calls",
+      "short_name": "Calls",
+      "description": "View call history",
+      "url": "/calls",
+      "icons": [{ "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "GPS",
+      "short_name": "GPS",
+      "description": "View device location",
+      "url": "/location",
+      "icons": [{ "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    }
+  ],
+  "categories": ["utilities", "productivity"],
+  "screenshots": [],
+  "prefer_related_applications": false
+}

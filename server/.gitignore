@@ -1,0 +1,6 @@
+tunnel.config.json
+cloudflare.config.json
+*.local.json
+*.pem
+*.key
+*.log
